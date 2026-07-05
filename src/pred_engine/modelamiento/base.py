@@ -50,6 +50,12 @@ class SeasonalNaiveStub(BaseForecaster):
     """
 
     def __init__(self, season_length: int = 7, seed: int = 0) -> None:
+        """Initialize the seasonal-naive model.
+
+        Args:
+            season_length: Length of the seasonal cycle (must be >= 1).
+            seed: Random seed for reproducibility.
+        """
         super().__init__(seed=seed)
         if season_length < 1:
             raise ValueError("season_length must be >= 1")
