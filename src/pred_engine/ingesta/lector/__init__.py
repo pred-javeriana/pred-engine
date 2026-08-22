@@ -1,5 +1,10 @@
-"""PRED analytical engine.
+"""Adaptadores de E/S pasiva: CSV crudo hacia DataFrame."""
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
-"""
+from pred_engine.ingesta.lector.extractor_csv import ExtractionArtifact, extract_csv
+from pred_engine.ingesta.lector.hashing import hash_sha256_archivo
+
+__all__ = [
+    "ExtractionArtifact",
+    "extract_csv",
+    "hash_sha256_archivo",
+]
