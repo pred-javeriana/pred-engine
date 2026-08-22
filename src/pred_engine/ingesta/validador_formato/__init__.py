@@ -1,5 +1,6 @@
-"""PRED analytical engine.
+"""Validacion estricta de esquemas post-alineacion."""
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
-"""
+from pred_engine.ingesta.validador_formato.barrera import validate_aligned_frame
+from pred_engine.ingesta.validador_formato.errores import SchemaBarrierError
+
+__all__ = ["SchemaBarrierError", "validate_aligned_frame"]
