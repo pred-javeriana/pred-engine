@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from pred_engine.comun.llm.errores import UnknownProviderError
+from pred_engine.comun.llm.catalogo import (
+    AVAILABLE_MODELS,
+    DEFAULT_MODELS,
+    format_models_help,
+)
+from pred_engine.comun.llm.errores import UnknownModelError, UnknownProviderError
 from pred_engine.comun.llm.protocolo import LlmProvider
 from pred_engine.comun.llm.proveedores import (
     AnthropicProvider,
     GeminiProvider,
     OpenAIProvider,
 )
-
-DEFAULT_MODELS: dict[str, str] = {
-    "gemini": "gemini-2.0-flash",
-    "openai": "gpt-4o-mini",
-    "anthropic": "claude-sonnet-4-5",
-}
 
 _ALIAS: dict[str, str] = {
     "gemini": "gemini",
@@ -35,6 +34,19 @@ def normalize_provider_name(name: str) -> str:
     return _ALIAS[clave]
 
 
+def resolve_model(provider: str, model: str | None) -> str:
+    """Elige el modelo: default economico o uno explicito del catalogo."""
+    canonico = normalize_provider_name(provider)
+    elegido = (model or DEFAULT_MODELS[canonico]).strip()
+    permitidos = AVAILABLE_MODELS[canonico]
+    if elegido not in permitidos:
+        raise UnknownModelError(
+            f"Modelo LLM no permitido para {canonico!r}: {elegido!r}. "
+            f"Opciones:\n{format_models_help(canonico)}"
+        )
+    return elegido
+
+
 def build_llm_provider(
     name: str,
     api_key: str,
@@ -43,7 +55,7 @@ def build_llm_provider(
 ) -> LlmProvider:
     """Construye un adaptador. No abre conexiones hasta complete()."""
     canonico = normalize_provider_name(name)
-    elegido = model or DEFAULT_MODELS[canonico]
+    elegido = resolve_model(canonico, model)
     if canonico == "gemini":
         return GeminiProvider(api_key, model=elegido)
     if canonico == "openai":

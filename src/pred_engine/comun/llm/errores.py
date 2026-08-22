@@ -21,3 +21,7 @@ class LlmProviderError(LlmError):
 
 class UnknownProviderError(ValueError):
     """Nombre de proveedor no soportado por la fabrica."""
+
+
+class UnknownModelError(ValueError):
+    """Modelo no listado en el catalogo del proveedor."""
