@@ -77,3 +77,27 @@ export_parquet(
 Structured JSON logs (timestamp, level, module, file hash, row count) go to
 stdout. See `docs/features/ingesta-almacenamiento-crudo/` for the API and
 session notes.
+
+## L1.2 semantic alignment
+
+After passive extraction, `pred_engine.ingesta.pipeline.run_ingest` maps chaotic
+headers via an injectable LLM provider (Gemini, OpenAI, or Anthropic), validates
+rows with Pydantic, and resamples each SKU onto a daily grid (demand gaps → 0).
+
+Each provider exposes a curated list of cost-tier models (`AVAILABLE_MODELS` in
+`pred_engine.comun.llm.catalogo`). If `--model` is omitted, the cheapest default
+is used; use `pred-engine models --provider <name>` to see allowed IDs.
+
+```bash
+uv run pred-engine models --provider gemini
+uv run pred-engine ingest \
+  --csv inventory_data.csv \
+  --provider gemini \
+  --model gemini-3.5-flash \
+  --data-root data
+```
+
+The API key is read from `--api-key` or `PRED_LLM_API_KEY` / `GEMINI_API_KEY`
+(and equivalents for OpenAI and Anthropic). If the probe cannot map `sku_id`,
+`timestamp`, `demand_qty` and `lead_time_days` with confidence, ingestion stops.
+See `docs/features/1.2-alineacion-semantica-validacion/`.

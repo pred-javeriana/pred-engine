@@ -29,6 +29,8 @@ Se implementó el protocolo de ingesta pasiva del framework PRED:
 
 ## Fuera de alcance (sesiones futuras)
 
-- Sonda LLM de cabeceras (TASK-DATA-1.2-A1)
-- Validación Pydantic de filas (TASK-DATA-1.2-B1)
-- Remuestreo temporal y zero-filling (TASK-DATA-1.2-C1)
+- Clasificacion topológica ADI/CV² (TASK 1.3)
+- UI de `pred-platform`
+
+La sonda LLM, Pydantic y el remuestreo diario se implementaron en
+`docs/features/1.2-alineacion-semantica-validacion/`.
