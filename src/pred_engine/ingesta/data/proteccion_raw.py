@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import inspect
+import io
 import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -49,12 +50,22 @@ def _esta_bajo(ruta: Path, raiz: Path) -> bool:
         return False
 
 
+def _es_marco_interno_guardia(archivo: Path, funcion: str) -> bool:
+    """Omite marcos del propio modulo y de pathlib/io usados por Path.open()."""
+    if archivo == Path(__file__).resolve():
+        return True
+    if funcion == "guarded_open":
+        return True
+    ruta = str(archivo).lower()
+    return funcion == "open" and "pathlib" in ruta
+
+
 def _nombre_llamador() -> str:
-    modulo_actual = Path(__file__).resolve()
     for frame_info in inspect.stack()[1:]:
         archivo = Path(frame_info.filename).resolve()
-        if archivo != modulo_actual:
-            return frame_info.function
+        if _es_marco_interno_guardia(archivo, frame_info.function):
+            continue
+        return frame_info.function
     return "<desconocido>"
 
 
@@ -72,6 +83,7 @@ def raw_read_only_guard(raw_root: str | Path) -> Iterator[None]:
     raiz = Path(raw_root).resolve()
     logger = get_logger(__name__)
     original_open = builtins.open
+    original_io_open = io.open
 
     def guarded_open(file: Any, *args: Any, **kwargs: Any) -> Any:
         modo = _resolver_modo(args, kwargs)
@@ -87,11 +99,14 @@ def raw_read_only_guard(raw_root: str | Path) -> Iterator[None]:
             raise error
         return original_open(file, *args, **kwargs)
 
+    # Path.open() usa io.open, no builtins.open; hay que parchear ambos.
     builtins.open = guarded_open  # type: ignore[assignment]
+    io.open = guarded_open  # type: ignore[assignment]
     try:
         yield
     finally:
         builtins.open = original_open
+        io.open = original_io_open
 
 
 def enforce_raw_read_only(
