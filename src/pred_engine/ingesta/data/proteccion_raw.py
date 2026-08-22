@@ -88,11 +88,7 @@ def raw_read_only_guard(raw_root: str | Path) -> Iterator[None]:
     def guarded_open(file: Any, *args: Any, **kwargs: Any) -> Any:
         modo = _resolver_modo(args, kwargs)
         ruta = _como_ruta(file)
-        if (
-            ruta is not None
-            and _es_modo_escritura(modo)
-            and _esta_bajo(ruta, raiz)
-        ):
+        if ruta is not None and _es_modo_escritura(modo) and _esta_bajo(ruta, raiz):
             llamador = _nombre_llamador()
             error = RawWritePermissionError(ruta, llamador)
             logger.error("%s", error)

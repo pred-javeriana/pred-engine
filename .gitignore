@@ -7,3 +7,11 @@ __pycache__/
 dist/
 .ruff_cache/
 project/
+
+# Artefactos de ingesta: se versiona el arbol, no los CSV/Parquet
+data/raw/**
+data/staging/**
+data/processed/**
+!data/raw/.gitkeep
+!data/staging/.gitkeep
+!data/processed/.gitkeep

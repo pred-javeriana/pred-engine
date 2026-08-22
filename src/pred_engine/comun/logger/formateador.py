@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -13,7 +13,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         # Marca de tiempo ISO-8601 en UTC, derivada del evento original.
-        marca = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()
+        marca = datetime.fromtimestamp(record.created, tz=UTC).isoformat()
         carga: dict[str, Any] = {
             "timestamp": marca,
             "level": record.levelname,
