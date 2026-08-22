@@ -41,7 +41,6 @@ omit = [
     "src/pred_engine/analisis/*",
     "src/pred_engine/optimizacion/*",
     "src/pred_engine/config/*",
-    "src/pred_engine/comun/modelos/*",
     "src/pred_engine/ingesta/validador_tipo_archivo/*",
     "src/pred_engine/ingesta/validador_formato/*",
     "src/pred_engine/ingesta/categorizacion/*",
