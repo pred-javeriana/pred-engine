@@ -7,6 +7,7 @@ __pycache__/
 dist/
 .ruff_cache/
 project/
+local_data/
 
 # Artefactos de ingesta: se versiona el arbol, no los CSV/Parquet
 data/raw/**

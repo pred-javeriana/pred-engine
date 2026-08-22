@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pred_engine.comun.llm import (
     DEFAULT_MODELS,
+    LlmProviderError,
     LlmTimeoutError,
     UnknownModelError,
     UnknownProviderError,
@@ -105,6 +106,10 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
         return 4
+    except LlmProviderError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 1
     except (
         UnknownProviderError,
         UnknownModelError,
@@ -138,6 +143,10 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
         return 4
+    except LlmProviderError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 1
     except (
         UnknownProviderError,
         UnknownModelError,

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from pred_engine import cli
+from pred_engine.comun.llm import LlmProviderError
 
 
 class FakeLlmProvider:
@@ -19,6 +20,14 @@ class FakeLlmProvider:
                 "demand_qty": "Avg_Usage_Per_Day",
                 "lead_time_days": "Restock_Lead_Time",
             }
+        )
+
+
+class Http503LlmProvider:
+    def complete(self, prompt: str, *, temperature: float, timeout: float) -> str:
+        raise LlmProviderError(
+            "El proveedor LLM respondio HTTP 503",
+            status_code=503,
         )
 
 
@@ -100,3 +109,37 @@ def test_cli_sin_clave_falla(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         ["ingest", "--csv", str(csv), "--data-root", str(tmp_path / "data")]
     )
     assert codigo == 1
+
+
+def test_cli_error_http_llm_sale_limpio(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "Date,Item_ID,Avg_Usage_Per_Day,Restock_Lead_Time\n2024-10-01,105,108,17\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_llm_provider",
+        lambda *args, **kwargs: Http503LlmProvider(),
+    )
+    codigo = cli.main(
+        [
+            "ingest",
+            "--csv",
+            str(csv),
+            "--provider",
+            "gemini",
+            "--api-key",
+            "test-key",
+            "--data-root",
+            str(tmp_path / "data"),
+        ]
+    )
+    assert codigo == 1
+    err = capsys.readouterr().err
+    assert "503" in err
+    assert "Traceback" not in err
