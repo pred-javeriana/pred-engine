@@ -6,3 +6,13 @@ __pycache__/
 *.egg-info/
 dist/
 .ruff_cache/
+project/
+local_data/
+
+# Artefactos de ingesta: se versiona el arbol, no los CSV/Parquet
+data/raw/**
+data/staging/**
+data/processed/**
+!data/raw/.gitkeep
+!data/staging/.gitkeep
+!data/processed/.gitkeep

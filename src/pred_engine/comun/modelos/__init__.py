@@ -1,5 +1,13 @@
-"""PRED analytical engine.
+"""Contratos Pydantic compartidos por ingesta (y, mas adelante, otros modulos)."""
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
-"""
+from pred_engine.comun.modelos.contrato import (
+    CANONICAL_FIELDS,
+    HeaderMapping,
+    InventoryObservation,
+)
+
+__all__ = [
+    "CANONICAL_FIELDS",
+    "HeaderMapping",
+    "InventoryObservation",
+]

@@ -7,12 +7,15 @@ Dependency manifest for `pred-engine` — updated on every dependency change
 
 | Package | Version constraint | Purpose |
 |---------|-------------------|---------|
-| numpy | (transitive via dev/test stack) | N-dimensional arrays; core data structure for all time-series operations |
+| numpy | >=1.26 | N-dimensional arrays; core data structure for all time-series operations |
+| pandas | >=2.2 | Tabular I/O for passive CSV extraction and in-memory ingestion artefacts |
+| pyarrow | >=16 | Columnar Parquet engine (`engine="pyarrow"`) for processed exports |
+| pydantic | >=2.6 | Strict row/mapping contracts for semantic alignment (TASK-DATA-1.2) |
+| httpx | >=0.27 | Stateless HTTP client with first-class timeouts for LLM providers |
 
-> The library currently has no direct runtime dependencies beyond the Python
-> standard library and NumPy (pulled in transitively).  Direct runtime
-> dependencies will be added here as each forecasting model integration is
-> implemented.
+> Direct runtime dependencies are added here as each layer is implemented.
+> Vendor SDKs (google-genai, openai, anthropic) are intentionally not used;
+> each provider is a thin `httpx` adapter behind `LlmProvider`.
 
 ## Development / test dependencies
 

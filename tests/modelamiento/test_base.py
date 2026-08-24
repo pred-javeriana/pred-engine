@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pred_engine.modelamiento.base import BaseForecaster, SeasonalNaiveStub
+from pred_engine.forecasting.base import BaseForecaster, SeasonalNaiveStub
 
 # ---------------------------------------------------------------------------
 # Contract tests via the concrete stub
