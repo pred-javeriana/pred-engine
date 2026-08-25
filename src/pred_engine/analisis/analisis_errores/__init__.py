@@ -1,5 +1,4 @@
-"""PRED analytical engine.
+"""Analisis of error types.
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
+This component compiles and analyzes the errors calculated in the last layer.
 """

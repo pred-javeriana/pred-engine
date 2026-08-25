@@ -1,5 +1,5 @@
-"""PRED analytical engine.
+"""Analisis of error types.
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
+This component compiles and analyzes Diebold-Mariano test results from the
+last layer.
 """
