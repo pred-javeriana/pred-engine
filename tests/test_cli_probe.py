@@ -1,4 +1,4 @@
-"""CLI probe: diagnostico JSON en stderr al rechazar."""
+"""CLI probe: diagnostico JSON en stdout; rechazo no es error de ejecucion."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pred_engine.cli import main
+from pred_engine import cli
 
 
 def test_probe_rechazado_imprime_json(
@@ -38,7 +38,7 @@ def test_probe_rechazado_imprime_json(
         lambda args: ("gemini", "fake", FakeProvider()),
     )
 
-    codigo = main(
+    codigo = cli.main(
         [
             "probe",
             "--csv",
@@ -51,4 +51,4 @@ def test_probe_rechazado_imprime_json(
             "test-key",
         ]
     )
-    assert codigo == 2
+    assert codigo == 0

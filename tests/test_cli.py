@@ -93,7 +93,7 @@ def test_cli_ingest_con_proveedor_inyectado(
             "--provider",
             "gemini",
             "--api-key",
-            "no-se-debe-imprimir",
+            "test-key",
             "--data-root",
             str(tmp_path / "data"),
         ]

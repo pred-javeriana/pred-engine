@@ -153,8 +153,11 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         artefacto = probe_headers(extraido.frame, proveedor, timeout=args.timeout)
     except SemanticAlignmentError as exc:
         _logger.error("%s", exc)
-        print(exc.diagnostic_json(), file=sys.stderr)
-        return 2
+        print("estado: rejected")
+        print("diagnostico:", exc.diagnostic_json())
+        print("columnas_intactas:", list(extraido.frame.columns))
+        print("filas_muestra:", extraido.row_count)
+        return 0
     except LlmTimeoutError as exc:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
@@ -168,6 +171,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         print(exc, file=sys.stderr)
         return 1
 
+    print("estado: accepted")
     print("proveedor:", canonico)
     print("modelo:", modelo)
     print("diagnostico:", artefacto.diagnostic.model_dump_json(ensure_ascii=False))

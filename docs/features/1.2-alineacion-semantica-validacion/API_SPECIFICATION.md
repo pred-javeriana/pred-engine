@@ -136,8 +136,9 @@ pred-engine probe \
   [--timeout 30]
 ```
 
-- Imprime JSON de diagnostico en stdout si `accepted`.
-- Imprime JSON de diagnostico en stderr y sale con codigo `2` si `rejected`.
+- Imprime JSON de diagnostico en stdout si `accepted` o `rejected`.
+- Exit code `0` cuando la sonda completo (aunque el CSV sea rechazado).
+- Exit code `1` para errores de clave, red o LLM; `4` timeout.
 
 ### `pred-engine ingest`
 

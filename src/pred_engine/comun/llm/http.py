@@ -12,6 +12,25 @@ from pred_engine.comun.logger import get_logger
 _logger = get_logger(__name__)
 
 
+def _detalle_http(respuesta: httpx.Response) -> str:
+    """Extrae un mensaje corto del cuerpo de error sin filtrar secretos."""
+    try:
+        cuerpo = respuesta.json()
+    except ValueError:
+        texto = respuesta.text.strip()
+        return texto[:240] if texto else respuesta.reason_phrase
+    if isinstance(cuerpo, dict):
+        error = cuerpo.get("error")
+        if isinstance(error, dict):
+            mensaje = error.get("message")
+            if isinstance(mensaje, str) and mensaje.strip():
+                return mensaje.strip()
+        mensaje = cuerpo.get("message")
+        if isinstance(mensaje, str) and mensaje.strip():
+            return mensaje.strip()
+    return respuesta.reason_phrase
+
+
 def post_json(
     url: str,
     *,
@@ -38,9 +57,10 @@ def post_json(
         ) from exc
     except httpx.HTTPStatusError as exc:
         codigo = exc.response.status_code
-        _logger.error("Proveedor LLM HTTP %s", codigo)
+        detalle = _detalle_http(exc.response)
+        _logger.error("Proveedor LLM HTTP %s: %s", codigo, detalle)
         raise LlmProviderError(
-            f"El proveedor LLM respondio HTTP {codigo}",
+            f"El proveedor LLM respondio HTTP {codigo}: {detalle}",
             status_code=codigo,
         ) from exc
     except httpx.HTTPError as exc:
