@@ -1,4 +1,4 @@
-"""El prompt debe anclarse al CSV de proyecto (stock ≠ demanda)."""
+"""El prompt debe pedir diagnostico JSON y prohibir mutacion."""
 
 from __future__ import annotations
 
@@ -22,5 +22,15 @@ def test_inyecta_cinco_filas_y_cabeceras_del_baseline() -> None:
     assert "Date" in prompt
     assert "Current_Stock" in prompt
     assert "demand_qty" in prompt
-    assert "NEVER map on-hand stock" in prompt
+    assert "NEVER treat on-hand stock" in prompt
     assert "NUNCA" in prompt
+
+
+def test_pide_status_y_diagnostico_sin_mapeo() -> None:
+    marco = pd.DataFrame({"sku_id": ["1"], "timestamp": ["2024-01-01"]})
+    prompt = build_alignment_prompt(marco)
+    assert '"status"' in prompt
+    assert '"diagnostic"' in prompt
+    assert "Do NOT rename columns" in prompt
+    assert "NO renombres columnas" in prompt
+    assert "df.rename" not in prompt

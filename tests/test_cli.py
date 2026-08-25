@@ -1,4 +1,4 @@
-"""CLI: mapeo ok, fail-closed, catalogo de modelos y ausencia de clave en stdout."""
+"""CLI: diagnostico ok, fail-closed, catalogo y clave ausente en stdout."""
 
 from __future__ import annotations
 
@@ -15,10 +15,15 @@ class FakeLlmProvider:
     def complete(self, prompt: str, *, temperature: float, timeout: float) -> str:
         return json.dumps(
             {
-                "sku_id": "Item_ID",
-                "timestamp": "Date",
-                "demand_qty": "Avg_Usage_Per_Day",
-                "lead_time_days": "Restock_Lead_Time",
+                "status": "accepted",
+                "diagnostic": [
+                    {
+                        "field": "schema",
+                        "severity": "info",
+                        "message": "Cabeceras canonicas presentes",
+                        "action": None,
+                    }
+                ],
             }
         )
 
@@ -72,7 +77,7 @@ def test_cli_ingest_con_proveedor_inyectado(
 ) -> None:
     csv = tmp_path / "mini.csv"
     csv.write_text(
-        "Date,Item_ID,Avg_Usage_Per_Day,Restock_Lead_Time\n2024-10-01,105,108,17\n",
+        "sku_id,timestamp,demand_qty,lead_time_days\n105,2024-10-01,108,17\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -97,6 +102,7 @@ def test_cli_ingest_con_proveedor_inyectado(
     salida = capsys.readouterr().out
     assert "no-se-debe-imprimir" not in salida
     assert "filas_panel_diario" in salida
+    assert "diagnostico:" in salida
 
 
 def test_cli_sin_clave_falla(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -118,7 +124,7 @@ def test_cli_error_http_llm_sale_limpio(
 ) -> None:
     csv = tmp_path / "mini.csv"
     csv.write_text(
-        "Date,Item_ID,Avg_Usage_Per_Day,Restock_Lead_Time\n2024-10-01,105,108,17\n",
+        "sku_id,timestamp,demand_qty,lead_time_days\n105,2024-10-01,108,17\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(

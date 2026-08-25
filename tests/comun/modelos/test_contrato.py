@@ -1,4 +1,4 @@
-"""Pruebas del contrato Pydantic de observacion y mapeo."""
+"""Pruebas del contrato Pydantic de observacion y diagnostico."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from pydantic import ValidationError
 
 from pred_engine.comun.modelos import (
     CANONICAL_FIELDS,
-    HeaderMapping,
+    DiagnosticEntry,
+    HeaderDiagnostic,
     InventoryObservation,
 )
 
@@ -56,20 +57,30 @@ def test_strict_no_acepta_string_en_demanda() -> None:
         )
 
 
-def test_mapeo_baseline_inventory_data() -> None:
-    mapeo = HeaderMapping(
-        sku_id="Item_ID",
-        timestamp="Date",
-        demand_qty="Avg_Usage_Per_Day",
-        lead_time_days="Restock_Lead_Time",
+def test_diagnostico_aceptado_vacio() -> None:
+    reporte = HeaderDiagnostic(status="accepted", diagnostic=())
+    assert reporte.is_accepted()
+    assert not reporte.is_rejected()
+
+
+def test_diagnostico_rechazado_con_entradas() -> None:
+    reporte = HeaderDiagnostic(
+        status="rejected",
+        diagnostic=(
+            DiagnosticEntry(
+                field="timestamp",
+                message="Falta columna timestamp",
+                action="Renombrar 'Date' a 'timestamp'",
+            ),
+        ),
     )
-    assert mapeo.unmapped_fields() == ()
-    assert mapeo.source_to_canonical()["Item_ID"] == "sku_id"
+    assert reporte.is_rejected()
+    assert reporte.diagnostic[0].action == "Renombrar 'Date' a 'timestamp'"
 
 
-def test_mapeo_incompleto_lista_faltantes() -> None:
-    mapeo = HeaderMapping(sku_id="Item_ID", timestamp="Date")
-    assert set(mapeo.unmapped_fields()) == {"demand_qty", "lead_time_days"}
+def test_diagnostico_rechaza_status_invalido() -> None:
+    with pytest.raises(ValidationError):
+        HeaderDiagnostic(status="maybe", diagnostic=())  # type: ignore[arg-type]
 
 
 def test_campos_canonico_estables() -> None:

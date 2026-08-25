@@ -2,34 +2,36 @@
 
 ## Que se hizo en esta sesion
 
-1. **Sonda de cabeceras LLM** (`pred_engine.ingesta.sonda`): muestra de 5 filas,
-   prompt zero-shot a temperatura 0.0, `DataFrame.rename` vectorizado, drop de
-   columnas no mapeadas. Si el LLM no cubre el contrato, se aborta
-   (`SemanticAlignmentError`): PRED no inventa columnas.
+1. **Sonda de cabeceras LLM consultiva** (`pred_engine.ingesta.sonda`): muestra de
+   5 filas, prompt zero-shot a temperatura 0.0, payload JSON con
+   `status: accepted|rejected` e instrucciones en `diagnostic[]`.
+   **No hay `df.rename` ni `df.drop`**: el operador corrige el CSV manualmente.
 2. **Proveedores LLM modulares** (`pred_engine.comun.llm`): protocolo
    `LlmProvider` + adaptadores HTTP `gemini` / `openai` / `anthropic` via
    `httpx`, con timeout. La clave nunca se registra.
 3. **Catalogo de modelos economicos** (`pred_engine.comun.llm.catalogo`):
    lista curada `AVAILABLE_MODELS` por proveedor, default al tier mas barato
    (`DEFAULT_MODELS`) y validacion fail-closed con `resolve_model` / `--model`.
-4. **Contrato Pydantic v2** (`pred_engine.comun.modelos`) y **barrera fail-fast**
-   (`pred_engine.ingesta.validador_formato`).
+4. **Contrato Pydantic v2** (`HeaderDiagnostic`, `InventoryObservation`) y
+   **barrera fail-fast** (`pred_engine.ingesta.validador_formato`).
 5. **Remuestreo diario** (`pred_engine.ingesta.continuidad`) con zero-filling
    de `demand_qty`.
-6. **CLI** `pred-engine ingest` y `pred-engine models` para prueba de vida con
-   `inventory_data.csv`.
+6. **CLI** `pred-engine probe` (solo diagnostico), `pred-engine ingest` y
+   `pred-engine models`.
 
 ## Como
 
 La extraccion cruda sigue siendo 1.1 (`extract_csv`, todo `str`). 1.2 no escribe
-en `raw/`. El baseline de mapeo del dataset de proyecto es:
+en `raw/`. La sonda actua como asistente consultivo:
 
-| Canonico | Fuente |
+| Resultado | Comportamiento |
 | --- | --- |
-| `timestamp` | `Date` |
-| `sku_id` | `Item_ID` |
-| `demand_qty` | `Avg_Usage_Per_Day` (nunca `Current_Stock`) |
-| `lead_time_days` | `Restock_Lead_Time` |
+| `rejected` | Imprime/registra JSON con instrucciones de renombrado → detiene el pipeline |
+| `accepted` | El CSV ya tiene cabeceras canonicas exactas → continua a barrera Pydantic |
+
+Un CSV estilo ERP (p. ej. `Date`, `Item_ID`, `Avg_Usage_Per_Day`) sera
+**rechazado** con instrucciones como renombrar `Date` → `timestamp`. Tras
+corregir el archivo, el operador vuelve a ejecutar `probe` o `ingest`.
 
 ### Seleccion de proveedor y modelo
 
@@ -44,15 +46,24 @@ proveedor:
 | `openai` | `gpt-4.1-nano` |
 | `anthropic` | `claude-haiku-4-5` |
 
-Para pruebas reales del equipo con Gemini, usar `--model gemini-3.5-flash`
-(incluido en el catalogo).
+## Donde
+
+| Pieza | Ruta |
+| --- | --- |
+| Contrato | `src/pred_engine/comun/modelos/` |
+| LLM + catalogo | `src/pred_engine/comun/llm/` (`catalogo.py`, `fabrica.py`) |
+| Sonda consultiva | `src/pred_engine/ingesta/sonda/` |
+| Barrera | `src/pred_engine/ingesta/validador_formato/` |
+| Remuestreo | `src/pred_engine/ingesta/continuidad/` |
+| Pipeline / CLI | `src/pred_engine/ingesta/pipeline.py`, `src/pred_engine/cli.py` |
+| API | `API_SPECIFICATION.md` (este directorio) |
+
+## Prueba con archivo real
+
+Diagnostico sin mutar (recomendado primero):
 
 ```bash
-# Ver modelos permitidos
-uv run pred-engine models --provider gemini
-
-# Ingesta con modelo explicito
-uv run pred-engine ingest \
+uv run pred-engine probe \
   --csv inventory_data.csv \
   --provider gemini \
   --model gemini-3.5-flash \
@@ -60,24 +71,13 @@ uv run pred-engine ingest \
   --data-root data
 ```
 
-## Donde
-
-| Pieza | Ruta |
-| --- | --- |
-| Contrato | `src/pred_engine/comun/modelos/` |
-| LLM + catalogo | `src/pred_engine/comun/llm/` (`catalogo.py`, `fabrica.py`) |
-| Sonda | `src/pred_engine/ingesta/sonda/` |
-| Barrera | `src/pred_engine/ingesta/validador_formato/` |
-| Remuestreo | `src/pred_engine/ingesta/continuidad/` |
-| Pipeline / CLI | `src/pred_engine/ingesta/pipeline.py`, `src/pred_engine/cli.py` |
-| API | `API_SPECIFICATION.md` (este directorio) |
-| ADR | `docs/adr/ADR-002-proveedores-llm-y-alineacion-fail-closed.md` |
-
-## Prueba de vida
+Si la sonda rechaza, corrija el CSV segun el JSON de `diagnostic[]` y repita.
+Cuando el CSV tenga cabeceras canonicas (`sku_id`, `timestamp`, `demand_qty`,
+`lead_time_days`), `ingest` completara barrera + remuestreo + Parquet:
 
 ```bash
 uv run pred-engine ingest \
-  --csv inventory_data.csv \
+  --csv inventory_data_canonico.csv \
   --provider gemini \
   --model gemini-3.5-flash \
   --api-key <GEMINI_KEY> \
@@ -86,5 +86,5 @@ uv run pred-engine ingest \
 
 ## Fuera de alcance (sesiones futuras)
 
-- Clasificacion topológica ADI/CV² (1.3, `ingesta/categorizacion`)
+- Clasificacion topologica ADI/CV² (1.3, `ingesta/categorizacion`)
 - UI de `pred-platform` (otro repositorio)

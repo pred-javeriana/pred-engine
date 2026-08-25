@@ -15,10 +15,16 @@ Pydantic v2, `strict=True`, `extra=forbid`.
 `demand_qty: float >= 0`, `lead_time_days: int >= 1`, `timestamp: datetime`,
 `sku_id: str` no vacio.
 
-### `HeaderMapping`
+### `DiagnosticEntry`
 
-Canonico → nombre de columna fuente. `None` = no alineado.
-`unmapped_fields()`, `source_to_canonical()`.
+Entrada del reporte consultivo: `field`, `severity` (`error`|`info`),
+`message`, `action` (instruccion explicita para el operador, opcional).
+
+### `HeaderDiagnostic`
+
+Payload JSON de la sonda: `status` (`accepted`|`rejected`) y
+`diagnostic: tuple[DiagnosticEntry, ...]`.
+Metodos: `is_accepted()`, `is_rejected()`.
 
 ## `pred_engine.comun.llm`
 
@@ -69,20 +75,29 @@ Devuelve la tupla del catalogo para un proveedor canonico.
 
 ## `pred_engine.ingesta.sonda`
 
-### `probe_headers(frame, provider, *, timeout=30.0, n_rows=5) -> AlignmentArtifact`
+### `probe_headers(frame, provider, *, timeout=30.0, n_rows=5) -> DiagnosticArtifact`
 
-Temperatura fijada a `0.0`. `AlignmentArtifact(frame, mapping, dropped_columns)`.
+Temperatura fijada a `0.0`. **No muta el DataFrame.**
+`DiagnosticArtifact(frame, diagnostic)`.
+
+Si `status == "rejected"`, lanza `SemanticAlignmentError` con el payload
+adjunto (`diagnostic_json()`).
+
+### `parse_header_diagnostic(texto) -> HeaderDiagnostic`
+
+Parseo fail-closed del JSON del LLM.
 
 ### `SemanticAlignmentError`
 
-El dataset no es utilizable por PRED.
+Incluye `diagnostic: HeaderDiagnostic | None` y `diagnostic_json() -> str`
+para stdout/logs.
 
 ## `pred_engine.ingesta.validador_formato`
 
 ### `validate_aligned_frame(frame) -> DataFrame`
 
-Fail-fast. Salida con `timestamp` `datetime64[ns]`, `demand_qty` float64,
-`lead_time_days` int64, `sku_id` string.
+Fail-fast. Requiere columnas canonicas exactas. Salida con `timestamp`
+`datetime64[ns]`, `demand_qty` float64, `lead_time_days` int64, `sku_id` string.
 
 ### `SchemaBarrierError`
 
@@ -98,14 +113,31 @@ Grid diario por `sku_id`, left join, `demand_qty` NaN → 0.
 
 ### `run_ingest(csv_path, provider, *, data_root=None, timeout=30.0) -> IngestResult`
 
-Deposita en `raw/`, extrae, alinea, valida, remuestrea, escribe Parquet en
-`processed/`.
+Deposita en `raw/`, extrae, diagnostica (sin mutar), valida, remuestrea,
+escribe Parquet en `processed/` solo si la sonda acepta.
 
 ## CLI
 
 ### `pred-engine models --provider gemini|openai|anthropic`
 
 Lista modelos permitidos y marca el default economico.
+
+### `pred-engine probe`
+
+Diagnostico consultivo sin ejecutar barrera ni remuestreo.
+
+```
+pred-engine probe \
+  --csv PATH \
+  --provider gemini|openai|anthropic \
+  [--api-key KEY] \
+  [--model NAME] \
+  [--data-root data] \
+  [--timeout 30]
+```
+
+- Imprime JSON de diagnostico en stdout si `accepted`.
+- Imprime JSON de diagnostico en stderr y sale con codigo `2` si `rejected`.
 
 ### `pred-engine ingest`
 
@@ -124,4 +156,4 @@ pred-engine ingest \
 - Clave: `--api-key` o `PRED_LLM_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` /
   `ANTHROPIC_API_KEY` (segun proveedor).
 
-Exit codes: `0` ok, `2` alineacion, `3` esquema, `4` timeout LLM, `1` resto.
+Exit codes: `0` ok, `2` sonda rechazada (JSON en stderr), `3` esquema, `4` timeout LLM, `1` resto.
