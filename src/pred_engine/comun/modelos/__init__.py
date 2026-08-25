@@ -2,12 +2,14 @@
 
 from pred_engine.comun.modelos.contrato import (
     CANONICAL_FIELDS,
-    HeaderMapping,
+    DiagnosticEntry,
+    HeaderDiagnostic,
     InventoryObservation,
 )
 
 __all__ = [
     "CANONICAL_FIELDS",
-    "HeaderMapping",
+    "DiagnosticEntry",
+    "HeaderDiagnostic",
     "InventoryObservation",
 ]

@@ -1,4 +1,4 @@
 """Analisis of error types.
 
-this component centers in compiling and analyzing the errors calculated in the last layer
+This component compiles and analyzes the errors calculated in the last layer.
 """

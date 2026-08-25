@@ -9,16 +9,26 @@ from pred_engine.comun.llm.http import post_json
 
 _URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-# Schema OpenAPI minimo: el modelo debe devolver exactamente el contrato PRED.
+# Schema OpenAPI minimo: diagnostico consultivo (sin mapeo automatico).
 _RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "sku_id": {"type": "string", "nullable": True},
-        "timestamp": {"type": "string", "nullable": True},
-        "demand_qty": {"type": "string", "nullable": True},
-        "lead_time_days": {"type": "string", "nullable": True},
+        "status": {"type": "string", "enum": ["accepted", "rejected"]},
+        "diagnostic": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string"},
+                    "severity": {"type": "string", "enum": ["error", "info"]},
+                    "message": {"type": "string"},
+                    "action": {"type": "string", "nullable": True},
+                },
+                "required": ["field", "message"],
+            },
+        },
     },
-    "required": ["sku_id", "timestamp", "demand_qty", "lead_time_days"],
+    "required": ["status", "diagnostic"],
 }
 
 

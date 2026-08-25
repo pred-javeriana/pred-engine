@@ -13,7 +13,7 @@ from pred_engine.comun.logger import get_logger, log_ingestion_event
 from pred_engine.ingesta.continuidad import resample_daily
 from pred_engine.ingesta.data import ensure_data_layout
 from pred_engine.ingesta.lector import ExtractionArtifact, export_parquet, extract_csv
-from pred_engine.ingesta.sonda import AlignmentArtifact, probe_headers
+from pred_engine.ingesta.sonda import DiagnosticArtifact, probe_headers
 from pred_engine.ingesta.validador_formato import validate_aligned_frame
 
 _logger = get_logger(__name__)
@@ -24,7 +24,7 @@ class IngestResult:
     """Artefacto de una corrida completa de alineacion 1.2."""
 
     source: ExtractionArtifact
-    alignment: AlignmentArtifact
+    diagnostic: DiagnosticArtifact
     validated: pd.DataFrame
     panel: pd.DataFrame
     parquet_path: Path
@@ -47,12 +47,12 @@ def run_semantic_pipeline(
     provider: LlmProvider,
     *,
     timeout: float = 30.0,
-) -> tuple[AlignmentArtifact, pd.DataFrame, pd.DataFrame]:
-    """Puro respecto a filesystem: DataFrame → panel diario."""
-    alineacion = probe_headers(frame, provider, timeout=timeout)
-    validado = validate_aligned_frame(alineacion.frame)
+) -> tuple[DiagnosticArtifact, pd.DataFrame, pd.DataFrame]:
+    """Puro respecto a filesystem: sonda consultiva → barrera → panel diario."""
+    diagnostico = probe_headers(frame, provider, timeout=timeout)
+    validado = validate_aligned_frame(diagnostico.frame)
     panel = resample_daily(validado)
-    return alineacion, validado, panel
+    return diagnostico, validado, panel
 
 
 def run_ingest(
@@ -62,11 +62,11 @@ def run_ingest(
     data_root: str | Path | None = None,
     timeout: float = 30.0,
 ) -> IngestResult:
-    """Deposita, extrae (1.1), alinea/valida/remuestrea (1.2) y exporta Parquet."""
+    """Deposita, extrae (1.1), diagnostica/valida/remuestrea (1.2) y exporta Parquet."""
     layout = ensure_data_layout(data_root)
     crudo = deposit_raw_csv(csv_path, data_root=layout.root)
     extraido = extract_csv(crudo, data_root=layout.root)
-    alineacion, validado, panel = run_semantic_pipeline(
+    diagnostico, validado, panel = run_semantic_pipeline(
         extraido.frame,
         provider,
         timeout=timeout,
@@ -81,7 +81,7 @@ def run_ingest(
     )
     return IngestResult(
         source=extraido,
-        alignment=alineacion,
+        diagnostic=diagnostico,
         validated=validado,
         panel=panel,
         parquet_path=destino,
