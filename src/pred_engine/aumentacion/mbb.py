@@ -11,7 +11,7 @@ def aumentar(
     period: int,
     n_series: int = 1,
     block_size: int = 3,
-) -> np.ndarray:
+) -> list[np.ndarray]:
     
     if n_series <= 0:
         raise ValueError("n_series debe ser mayor que 0.")
@@ -37,7 +37,7 @@ def aumentar(
             )
         )
  
-    return np.concatenate(synthetic_series)
+    return synthetic_series
  
  
 def decompose_series(
