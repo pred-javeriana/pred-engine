@@ -67,6 +67,21 @@ def test_rechaza_panel_vacio() -> None:
         enforce_handoff_contract(_panel().iloc[0:0])
 
 
+def test_rechaza_clasificacion_que_altera_el_panel() -> None:
+    diario = _panel().drop(columns=["sku_class"])
+    clasificado = _panel()
+    clasificado.loc[0, "demand_qty"] = 999.0
+    with pytest.raises(HandoffContractError, match="mismas filas"):
+        enforce_handoff_contract(clasificado, source_panel=diario)
+
+
+def test_rechaza_demanda_negativa_en_handoff() -> None:
+    marco = _panel()
+    marco.loc[0, "demand_qty"] = -1.0
+    with pytest.raises(HandoffContractError, match="negativa"):
+        enforce_handoff_contract(marco)
+
+
 def test_acepta_sku_con_al_menos_un_periodo_positivo() -> None:
     diario = _panel().drop(columns=["sku_class"])
     assert require_positive_demand(diario) is diario

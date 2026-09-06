@@ -144,6 +144,40 @@ def test_run_ingest_rechaza_clasificacion_fuera_de_contrato(tmp_path: Path) -> N
         )
 
 
+@pytest.mark.parametrize("alteracion", ["drop", "demand"])
+def test_run_ingest_rechaza_filas_alteradas_por_clasificador(
+    tmp_path: Path,
+    alteracion: str,
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,108,17\n"
+        "105,2024-10-02,0,17\n",
+        encoding="utf-8",
+    )
+
+    def _classify_alterado(panel: pd.DataFrame) -> pd.DataFrame:
+        if alteracion == "drop":
+            panel = panel.iloc[:-1].copy()
+        else:
+            panel = panel.copy()
+            panel.loc[0, "demand_qty"] = 109.0
+        panel["sku_class"] = "Smooth"
+        return panel
+
+    raiz = tmp_path / "data"
+    with pytest.raises(HandoffContractError, match="mismas filas"):
+        run_ingest(
+            csv,
+            FakeLlmProvider(_ACCEPTED),
+            data_root=raiz,
+            timeout=5.0,
+            classify=_classify_alterado,
+        )
+    assert list((raiz / "processed").glob("*.parquet")) == []
+
+
 def test_run_ingest_rechaza_sku_sin_demanda_positiva_sin_clasificar(
     tmp_path: Path,
 ) -> None:

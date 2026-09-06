@@ -83,7 +83,7 @@ def run_ingest(
     clasificador = classify if classify is not None else default_classify_daily_panel
     # Copia: el panel 1.2 permanece de cuatro columnas aunque 1.3 mute in-place.
     clasificado = clasificador(panel.copy())
-    handoff = enforce_handoff_contract(clasificado)
+    handoff = enforce_handoff_contract(clasificado, source_panel=panel)
     destino = layout.processed / f"{crudo.stem}.parquet"
     export_parquet(handoff, destino, data_root=layout.root)
     log_ingestion_event(

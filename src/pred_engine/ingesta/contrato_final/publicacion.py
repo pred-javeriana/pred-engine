@@ -8,7 +8,11 @@ from typing import NoReturn
 import pandas as pd
 
 from pred_engine.comun.logger import get_logger
-from pred_engine.comun.modelos import HANDOFF_FIELDS, SKU_CLASS_LABELS
+from pred_engine.comun.modelos import (
+    CANONICAL_FIELDS,
+    HANDOFF_FIELDS,
+    SKU_CLASS_LABELS,
+)
 from pred_engine.ingesta.contrato_final.errores import HandoffContractError
 
 _logger = get_logger(__name__)
@@ -45,16 +49,27 @@ def default_classify_daily_panel(panel: pd.DataFrame) -> pd.DataFrame:
     return classify_daily_panel(panel)
 
 
-def enforce_handoff_contract(frame: pd.DataFrame) -> pd.DataFrame:
+def enforce_handoff_contract(
+    frame: pd.DataFrame,
+    source_panel: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Copia tipada del panel 1.4. No muta el original ni clasifica."""
+    if not isinstance(frame, pd.DataFrame):
+        _fallar("el panel clasificado debe ser un DataFrame")
     if list(frame.columns) != list(HANDOFF_FIELDS):
         _fallar(
             "el panel clasificado debe tener exactamente " + ", ".join(HANDOFF_FIELDS)
         )
     if frame.empty:
         _fallar("el panel clasificado no tiene filas")
+    if source_panel is not None:
+        _require_same_panel(source_panel, frame)
     if frame["sku_class"].isna().any():
         _fallar("sku_class no puede ser nulo")
+    if bool((frame["demand_qty"] < 0).any()):
+        _fallar("demand_qty negativa")
+    if bool((frame["lead_time_days"] < 1).any()):
+        _fallar("lead_time_days < 1")
 
     etiquetas = {str(valor) for valor in frame["sku_class"].tolist()}
     invalidas = etiquetas - set(SKU_CLASS_LABELS)
@@ -76,6 +91,24 @@ def enforce_handoff_contract(frame: pd.DataFrame) -> pd.DataFrame:
     salida["sku_class"] = salida["sku_class"].astype("string")
     _logger.info("Contrato 1.4 superado (%s filas)", len(salida))
     return salida
+
+
+def _require_same_panel(source_panel: pd.DataFrame, classified: pd.DataFrame) -> None:
+    if not isinstance(source_panel, pd.DataFrame):
+        _fallar("el panel diario debe ser un DataFrame")
+    if list(source_panel.columns) != list(CANONICAL_FIELDS):
+        _fallar("el panel diario debe tener exactamente " + ", ".join(CANONICAL_FIELDS))
+    expected = source_panel.loc[:, list(CANONICAL_FIELDS)].reset_index(drop=True)
+    received = classified.loc[:, list(CANONICAL_FIELDS)].reset_index(drop=True)
+    try:
+        pd.testing.assert_frame_equal(
+            expected,
+            received,
+            check_dtype=False,
+            check_names=False,
+        )
+    except AssertionError:
+        _fallar("la clasificacion debe devolver las mismas filas del panel diario")
 
 
 def _fallar(mensaje: str) -> NoReturn:
