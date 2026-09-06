@@ -14,6 +14,7 @@ from pred_engine.ingesta.contrato_final import (
     HandoffContractError,
     default_classify_daily_panel,
     enforce_handoff_contract,
+    require_positive_demand,
 )
 
 
@@ -64,6 +65,32 @@ def test_rechaza_sku_class_nulo() -> None:
 def test_rechaza_panel_vacio() -> None:
     with pytest.raises(HandoffContractError, match="no tiene filas"):
         enforce_handoff_contract(_panel().iloc[0:0])
+
+
+def test_acepta_sku_con_al_menos_un_periodo_positivo() -> None:
+    diario = _panel().drop(columns=["sku_class"])
+    assert require_positive_demand(diario) is diario
+
+
+def test_rechaza_sku_sin_demanda_positiva() -> None:
+    diario = _panel().drop(columns=["sku_class"])
+    diario["demand_qty"] = 0.0
+    with pytest.raises(HandoffContractError, match="demanda > 0"):
+        require_positive_demand(diario)
+
+
+def test_rechaza_solo_el_sku_sin_demanda_positiva() -> None:
+    diario = pd.DataFrame(
+        {
+            "sku_id": pd.Series(["105", "200"], dtype="string"),
+            "timestamp": pd.to_datetime([datetime(2024, 10, 1), datetime(2024, 10, 1)]),
+            "demand_qty": [108.0, 0.0],
+            "lead_time_days": [17, 5],
+        }
+    )
+    with pytest.raises(HandoffContractError, match="200") as captured:
+        require_positive_demand(diario)
+    assert "105" not in str(captured.value)
 
 
 def test_default_classify_delega_en_1_3(

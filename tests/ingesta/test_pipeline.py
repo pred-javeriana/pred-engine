@@ -144,6 +144,37 @@ def test_run_ingest_rechaza_clasificacion_fuera_de_contrato(tmp_path: Path) -> N
         )
 
 
+def test_run_ingest_rechaza_sku_sin_demanda_positiva_sin_clasificar(
+    tmp_path: Path,
+) -> None:
+    csv = tmp_path / "ceros.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,0,17\n"
+        "105,2024-10-02,0,17\n",
+        encoding="utf-8",
+    )
+    llamadas: list[int] = []
+
+    def _classify_no_debe_correr(panel: pd.DataFrame) -> pd.DataFrame:
+        llamadas.append(1)
+        clasificado = panel.copy()
+        clasificado["sku_class"] = "Smooth"
+        return clasificado
+
+    raiz = tmp_path / "data"
+    with pytest.raises(HandoffContractError, match="demanda > 0"):
+        run_ingest(
+            csv,
+            FakeLlmProvider(_ACCEPTED),
+            data_root=raiz,
+            timeout=5.0,
+            classify=_classify_no_debe_correr,
+        )
+    assert llamadas == []
+    assert list((raiz / "processed").glob("*.parquet")) == []
+
+
 def test_run_ingest_rechaza_csv_no_canonico_sin_mutar(tmp_path: Path) -> None:
     csv = tmp_path / "hostil.csv"
     original = (

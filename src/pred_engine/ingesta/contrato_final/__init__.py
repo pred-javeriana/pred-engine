@@ -5,6 +5,7 @@ from pred_engine.ingesta.contrato_final.publicacion import (
     ClassifyDailyPanel,
     default_classify_daily_panel,
     enforce_handoff_contract,
+    require_positive_demand,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "HandoffContractError",
     "default_classify_daily_panel",
     "enforce_handoff_contract",
+    "require_positive_demand",
 ]

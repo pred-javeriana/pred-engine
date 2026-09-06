@@ -15,6 +15,7 @@ from pred_engine.ingesta.contrato_final import (
     ClassifyDailyPanel,
     default_classify_daily_panel,
     enforce_handoff_contract,
+    require_positive_demand,
 )
 from pred_engine.ingesta.data import ensure_data_layout
 from pred_engine.ingesta.lector import ExtractionArtifact, export_parquet, extract_csv
@@ -78,6 +79,7 @@ def run_ingest(
         provider,
         timeout=timeout,
     )
+    require_positive_demand(panel)
     clasificador = classify if classify is not None else default_classify_daily_panel
     # Copia: el panel 1.2 permanece de cuatro columnas aunque 1.3 mute in-place.
     clasificado = clasificador(panel.copy())

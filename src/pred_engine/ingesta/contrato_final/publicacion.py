@@ -16,6 +16,23 @@ _logger = get_logger(__name__)
 ClassifyDailyPanel = Callable[[pd.DataFrame], pd.DataFrame]
 
 
+def require_positive_demand(panel: pd.DataFrame) -> pd.DataFrame:
+    """Fail-closed sobre el panel diario. No clasifica ni publica SKU en ceros."""
+    if panel.empty:
+        _fallar("el panel diario no tiene filas")
+    if "sku_id" not in panel.columns or "demand_qty" not in panel.columns:
+        _fallar("el panel diario debe incluir sku_id y demand_qty")
+    maximos = panel.groupby("sku_id", sort=False)["demand_qty"].max()
+    vacios = [str(sku) for sku, maximo in maximos.items() if not (maximo > 0)]
+    if vacios:
+        _fallar(
+            "calidad de datos: SKU sin periodos con demanda > 0 "
+            "(ADI y CV2 indefinidos; el SKU no se publica): "
+            + ", ".join(sorted(vacios))
+        )
+    return panel
+
+
 def default_classify_daily_panel(panel: pd.DataFrame) -> pd.DataFrame:
     """Delega en el clasificador 1.3. No calcula ADI ni CV2."""
     try:

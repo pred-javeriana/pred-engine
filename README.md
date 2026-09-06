@@ -118,4 +118,6 @@ A successful ingest writes Snappy Parquet under `{data_root}/processed/` with
 exactly `sku_id`, `timestamp`, `demand_qty`, `lead_time_days`, and `sku_class`.
 `sku_class` is supplied by Layer 1.3
 (`pred_engine.ingesta.categorizacion.classify_daily_panel`). The four-column
-schema barrier still runs before classification.
+schema barrier still runs before classification. A SKU with no period of
+`demand_qty > 0` is rejected before classification: ADI and CV² are undefined,
+and ingest stops with a data-quality error that names the SKU.
