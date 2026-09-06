@@ -15,6 +15,16 @@ CANONICAL_FIELDS: tuple[str, ...] = (
     "lead_time_days",
 )
 
+# Contrato publicado hacia el modulo 2. La barrera 1.2 sigue siendo CANONICAL_FIELDS.
+HANDOFF_FIELDS: tuple[str, ...] = (
+    *CANONICAL_FIELDS,
+    "sku_class",
+)
+
+SKU_CLASS_LABELS: frozenset[str] = frozenset(
+    {"Smooth", "Intermittent", "Erratic", "Lumpy"}
+)
+
 
 class InventoryObservation(BaseModel):
     """Fila ya tipada que puede cruzar hacia el remuestreo y el modulo 2."""

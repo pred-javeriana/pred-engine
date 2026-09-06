@@ -2,6 +2,8 @@
 
 from pred_engine.comun.modelos.contrato import (
     CANONICAL_FIELDS,
+    HANDOFF_FIELDS,
+    SKU_CLASS_LABELS,
     DiagnosticEntry,
     HeaderDiagnostic,
     InventoryObservation,
@@ -9,6 +11,8 @@ from pred_engine.comun.modelos.contrato import (
 
 __all__ = [
     "CANONICAL_FIELDS",
+    "HANDOFF_FIELDS",
+    "SKU_CLASS_LABELS",
     "DiagnosticEntry",
     "HeaderDiagnostic",
     "InventoryObservation",

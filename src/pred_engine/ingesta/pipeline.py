@@ -1,4 +1,4 @@
-"""Composicion de sonda → barrera → remuestreo → parquet (sin estado de modulo)."""
+"""Composicion de sonda → barrera → remuestreo → clasificacion 1.3 → parquet."""
 
 from __future__ import annotations
 
@@ -11,6 +11,11 @@ import pandas as pd
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.logger import get_logger, log_ingestion_event
 from pred_engine.ingesta.continuidad import resample_daily
+from pred_engine.ingesta.contrato_final import (
+    ClassifyDailyPanel,
+    default_classify_daily_panel,
+    enforce_handoff_contract,
+)
 from pred_engine.ingesta.data import ensure_data_layout
 from pred_engine.ingesta.lector import ExtractionArtifact, export_parquet, extract_csv
 from pred_engine.ingesta.sonda import DiagnosticArtifact, probe_headers
@@ -21,12 +26,13 @@ _logger = get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class IngestResult:
-    """Artefacto de una corrida completa de alineacion 1.2."""
+    """Artefacto de una corrida completa de ingesta hasta el contrato 1.4."""
 
     source: ExtractionArtifact
     diagnostic: DiagnosticArtifact
     validated: pd.DataFrame
     panel: pd.DataFrame
+    handoff: pd.DataFrame
     parquet_path: Path
 
 
@@ -61,8 +67,9 @@ def run_ingest(
     *,
     data_root: str | Path | None = None,
     timeout: float = 30.0,
+    classify: ClassifyDailyPanel | None = None,
 ) -> IngestResult:
-    """Deposita, extrae (1.1), diagnostica/valida/remuestrea (1.2) y exporta Parquet."""
+    """Deposita, extrae, diagnostica, valida, remuestrea, clasifica y exporta."""
     layout = ensure_data_layout(data_root)
     crudo = deposit_raw_csv(csv_path, data_root=layout.root)
     extraido = extract_csv(crudo, data_root=layout.root)
@@ -71,18 +78,23 @@ def run_ingest(
         provider,
         timeout=timeout,
     )
+    clasificador = classify if classify is not None else default_classify_daily_panel
+    # Copia: el panel 1.2 permanece de cuatro columnas aunque 1.3 mute in-place.
+    clasificado = clasificador(panel.copy())
+    handoff = enforce_handoff_contract(clasificado)
     destino = layout.processed / f"{crudo.stem}.parquet"
-    export_parquet(panel, destino, data_root=layout.root)
+    export_parquet(handoff, destino, data_root=layout.root)
     log_ingestion_event(
         _logger,
-        "Pipeline 1.2 completado",
+        "Pipeline de ingesta completado",
         file_hash=extraido.sha256,
-        row_count=int(len(panel)),
+        row_count=int(len(handoff)),
     )
     return IngestResult(
         source=extraido,
         diagnostic=diagnostico,
         validated=validado,
         panel=panel,
+        handoff=handoff,
         parquet_path=destino,
     )

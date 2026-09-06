@@ -70,6 +70,12 @@ def test_ingest_rechaza_modelo_fuera_de_catalogo(tmp_path: Path) -> None:
     assert codigo == 1
 
 
+def _classify_smooth(panel):
+    clasificado = panel.copy()
+    clasificado["sku_class"] = "Smooth"
+    return clasificado
+
+
 def test_cli_ingest_con_proveedor_inyectado(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -84,6 +90,10 @@ def test_cli_ingest_con_proveedor_inyectado(
         cli,
         "build_llm_provider",
         lambda *args, **kwargs: FakeLlmProvider(),
+    )
+    monkeypatch.setattr(
+        "pred_engine.ingesta.pipeline.default_classify_daily_panel",
+        _classify_smooth,
     )
     codigo = cli.main(
         [

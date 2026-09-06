@@ -9,6 +9,8 @@ from pydantic import ValidationError
 
 from pred_engine.comun.modelos import (
     CANONICAL_FIELDS,
+    HANDOFF_FIELDS,
+    SKU_CLASS_LABELS,
     DiagnosticEntry,
     HeaderDiagnostic,
     InventoryObservation,
@@ -90,3 +92,14 @@ def test_campos_canonico_estables() -> None:
         "demand_qty",
         "lead_time_days",
     )
+
+
+def test_campos_de_frontera_son_canonico_mas_sku_class() -> None:
+    assert HANDOFF_FIELDS == (
+        "sku_id",
+        "timestamp",
+        "demand_qty",
+        "lead_time_days",
+        "sku_class",
+    )
+    assert SKU_CLASS_LABELS == {"Smooth", "Intermittent", "Erratic", "Lumpy"}

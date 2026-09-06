@@ -55,3 +55,10 @@ def test_fail_fast_duplicados() -> None:
 def test_cero_de_demanda_es_legal() -> None:
     marco = validate_aligned_frame(_ok(demand_qty="0"))
     assert marco.iloc[0]["demand_qty"] == 0.0
+
+
+def test_rechaza_sku_class_antes_de_la_barrera() -> None:
+    marco = _ok()
+    marco["sku_class"] = "Smooth"
+    with pytest.raises(SchemaBarrierError, match="exactamente"):
+        validate_aligned_frame(marco)
