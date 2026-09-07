@@ -1,5 +1,15 @@
-"""PRED analytical engine.
+"""Motor de topologia Syntetos-Boylan: ADI, CV² y enrutado de sku_class."""
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
-"""
+from pred_engine.ingesta.categorizacion.adi import compute_adi
+from pred_engine.ingesta.categorizacion.errores import (
+    TopologyContractError,
+    TopologyMathError,
+    TopologyRoutingError,
+)
+
+__all__ = [
+    "TopologyContractError",
+    "TopologyMathError",
+    "TopologyRoutingError",
+    "compute_adi",
+]
