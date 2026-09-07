@@ -86,5 +86,5 @@ uv run pred-engine ingest \
 
 ## Fuera de alcance (sesiones futuras)
 
-- Clasificacion topologica ADI/CV² (1.3, `ingesta/categorizacion`)
+- Clasificacion topologica ADI/CV² (1.3) implementada en `docs/features/1.3-motor-enrutador-sku/`
 - UI de `pred-platform` (otro repositorio)

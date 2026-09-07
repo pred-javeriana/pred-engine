@@ -69,9 +69,12 @@ def test_run_ingest_csv_canonico_con_huecos(tmp_path: Path) -> None:
         "timestamp",
         "demand_qty",
         "lead_time_days",
+        "sku_class",
     ]
     assert len(panel) == 4
     assert list(panel["demand_qty"]) == [108.0, 0.0, 0.0, 50.0]
+    assert set(panel["sku_class"]) == {"intermittent"}
+    assert resultado.topology.metrics[0].sku_class == "intermittent"
 
 
 def test_run_ingest_rechaza_csv_no_canonico_sin_mutar(tmp_path: Path) -> None:
@@ -85,3 +88,19 @@ def test_run_ingest_rechaza_csv_no_canonico_sin_mutar(tmp_path: Path) -> None:
         run_ingest(csv, FakeLlmProvider(_REJECTED), data_root=raiz, timeout=5.0)
     assert exc.value.diagnostic is not None
     assert exc.value.diagnostic.is_rejected()
+
+
+def test_run_ingest_proyecta_columnas_extra(tmp_path: Path) -> None:
+    csv = tmp_path / "erp.csv"
+    csv.write_text(
+        "timestamp,sku_id,Item_Name,demand_qty,lead_time_days,Vendor_ID\n"
+        "2024-10-01,105,Ventilator,108,17,V001\n"
+        "2024-10-04,105,Ventilator,50,17,V001\n",
+        encoding="utf-8",
+    )
+    raiz = tmp_path / "data"
+    resultado = run_ingest(csv, FakeLlmProvider(_ACCEPTED), data_root=raiz, timeout=5.0)
+    panel = pd.read_parquet(resultado.parquet_path)
+    assert "Item_Name" not in panel.columns
+    assert "Vendor_ID" not in panel.columns
+    assert "sku_class" in panel.columns
