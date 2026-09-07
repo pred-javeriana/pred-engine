@@ -101,3 +101,16 @@ The API key is read from `--api-key` or `PRED_LLM_API_KEY` / `GEMINI_API_KEY`
 (and equivalents for OpenAI and Anthropic). If the probe cannot map `sku_id`,
 `timestamp`, `demand_qty` and `lead_time_days` with confidence, ingestion stops.
 See `docs/features/1.2-alineacion-semantica-validacion/`.
+
+## L1.3 SKU topology (Syntetos-Boylan)
+
+After the daily panel exists, `pred_engine.ingesta.categorizacion` computes
+ADI and CV² per SKU and injects a single `sku_class` label
+(`smooth` | `intermittent` | `erratic` | `lumpy`) on every row of that SKU.
+Thresholds are 1.32 and 0.49. Original demand columns are not rewritten.
+
+```bash
+uv run pred-engine classify --csv inventory_data.csv --data-root data
+```
+
+No LLM key is required. See `docs/features/1.3-motor-enrutador-sku/`.
