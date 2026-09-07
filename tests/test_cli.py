@@ -103,6 +103,7 @@ def test_cli_ingest_con_proveedor_inyectado(
     assert "no-se-debe-imprimir" not in salida
     assert "filas_panel_diario" in salida
     assert "diagnostico:" in salida
+    assert "sku_class_resumen" in salida
 
 
 def test_cli_sin_clave_falla(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,3 +150,35 @@ def test_cli_error_http_llm_sale_limpio(
     err = capsys.readouterr().err
     assert "503" in err
     assert "Traceback" not in err
+
+
+def test_cli_classify_csv_sin_llm(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days,Item_Name\n"
+        "105,2024-10-01,108,17,Ventilator\n"
+        "105,2024-10-04,50,17,Ventilator\n",
+        encoding="utf-8",
+    )
+    codigo = cli.main(
+        [
+            "classify",
+            "--csv",
+            str(csv),
+            "--data-root",
+            str(tmp_path / "data"),
+        ]
+    )
+    assert codigo == 0
+    salida = capsys.readouterr().out
+    assert "intermittent" in salida
+    assert "sku_class_resumen" in salida
+    assert "Ventilator" not in salida
+
+
+def test_cli_classify_exige_una_fuente(capsys: pytest.CaptureFixture[str]) -> None:
+    codigo = cli.main(["classify", "--data-root", "data"])
+    assert codigo == 1
+    assert "exactamente uno" in capsys.readouterr().err
