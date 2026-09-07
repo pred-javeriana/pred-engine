@@ -1,21 +1,20 @@
 """Moving block bootstrap para aumentacion de series temporales."""
 
 from __future__ import annotations
- 
+
 import numpy as np
 from statsmodels.tsa.seasonal import STL
- 
- 
+
+
 def aumentar(
     series_array: np.ndarray,
     period: int,
     n_series: int = 1,
     block_size: int = 3,
 ) -> list[np.ndarray]:
-    
     if n_series <= 0:
         raise ValueError("n_series debe ser mayor que 0.")
- 
+
     trend, seasonal, residual = decompose_series(
         series_array=series_array,
         period=period,
@@ -36,29 +35,26 @@ def aumentar(
                 residual=bootstrap_residual,
             )
         )
- 
+
     return synthetic_series
- 
- 
+
+
 def decompose_series(
     series_array: np.ndarray,
     period: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
- 
     if series_array.ndim != 1:
         raise ValueError("series_array debe ser un array 1D.")
- 
+
     if series_array.size == 0:
         raise ValueError("series_array no puede estar vacío.")
- 
+
     if period <= 1:
         raise ValueError("period debe ser mayor que 1.")
- 
+
     if series_array.size < 2 * period:
-        raise ValueError(
-            "La serie es demasiado corta para el periodo indicado."
-        )
- 
+        raise ValueError("La serie es demasiado corta para el periodo indicado.")
+
     result = STL(
         series_array,
         period=period,
@@ -67,31 +63,29 @@ def decompose_series(
     trend = np.asarray(result.trend)
     seasonal = np.asarray(result.seasonal)
     residual = np.asarray(result.resid)
- 
+
     return trend, seasonal, residual
- 
- 
+
+
 def compose_series(
     trend: np.ndarray,
     seasonal: np.ndarray,
     residual: np.ndarray,
 ) -> np.ndarray:
- 
     if trend.ndim != 1:
         raise ValueError("trend debe ser un array 1D.")
- 
+
     if seasonal.ndim != 1:
         raise ValueError("seasonal debe ser un array 1D.")
- 
+
     if residual.ndim != 1:
         raise ValueError("residual debe ser un array 1D.")
- 
+
     if not (len(trend) == len(seasonal) == len(residual)):
-        raise ValueError(
-            "Todos los componentes deben tener la misma longitud."
-        )
- 
+        raise ValueError("Todos los componentes deben tener la misma longitud.")
+
     return trend + seasonal + residual
+
 
 def moving_block_bootstrap(
     serie_sku: np.ndarray,
