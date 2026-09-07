@@ -51,5 +51,7 @@ tolera columnas extra.
 
 ## Fuera de alcance (sesiones futuras)
 
-- Data augmentation / MBB (1.4, `ingesta` no; `aumentacion/`)
+- Contrato final y artefacto Parquet (1.4) implementado en
+  `docs/features/1.4-artefacto-salida/`
+- Data augmentation / MBB (`aumentacion/`, no es 1.4)
 - Selection router del Modulo 2 (lee `sku_class`, no lo recalcula)

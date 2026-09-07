@@ -11,8 +11,10 @@ from pred_engine.comun.modelos import (
     ADI_THRESHOLD,
     CANONICAL_FIELDS,
     CV2_THRESHOLD,
+    PANEL_DTYPES,
     PANEL_FIELDS,
     TOPOLOGY_FIELD,
+    ClassifiedObservation,
     DiagnosticEntry,
     HeaderDiagnostic,
     InventoryObservation,
@@ -111,6 +113,29 @@ def test_panel_conserva_canonico_y_anade_sku_class() -> None:
         "lead_time_days",
         "sku_class",
     )
+
+
+def test_observacion_clasificada_exige_sku_class() -> None:
+    fila = ClassifiedObservation(
+        sku_id="105",
+        timestamp=datetime(2024, 10, 1),
+        demand_qty=108.0,
+        lead_time_days=17,
+        sku_class="intermittent",
+    )
+    assert fila.sku_class == "intermittent"
+    assert PANEL_DTYPES["sku_class"] == "string"
+
+
+def test_observacion_clasificada_rechaza_etiqueta_invalida() -> None:
+    with pytest.raises(ValidationError):
+        ClassifiedObservation(
+            sku_id="105",
+            timestamp=datetime(2024, 10, 1),
+            demand_qty=108.0,
+            lead_time_days=17,
+            sku_class="intermitente",  # type: ignore[arg-type]
+        )
 
 
 def test_metricas_topologia_validas() -> None:

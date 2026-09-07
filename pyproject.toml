@@ -64,6 +64,7 @@ indent-style = "space"
 [tool.pyright]
 include = [
     "src/pred_engine/ingesta/categorizacion",
+    "src/pred_engine/ingesta/salida",
     "src/pred_engine/comun/modelos",
 ]
 pythonVersion = "3.12"

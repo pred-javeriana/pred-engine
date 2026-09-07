@@ -175,6 +175,7 @@ def test_cli_classify_csv_sin_llm(
     salida = capsys.readouterr().out
     assert "intermittent" in salida
     assert "sku_class_resumen" in salida
+    assert "contrato_1_4: accepted" in salida
     assert "Ventilator" not in salida
 
 
@@ -182,3 +183,38 @@ def test_cli_classify_exige_una_fuente(capsys: pytest.CaptureFixture[str]) -> No
     codigo = cli.main(["classify", "--data-root", "data"])
     assert codigo == 1
     assert "exactamente uno" in capsys.readouterr().err
+
+
+def test_cli_verify_parquet_publicado(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,108,17\n"
+        "105,2024-10-04,50,17\n",
+        encoding="utf-8",
+    )
+    raiz = tmp_path / "data"
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    parquet = raiz / "processed" / "mini.parquet"
+    codigo = cli.main(["verify", "--parquet", str(parquet)])
+    assert codigo == 0
+    salida = capsys.readouterr().out
+    assert "contrato_1_4: accepted" in salida
+    assert "skus: 1" in salida
+
+
+def test_cli_classify_sku_sin_demanda_sale_6(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    csv = tmp_path / "ceros.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n105,2024-10-01,0,17\n",
+        encoding="utf-8",
+    )
+    codigo = cli.main(
+        ["classify", "--csv", str(csv), "--data-root", str(tmp_path / "data")]
+    )
+    assert codigo == 6
+    assert "sin demanda" in capsys.readouterr().err

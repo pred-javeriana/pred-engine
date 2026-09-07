@@ -81,3 +81,8 @@ def classify_panel(frame: pd.DataFrame) -> TopologyArtifact:
         frame=panel.loc[:, list(PANEL_FIELDS)],
         metrics=tuple(metricas),
     )
+
+
+def classify_daily_panel(frame: pd.DataFrame) -> TopologyArtifact:
+    """Alias del contrato Notion 1.4: delega al clasificador real de 1.3."""
+    return classify_panel(frame)

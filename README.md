@@ -114,3 +114,17 @@ uv run pred-engine classify --csv inventory_data.csv --data-root data
 ```
 
 No LLM key is required. See `docs/features/1.3-motor-enrutador-sku/`.
+
+## L1.4 output contract (Parquet handoff)
+
+After topology, `pred_engine.ingesta.salida` validates the five-column
+contract, checks that 1.3 only added `sku_class`, and publishes Snappy
+Parquet under `{data_root}/processed/`. Modules 2 and 3 must consume this
+artefact, not the raw CSV.
+
+```bash
+uv run pred-engine classify --csv local_data/inventory_data.csv --data-root data
+uv run pred-engine verify --parquet data/processed/inventory_data.parquet
+```
+
+See `docs/features/1.4-artefacto-salida/`.

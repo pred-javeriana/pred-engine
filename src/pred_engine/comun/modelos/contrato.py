@@ -19,6 +19,15 @@ CANONICAL_FIELDS: tuple[str, ...] = (
 TOPOLOGY_FIELD = "sku_class"
 PANEL_FIELDS: tuple[str, ...] = CANONICAL_FIELDS + (TOPOLOGY_FIELD,)
 
+# Tipos pandas del artefacto 1.4 (unico origen de verdad para normalizar).
+PANEL_DTYPES: dict[str, str] = {
+    "sku_id": "string",
+    "timestamp": "datetime64[ns]",
+    "demand_qty": "float64",
+    "lead_time_days": "int64",
+    "sku_class": "string",
+}
+
 # Syntetos, Boylan & Croston (2005); Johnston & Boylan (1996).
 ADI_THRESHOLD: float = 1.32
 CV2_THRESHOLD: float = 0.49
@@ -50,6 +59,12 @@ class InventoryObservation(BaseModel):
         if not limpio:
             raise ValueError("sku_id no puede ser vacio")
         return limpio
+
+
+class ClassifiedObservation(InventoryObservation):
+    """Fila del contrato final 1.4: observacion diaria mas sku_class constante."""
+
+    sku_class: SkuClass
 
 
 class TopologyMetrics(BaseModel):

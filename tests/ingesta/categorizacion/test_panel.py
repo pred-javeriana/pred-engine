@@ -8,7 +8,11 @@ import pandas as pd
 import pytest
 
 from pred_engine.comun.modelos import PANEL_FIELDS
-from pred_engine.ingesta.categorizacion import TopologyContractError, classify_panel
+from pred_engine.ingesta.categorizacion import (
+    TopologyContractError,
+    classify_daily_panel,
+    classify_panel,
+)
 
 
 def _panel_cuatro_clases() -> pd.DataFrame:
@@ -81,3 +85,11 @@ def test_cuatro_cuadrantes_y_etiqueta_constante() -> None:
 def test_panel_vacio_lanza() -> None:
     with pytest.raises(TopologyContractError):
         classify_panel(pd.DataFrame())
+
+
+def test_classify_daily_panel_es_el_clasificador_real() -> None:
+    origen = _panel_cuatro_clases()
+    a = classify_panel(origen)
+    b = classify_daily_panel(origen)
+    assert a.frame.equals(b.frame)
+    assert [m.sku_class for m in a.metrics] == [m.sku_class for m in b.metrics]
