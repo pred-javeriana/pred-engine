@@ -111,10 +111,13 @@ Grid diario por `sku_id`, left join, `demand_qty` NaN → 0.
 
 ## `pred_engine.ingesta.pipeline`
 
-### `run_ingest(csv_path, provider, *, data_root=None, timeout=30.0) -> IngestResult`
+### `run_ingest(csv_path, provider, *, data_root=None, timeout=30.0, classify=None) -> IngestResult`
 
-Deposita en `raw/`, extrae, diagnostica (sin mutar), valida, remuestrea,
-escribe Parquet en `processed/` solo si la sonda acepta.
+Deposita en `raw/`, extrae, diagnostica (sin mutar), valida y remuestrea el
+panel canonico de cuatro columnas. Rechaza SKU sin demanda positiva, delega la
+clasificacion a `classify_daily_panel` (o al callback `classify`) y valida el
+handoff de cinco columnas antes de escribir Snappy Parquet en `processed/`.
+El resultado expone `panel` (cuatro columnas) y `handoff` (cinco columnas).
 
 ## CLI
 

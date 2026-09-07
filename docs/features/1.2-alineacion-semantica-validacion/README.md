@@ -73,7 +73,8 @@ uv run pred-engine probe \
 
 Si la sonda rechaza, corrija el CSV segun el JSON de `diagnostic[]` y repita.
 Cuando el CSV tenga cabeceras canonicas (`sku_id`, `timestamp`, `demand_qty`,
-`lead_time_days`), `ingest` completara barrera + remuestreo + Parquet:
+`lead_time_days`), `ingest` completara barrera + remuestreo + clasificacion 1.3
++ validacion del handoff + Parquet:
 
 ```bash
 uv run pred-engine ingest \
@@ -86,5 +87,5 @@ uv run pred-engine ingest \
 
 ## Fuera de alcance (sesiones futuras)
 
-- Clasificacion topologica ADI/CV² (1.3, `ingesta/categorizacion`)
+- Implementacion del clasificador topologico ADI/CV² (1.3, `ingesta/categorizacion`); la integracion y validacion del handoff 1.4 ya forman parte del pipeline
 - UI de `pred-platform` (otro repositorio)
