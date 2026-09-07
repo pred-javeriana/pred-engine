@@ -8,12 +8,17 @@ from pred_engine.ingesta.categorizacion.errores import (
     TopologyMathError,
     TopologyRoutingError,
 )
+from pred_engine.ingesta.categorizacion.panel import TopologyArtifact, classify_panel
+from pred_engine.ingesta.categorizacion.proyeccion import select_canonical_columns
 
 __all__ = [
+    "TopologyArtifact",
     "TopologyContractError",
     "TopologyMathError",
     "TopologyRoutingError",
+    "classify_panel",
     "compute_adi",
     "compute_cv2",
     "route_syntetos_boylan",
+    "select_canonical_columns",
 ]
