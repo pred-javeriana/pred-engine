@@ -19,6 +19,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.5",
     "pre-commit>=3.7",
+    "pyright>=1.1",
 ]
 
 [project.scripts]
@@ -60,3 +61,13 @@ ignore = []
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.pyright]
+include = [
+    "src/pred_engine/ingesta/categorizacion",
+    "src/pred_engine/comun/modelos",
+]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
