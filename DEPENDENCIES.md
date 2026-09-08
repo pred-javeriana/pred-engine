@@ -12,6 +12,7 @@ Dependency manifest for `pred-engine` — updated on every dependency change
 | pyarrow | >=16 | Columnar Parquet engine (`engine="pyarrow"`) for processed exports |
 | pydantic | >=2.6 | Strict row/mapping contracts for semantic alignment (TASK-DATA-1.2) |
 | httpx | >=0.27 | Stateless HTTP client with first-class timeouts for LLM providers |
+| statsmodels | >=0.14 | SARIMAX (`comun.modelos.modelos_clasicos.sarima`) y descomposición STL (`aumentacion.mbb`) |
 
 > Direct runtime dependencies are added here as each layer is implemented.
 > Vendor SDKs (google-genai, openai, anthropic) are intentionally not used;

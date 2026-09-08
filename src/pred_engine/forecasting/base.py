@@ -15,8 +15,9 @@ class BaseForecaster(ABC):
     seed) triples always produce identical forecasts (RNF-REP-01/02).
     """
 
-    def __init__(self, seed: int = 0) -> None:
+    def __init__(self, seed: int = 0, *, forzar_no_negativo: bool = True) -> None:
         self.seed = seed
+        self.forzar_no_negativo = forzar_no_negativo
         self._fitted = False
 
     @abstractmethod
@@ -40,6 +41,35 @@ class BaseForecaster(ABC):
     def _seed_rng(self) -> None:
         random.seed(self.seed)
         np.random.seed(self.seed)
+
+    @staticmethod
+    def _validar_serie_1d(y: np.ndarray, nombre: str = "y") -> np.ndarray:
+        """Convierte a float y exige 1D.
+
+        Comun a todo `fit()` de un Pronosticador concreto (SARIMA, ML, DL,
+        fundacional): evita repetir la misma validacion en cada subclase.
+        """
+        serie = np.asarray(y, dtype=float)
+        if serie.ndim != 1:
+            raise ValueError(f"{nombre} debe ser un array 1D")
+        return serie
+
+    @staticmethod
+    def _validar_horizonte(horizon: int) -> None:
+        """Exige horizon >= 1. Comun a todo `predict()` de un Pronosticador."""
+        if horizon < 1:
+            raise ValueError("horizon debe ser >= 1")
+
+    def _recortar_no_negativo(self, pronostico: np.ndarray) -> np.ndarray:
+        """Aplica la ley de conservacion de inventario si `forzar_no_negativo`.
+
+        La demanda pronosticada no puede ser negativa; cada subclase decide
+        si construye el pronostico a partir de esto (SARIMA, fundacional) en
+        vez de repetir el mismo `np.clip` en cada `predict()`.
+        """
+        if self.forzar_no_negativo:
+            return np.clip(pronostico, 0.0, None)
+        return pronostico
 
 
 class SeasonalNaiveStub(BaseForecaster):
