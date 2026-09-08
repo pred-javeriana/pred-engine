@@ -10,13 +10,19 @@ entre ambos modos (ver docs/adr/ADR-003).
 Contrato central: `iterar_walk_forward` y `EjecutorGreedy` NO DECIDEN si se
 poda. Solo ejecutan la siguiente ventana, actualizan el agregado parcial y
 lo entregan. La decision de podar es responsabilidad EXCLUSIVA del
-componente 5 (`optimizacion.optimizadores.HPO.asha.AsignadorRecursosASHA`).
+componente 5 (`optimizacion.optimizadores.HPO.asha.DecisorASHA`).
+
+`tolerar_fallos=True` por defecto (a diferencia de `evaluar_walk_forward`,
+que por defecto es `False`): este es el motor de BUSQUEDA que usa el HPO, y
+una ventana que no converge es señal (para ASHA/poda semantica), no un
+motivo para abortar el trial completo. Ver el docstring de
+`walk_forward.py` para el contraste completo.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
-from typing import Any
+from collections.abc import Generator, Mapping, Sequence
+from typing import Any, Literal
 
 import numpy as np
 
@@ -42,11 +48,12 @@ def iterar_walk_forward(
     ventanas: Sequence[VentanaTemporal],
     metrica_objetivo: str = "mase",
     estacionalidad: int = 7,
-    agregacion: str = "media_recortada",
+    agregacion: Literal["media", "mediana", "media_recortada"] = "media_recortada",
+    proporcion_recorte: float = 0.1,
     seed: int = 0,
     tolerar_fallos: bool = True,
     identificador: str = "",
-) -> Iterator[EstadoParcial]:
+) -> Generator[EstadoParcial, None, None]:
     serie = np.asarray(y, dtype=float)
     if serie.ndim != 1:
         raise ValueError("y debe ser un array 1D")
@@ -67,7 +74,10 @@ def iterar_walk_forward(
         )
         historial.append(resultado)
         valor_parcial = valor_agregado_de(
-            historial, metrica_objetivo, estrategia=agregacion
+            historial,
+            metrica_objetivo,
+            estrategia=agregacion,
+            proporcion_recorte=proporcion_recorte,
         )
         yield EstadoParcial(
             ultima=resultado,
@@ -87,14 +97,16 @@ class EjecutorGreedy:
         ventanas: Sequence[VentanaTemporal],
         metrica_objetivo: str = "mase",
         estacionalidad: int = 7,
-        agregacion: str = "media_recortada",
+        agregacion: Literal["media", "mediana", "media_recortada"] = "media_recortada",
+        proporcion_recorte: float = 0.1,
         seed: int = 0,
         tolerar_fallos: bool = True,
         identificador: str = "",
     ) -> None:
         self._ventanas = tuple(ventanas)
         self._metrica_objetivo = metrica_objetivo
-        self._agregacion = agregacion
+        self._agregacion: Literal["media", "mediana", "media_recortada"] = agregacion
+        self._proporcion_recorte = proporcion_recorte
         self._generador = iterar_walk_forward(
             y,
             fabrica,
@@ -103,6 +115,7 @@ class EjecutorGreedy:
             metrica_objetivo=metrica_objetivo,
             estacionalidad=estacionalidad,
             agregacion=agregacion,
+            proporcion_recorte=proporcion_recorte,
             seed=seed,
             tolerar_fallos=tolerar_fallos,
             identificador=identificador,
@@ -141,7 +154,10 @@ class EjecutorGreedy:
 
     def resultado(self) -> ResultadoWalkForward:
         valor_agregado = valor_agregado_de(
-            self._historial, self._metrica_objetivo, estrategia=self._agregacion
+            self._historial,
+            self._metrica_objetivo,
+            estrategia=self._agregacion,
+            proporcion_recorte=self._proporcion_recorte,
         )
         completo = self._motivo_cierre is None and len(self._historial) == len(
             self._ventanas

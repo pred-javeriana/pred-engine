@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
@@ -10,7 +11,7 @@ import numpy as np
 @dataclass(frozen=True, slots=True)
 class ReglasPoda:
     min_ventanas: int = 4
-    agregacion: str = "media_recortada"
+    agregacion: Literal["media", "mediana", "media_recortada"] = "media_recortada"
     proporcion_recorte: float = 0.1
     factor_reduccion: int = 3
     habilitar_poda_semantica: bool = True

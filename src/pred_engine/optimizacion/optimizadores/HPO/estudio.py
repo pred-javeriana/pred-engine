@@ -5,11 +5,14 @@ poda semantica, asignacion de recursos ASHA, registro) es compartido. Las
 ventanas se generan UNA VEZ y se comparten entre todos los trials, para que
 sean comparables entre si.
 
-ADR-02-006: el bucle usa la interfaz ask/tell de Optuna -- `EjecutorGreedy`
-sigue siendo quien decide cuando avanzar una ventana (ADR-02-004) y
-`PodadorASHA` quien decide cuando podar (ADR-02-005); Optuna solo aporta el
-muestreador (`TPESampler`) y el `Study` como registro de trials. El
-contrato externo (`Trial`/`ResultadoEstudio`) no cambia.
+ADR-02-006: el bucle usa la interfaz ask/tell de un backend de HPO --
+`EjecutorGreedy` sigue siendo quien decide cuando avanzar una ventana
+(ADR-02-004) y `DecisorASHA` quien decide cuando podar (ADR-02-005); el
+backend (hoy Optuna, vease `adaptador_optuna.py`) solo aporta el
+muestreador y el registro de trials. Este modulo NO importa el backend
+concreto -- habla unicamente `contratos.py` (`EstudioHPO`/`TrialHPO`) y
+`DecisorASHA` (algoritmo puro). El contrato externo (`Trial`/
+`ResultadoEstudio`) no cambia.
 """
 
 from __future__ import annotations
@@ -18,8 +21,6 @@ import math
 from typing import Any
 
 import numpy as np
-import optuna
-from optuna.trial import TrialState
 
 from pred_engine.comun.dataclasses.hpo import ResultadoEstudio
 from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
@@ -27,7 +28,16 @@ from pred_engine.comun.logger import get_logger
 from pred_engine.comun.walkforward.protocolos import FabricaPronosticador
 from pred_engine.comun.walkforward.ventanas import generar_ventanas
 from pred_engine.comun.walkforward.walk_forward_greedy import EjecutorGreedy
-from pred_engine.optimizacion.optimizadores.HPO.asha import PodadorASHA
+from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
+    crear_estudio_optuna,
+)
+from pred_engine.optimizacion.optimizadores.HPO.asha import DecisorASHA
+from pred_engine.optimizacion.optimizadores.HPO.contratos import (
+    EstudioHPO,
+    ProveedorMotivoPoda,
+    TrialHPO,
+)
+from pred_engine.optimizacion.optimizadores.HPO.errores import EstudioError
 from pred_engine.optimizacion.optimizadores.HPO.espacio import (
     Categorico,
     Entero,
@@ -45,6 +55,14 @@ from pred_engine.optimizacion.optimizadores.HPO.registro import (
 
 _logger = get_logger(__name__)
 
+# Tope de intentos de muestreo invalido (restricciones de EspacioBusqueda)
+# QUE NO CUENTAN contra `n_trials`, por cada trial real que si se necesita
+# evaluar. Evita que un espacio con restricciones agresivas degrade el
+# presupuesto de busqueda en silencio (varios `n_trials` gastados en
+# configuraciones nunca evaluadas) y, a la vez, evita un bucle infinito si
+# el espacio rechaza casi todo.
+_MAX_INTENTOS_INVALIDOS_POR_TRIAL = 20
+
 
 def ejecutar_estudio(
     y: np.ndarray,
@@ -56,7 +74,7 @@ def ejecutar_estudio(
     paso: int = 1,
     metrica_objetivo: str = "mase",
     estacionalidad: int = 7,
-    muestreador: optuna.samplers.BaseSampler | None = None,
+    muestreador: Any | None = None,
     reglas: ReglasPoda | None = None,
     seed: int = 0,
     familia: str = "desconocida",
@@ -73,11 +91,15 @@ def ejecutar_estudio(
         paso=paso,
     )
     reglas_efectivas = reglas or ReglasPoda()
-    pruner = PodadorASHA(reglas_efectivas, n_ventanas_totales=len(ventanas))
-    sampler = muestreador or construir_muestreador_tpe(seed=seed)
-    study = optuna.create_study(direction="minimize", sampler=sampler, pruner=pruner)
+    decisor = DecisorASHA(reglas_efectivas, n_ventanas_totales=len(ventanas))
+    study, podador = crear_estudio_optuna(
+        muestreador=muestreador or construir_muestreador_tpe(seed=seed),
+        decisor_asha=decisor,
+    )
 
-    for indice_trial in range(n_trials):
+    indice_trial = 0
+    intentos_invalidos = 0
+    while indice_trial < n_trials:
         trial_id = f"{familia}-{sku_id or 'panel'}-{indice_trial:04d}"
         trial = study.ask()
         trial.set_user_attr("trial_id", trial_id)
@@ -88,9 +110,17 @@ def ejecutar_estudio(
         configuracion = _sugerir_configuracion(trial, espacio)
         if configuracion is None:
             trial.set_user_attr("motivo", "configuracion_invalida")
-            study.tell(trial, state=TrialState.FAIL)
+            study.tell(trial, None, estado="fallido")
             _logger.warning("Configuracion invalida (restricciones) para %s", trial_id)
-            continue
+            intentos_invalidos += 1
+            if intentos_invalidos > n_trials * _MAX_INTENTOS_INVALIDOS_POR_TRIAL:
+                raise EstudioError(
+                    "el espacio de busqueda rechaza casi todas las configuraciones "
+                    f"muestreadas ({intentos_invalidos} intentos invalidos); revise "
+                    "las restricciones de EspacioBusqueda"
+                )
+            continue  # no incrementa indice_trial: no gasta presupuesto real
+        intentos_invalidos = 0
 
         ejecutor = EjecutorGreedy(
             serie,
@@ -100,16 +130,18 @@ def ejecutar_estudio(
             metrica_objetivo=metrica_objetivo,
             estacionalidad=estacionalidad,
             agregacion=reglas_efectivas.agregacion,
+            proporcion_recorte=reglas_efectivas.proporcion_recorte,
             seed=seed,
             tolerar_fallos=True,
             identificador=trial_id,
         )
 
-        _correr_trial(trial, ejecutor, study, pruner, reglas_efectivas)
+        _correr_trial(trial, ejecutor, study, podador, reglas_efectivas)
+        indice_trial += 1
 
     resultado = instantanea_desde_estudio(
-        study,
-        ventanas=ventanas,
+        study.trials_finalizados(),
+        ventanas=tuple(ventanas),
         metrica_objetivo=metrica_objetivo,
         seed=seed,
         familia=familia,
@@ -125,7 +157,7 @@ def ejecutar_estudio(
 
 
 def _sugerir_configuracion(
-    trial: optuna.trial.Trial, espacio: EspacioBusqueda
+    trial: TrialHPO, espacio: EspacioBusqueda
 ) -> dict[str, Any] | None:
     condiciones = {c.parametro: c for c in espacio.condiciones}
     configuracion: dict[str, Any] = {}
@@ -141,7 +173,7 @@ def _sugerir_configuracion(
     return configuracion
 
 
-def _sugerir_parametro(trial: optuna.trial.Trial, parametro: Parametro) -> Any:
+def _sugerir_parametro(trial: TrialHPO, parametro: Parametro) -> Any:
     if isinstance(parametro, Entero):
         return trial.suggest_int(
             parametro.nombre, parametro.bajo, parametro.alto, step=parametro.paso
@@ -156,10 +188,10 @@ def _sugerir_parametro(trial: optuna.trial.Trial, parametro: Parametro) -> Any:
 
 
 def _correr_trial(
-    trial: optuna.trial.Trial,
+    trial: TrialHPO,
     ejecutor: EjecutorGreedy,
-    study: optuna.study.Study,
-    pruner: PodadorASHA,
+    study: EstudioHPO,
+    pruner: ProveedorMotivoPoda,
     reglas: ReglasPoda,
 ) -> None:
     while True:
@@ -191,7 +223,7 @@ def _correr_trial(
                 return
 
         if trial.should_prune():
-            motivo_completo = pruner.ultimo_motivo or (
+            motivo_completo = pruner.motivo_de(trial.number) or (
                 f"ventana={estado.n_evaluadas} valor={estado.valor_parcial:.6g} asha"
             )
             ejecutor.cerrar("asha")
@@ -206,21 +238,21 @@ def _correr_trial(
 
 
 def _cerrar_por_agotamiento(
-    trial: optuna.trial.Trial,
-    study: optuna.study.Study,
+    trial: TrialHPO,
+    study: EstudioHPO,
     resultado: ResultadoWalkForward,
 ) -> None:
     trial.set_user_attr("n_ventanas", resultado.n_ventanas_evaluadas)
     if math.isfinite(resultado.valor_agregado):
-        study.tell(trial, resultado.valor_agregado, state=TrialState.COMPLETE)
+        study.tell(trial, resultado.valor_agregado, estado="completado")
     else:
         trial.set_user_attr("motivo", "ninguna_ventana_convergio")
-        study.tell(trial, state=TrialState.FAIL)
+        study.tell(trial, None, estado="fallido")
 
 
 def _cerrar_podado_o_fallido(
-    trial: optuna.trial.Trial,
-    study: optuna.study.Study,
+    trial: TrialHPO,
+    study: EstudioHPO,
     n_evaluadas: int,
     valor_parcial: float,
     motivo: str,
@@ -228,6 +260,10 @@ def _cerrar_podado_o_fallido(
     trial.set_user_attr("n_ventanas", n_evaluadas)
     trial.set_user_attr("motivo", motivo)
     if math.isfinite(valor_parcial):
-        study.tell(trial, state=TrialState.PRUNED)
+        # No se pasa `valor_parcial` aqui: ya se reporto via `trial.report()`
+        # en `_correr_trial` justo antes de esta llamada, y el backend
+        # (Optuna) recupera automaticamente ese ultimo valor reportado como
+        # el valor del trial podado.
+        study.tell(trial, None, estado="podado")
     else:
-        study.tell(trial, state=TrialState.FAIL)
+        study.tell(trial, None, estado="fallido")

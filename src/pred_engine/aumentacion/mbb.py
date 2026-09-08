@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-
 import numpy as np
 from statsmodels.tsa.seasonal import STL
-
-
 
 
 def aumentar(
@@ -39,10 +36,7 @@ def aumentar(
             )
         )
 
-
     return synthetic_series
-
-
 
 
 def decompose_series(
@@ -52,14 +46,11 @@ def decompose_series(
     if series_array.ndim != 1:
         raise ValueError("series_array debe ser un array 1D.")
 
-
     if series_array.size == 0:
         raise ValueError("series_array no puede estar vacío.")
 
-
     if period <= 1:
         raise ValueError("period debe ser mayor que 1.")
-
 
     if series_array.size < 2 * period:
         raise ValueError("La serie es demasiado corta para el periodo indicado.")
@@ -75,10 +66,7 @@ def decompose_series(
     seasonal = np.asarray(result.seasonal)
     residual = np.asarray(result.resid)
 
-
     return trend, seasonal, residual
-
-
 
 
 def compose_series(
@@ -89,14 +77,11 @@ def compose_series(
     if trend.ndim != 1:
         raise ValueError("trend debe ser un array 1D.")
 
-
     if seasonal.ndim != 1:
         raise ValueError("seasonal debe ser un array 1D.")
 
-
     if residual.ndim != 1:
         raise ValueError("residual debe ser un array 1D.")
-
 
     if not (len(trend) == len(seasonal) == len(residual)):
         raise ValueError("Todos los componentes deben tener la misma longitud.")
@@ -104,7 +89,6 @@ def compose_series(
         raise ValueError("Todos los componentes deben tener la misma longitud.")
 
     return trend + seasonal + residual
-
 
 
 def moving_block_bootstrap(

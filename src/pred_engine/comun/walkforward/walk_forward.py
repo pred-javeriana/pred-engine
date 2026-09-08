@@ -2,12 +2,26 @@
 
 Recorre TODAS las ventanas de una configuracion y devuelve las metricas
 finales.
+
+`tolerar_fallos=False` por defecto: este modo esta pensado como reporte o
+auditoria final de una configuracion ya elegida (a diferencia del modo
+greedy de `walk_forward_greedy.py`, que es el motor de BUSQUEDA que usa el
+HPO), asi que un fallo de ajuste debe propagarse en vez de disolverse en un
+`inf` -- quien pide un reporte final quiere saber si el modelo no ajusto,
+no un numero que lo esconda. Contrastar con el modo greedy
+(`tolerar_fallos=True` por defecto): ahi una ventana que no converge es
+señal que ASHA puede usar para podar, no debe abortar el trial completo.
+Ambos modos comparten `generar_ventanas`/`ejecutar_ventana` bit a bit (ver
+docs/adr/ADR-003); la unica diferencia de comportamiento entre ellos es
+esta, y esta deliberadamente documentada porque la prueba de equivalencia
+(`tests/comun/walkforward/test_walk_forward_greedy.py`) usa un doble que
+nunca falla y por lo tanto no la ejercita.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -32,7 +46,8 @@ def evaluar_walk_forward(
     paso: int = 1,
     metrica_objetivo: str = "mase",
     estacionalidad: int = 7,
-    agregacion: str = "media_recortada",
+    agregacion: Literal["media", "mediana", "media_recortada"] = "media_recortada",
+    proporcion_recorte: float = 0.1,
     seed: int = 0,
     tolerar_fallos: bool = False,
     identificador: str = "",
@@ -60,7 +75,10 @@ def evaluar_walk_forward(
     )
 
     valor_agregado = valor_agregado_de(
-        resultados, metrica_objetivo, estrategia=agregacion
+        resultados,
+        metrica_objetivo,
+        estrategia=agregacion,
+        proporcion_recorte=proporcion_recorte,
     )
 
     _logger.info(
