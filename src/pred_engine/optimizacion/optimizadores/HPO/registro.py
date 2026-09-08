@@ -1,5 +1,12 @@
 """Componente 9 (parcial): trazabilidad y reanudacion de un estudio de HPO.
 
+ADR-02-006: la fuente de verdad de cada trial ahora es el `optuna.Study`
+(via ask/tell), no una clase de registro propia. Este modulo solo traduce
+entre ese `Study` y el contrato externo estable (`Trial`/`ResultadoEstudio`
+de `comun.dataclasses.hpo`) que ya consumen `classical_selection.py` y las
+pruebas -- y provee el volcado/reanudacion en JSONL que antes ofrecia
+`RegistroEstudio`.
+
 Distingue 'podado' de 'fallido' con `motivo` SIEMPRE presente en ambos
 (regla de seguridad #4), para poder responder despues "esta configuracion,
 se descarto por poda o porque el ajuste fallo?".
@@ -11,171 +18,134 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pred_engine.comun.dataclasses.hpo import ResultadoEstudio, Trial
+import optuna
+from optuna.trial import TrialState, create_trial
+
+from pred_engine.comun.dataclasses.hpo import EstadoTrial, ResultadoEstudio, Trial
 from pred_engine.comun.dataclasses.validacion_temporal import VentanaTemporal
-from pred_engine.comun.logger import get_logger
+from pred_engine.optimizacion.optimizadores.HPO.espacio import (
+    Categorico,
+    Entero,
+    EspacioBusqueda,
+    Flotante,
+)
 
-_logger = get_logger(__name__)
+_ESTADO_OPTUNA_A_TRIAL: dict[TrialState, EstadoTrial] = {
+    TrialState.COMPLETE: "completado",
+    TrialState.PRUNED: "podado",
+    TrialState.FAIL: "fallido",
+}
 
 
-class RegistroEstudio:
-    def __init__(
-        self,
-        *,
-        familia: str,
-        metrica_objetivo: str,
-        ventanas: tuple[VentanaTemporal, ...],
-        seed: int = 0,
-    ) -> None:
-        self._familia = familia
-        self._metrica_objetivo = metrica_objetivo
-        self._ventanas = ventanas
-        self._seed = seed
-        self._trials: dict[str, Trial] = {}
-
-    @property
-    def trials(self) -> tuple[Trial, ...]:
-        return tuple(self._trials.values())
-
-    def abrir(
-        self, trial_id: str, configuracion: dict[str, Any], *, sku_id: str | None = None
-    ) -> None:
-        self._trials[trial_id] = Trial(
-            id=trial_id,
-            configuracion=dict(configuracion),
-            estado="corriendo",
-            valor=None,
-            n_ventanas=0,
-            motivo=None,
-            metrica_objetivo=self._metrica_objetivo,
-            familia=self._familia,
-            sku_id=sku_id,
+def instantanea_desde_estudio(
+    study: optuna.study.Study,
+    *,
+    ventanas: tuple[VentanaTemporal, ...],
+    metrica_objetivo: str,
+    seed: int,
+    familia: str = "desconocida",
+) -> ResultadoEstudio:
+    trials: list[Trial] = []
+    for t in study.get_trials(deepcopy=False):
+        estado = _ESTADO_OPTUNA_A_TRIAL.get(t.state)
+        if estado is None:
+            continue
+        valor = t.value if estado in ("completado", "podado") else None
+        trials.append(
+            Trial(
+                id=str(t.user_attrs.get("trial_id", t.number)),
+                configuracion=dict(t.params),
+                estado=estado,
+                valor=valor,
+                n_ventanas=int(t.user_attrs.get("n_ventanas", 0)),
+                motivo=t.user_attrs.get("motivo"),
+                metrica_objetivo=metrica_objetivo,
+                familia=str(t.user_attrs.get("familia", familia)),
+                sku_id=t.user_attrs.get("sku_id"),
+            )
         )
 
-    def actualizar(
-        self, trial_id: str, *, n_evaluadas: int, valor_parcial: float
-    ) -> None:
-        actual = self._trials[trial_id]
-        self._trials[trial_id] = Trial(
-            id=actual.id,
-            configuracion=actual.configuracion,
-            estado="corriendo",
-            valor=valor_parcial,
-            n_ventanas=n_evaluadas,
-            motivo=None,
-            metrica_objetivo=actual.metrica_objetivo,
-            familia=actual.familia,
-            sku_id=actual.sku_id,
+    completados = [
+        t for t in trials if t.estado == "completado" and t.valor is not None
+    ]
+    mejor = min(completados, key=lambda t: t.valor, default=None)  # type: ignore[arg-type]
+    return ResultadoEstudio(
+        mejor=mejor,
+        trials=tuple(trials),
+        n_completados=len(completados),
+        n_podados=sum(1 for t in trials if t.estado == "podado"),
+        n_fallidos=sum(1 for t in trials if t.estado == "fallido"),
+        ventanas=ventanas,
+        metrica_objetivo=metrica_objetivo,
+        seed=seed,
+    )
+
+
+def volcar_jsonl(study: optuna.study.Study, ruta: str | Path) -> None:
+    ruta = Path(ruta)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    with ruta.open("w", encoding="utf-8") as archivo:
+        for t in study.get_trials(deepcopy=False):
+            archivo.write(json.dumps(_frozen_trial_a_dict(t)) + "\n")
+
+
+def reanudar_estudio(
+    ruta: str | Path,
+    *,
+    espacio: EspacioBusqueda,
+    sampler: optuna.samplers.BaseSampler,
+    pruner: optuna.pruners.BasePruner,
+) -> optuna.study.Study:
+    study = optuna.create_study(direction="minimize", sampler=sampler, pruner=pruner)
+    ruta = Path(ruta)
+    if not ruta.exists():
+        return study
+
+    distribuciones = {p.nombre: _distribucion_de(p) for p in espacio.parametros}
+    with ruta.open("r", encoding="utf-8") as archivo:
+        for linea in archivo:
+            linea = linea.strip()
+            if not linea:
+                continue
+            datos = json.loads(linea)
+            estado = TrialState[datos["estado_optuna"]]
+            trial = create_trial(
+                state=estado,
+                value=datos["valor"] if estado != TrialState.FAIL else None,
+                params=datos["params"],
+                distributions={
+                    nombre: distribuciones[nombre] for nombre in datos["params"]
+                },
+                user_attrs=datos["user_attrs"],
+                intermediate_values={
+                    int(k): v for k, v in datos.get("intermediate_values", {}).items()
+                },
+            )
+            study.add_trial(trial)
+    return study
+
+
+def _distribucion_de(
+    parametro: Entero | Flotante | Categorico,
+) -> optuna.distributions.BaseDistribution:
+    if isinstance(parametro, Entero):
+        return optuna.distributions.IntDistribution(
+            parametro.bajo, parametro.alto, step=parametro.paso
         )
-
-    def completar(self, trial_id: str, *, valor: float, n_ventanas: int) -> None:
-        actual = self._trials[trial_id]
-        self._trials[trial_id] = Trial(
-            id=actual.id,
-            configuracion=actual.configuracion,
-            estado="completado",
-            valor=valor,
-            n_ventanas=n_ventanas,
-            motivo=None,
-            metrica_objetivo=actual.metrica_objetivo,
-            familia=actual.familia,
-            sku_id=actual.sku_id,
+    if isinstance(parametro, Flotante):
+        return optuna.distributions.FloatDistribution(
+            parametro.bajo, parametro.alto, log=parametro.log
         )
-        _logger.info("Trial completado id=%s valor=%s", trial_id, valor)
-
-    def podar(self, trial_id: str, *, ventana: int, valor: float, motivo: str) -> None:
-        actual = self._trials[trial_id]
-        motivo_completo = f"ventana={ventana} valor={valor:.6g} {motivo}"
-        self._trials[trial_id] = Trial(
-            id=actual.id,
-            configuracion=actual.configuracion,
-            estado="podado",
-            valor=valor,
-            n_ventanas=ventana,
-            motivo=motivo_completo,
-            metrica_objetivo=actual.metrica_objetivo,
-            familia=actual.familia,
-            sku_id=actual.sku_id,
-        )
-        _logger.info("Trial podado id=%s motivo=%s", trial_id, motivo_completo)
-
-    def fallar(self, trial_id: str, *, motivo: str) -> None:
-        actual = self._trials[trial_id]
-        self._trials[trial_id] = Trial(
-            id=actual.id,
-            configuracion=actual.configuracion,
-            estado="fallido",
-            valor=None,
-            n_ventanas=actual.n_ventanas,
-            motivo=motivo,
-            metrica_objetivo=actual.metrica_objetivo,
-            familia=actual.familia,
-            sku_id=actual.sku_id,
-        )
-        _logger.warning("Trial fallido id=%s motivo=%s", trial_id, motivo)
-
-    def instantanea(self) -> ResultadoEstudio:
-        trials = self.trials
-        completados = [
-            t for t in trials if t.estado == "completado" and t.valor is not None
-        ]
-        mejor = min(completados, key=lambda t: t.valor, default=None)  # type: ignore[arg-type]
-        return ResultadoEstudio(
-            mejor=mejor,
-            trials=trials,
-            n_completados=len(completados),
-            n_podados=sum(1 for t in trials if t.estado == "podado"),
-            n_fallidos=sum(1 for t in trials if t.estado == "fallido"),
-            ventanas=self._ventanas,
-            metrica_objetivo=self._metrica_objetivo,
-            seed=self._seed,
-        )
-
-    def volcar_jsonl(self, ruta: str | Path) -> None:
-        ruta = Path(ruta)
-        ruta.parent.mkdir(parents=True, exist_ok=True)
-        with ruta.open("w", encoding="utf-8") as archivo:
-            for trial in self.trials:
-                archivo.write(json.dumps(_trial_a_dict(trial)) + "\n")
-
-    @classmethod
-    def reanudar(
-        cls,
-        ruta: str | Path,
-        *,
-        familia: str,
-        metrica_objetivo: str,
-        ventanas: tuple[VentanaTemporal, ...],
-        seed: int = 0,
-    ) -> RegistroEstudio:
-        registro = cls(
-            familia=familia,
-            metrica_objetivo=metrica_objetivo,
-            ventanas=ventanas,
-            seed=seed,
-        )
-        ruta = Path(ruta)
-        if not ruta.exists():
-            return registro
-        with ruta.open("r", encoding="utf-8") as archivo:
-            for linea in archivo:
-                linea = linea.strip()
-                if not linea:
-                    continue
-                datos = json.loads(linea)
-                registro._trials[datos["id"]] = Trial(**datos)
-        return registro
+    if isinstance(parametro, Categorico):
+        return optuna.distributions.CategoricalDistribution(parametro.opciones)
+    raise TypeError(f"tipo de parametro no soportado: {type(parametro)!r}")
 
 
-def _trial_a_dict(trial: Trial) -> dict[str, Any]:
+def _frozen_trial_a_dict(t: optuna.trial.FrozenTrial) -> dict[str, Any]:
     return {
-        "id": trial.id,
-        "configuracion": dict(trial.configuracion),
-        "estado": trial.estado,
-        "valor": trial.valor,
-        "n_ventanas": trial.n_ventanas,
-        "motivo": trial.motivo,
-        "metrica_objetivo": trial.metrica_objetivo,
-        "familia": trial.familia,
-        "sku_id": trial.sku_id,
+        "estado_optuna": t.state.name,
+        "params": dict(t.params),
+        "valor": t.value,
+        "user_attrs": dict(t.user_attrs),
+        "intermediate_values": {str(k): v for k, v in t.intermediate_values.items()},
     }

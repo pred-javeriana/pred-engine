@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.6",
     "httpx>=0.27",
     "statsmodels>=0.14",
+    "optuna>=4.0",
 ]
 
 [project.optional-dependencies]

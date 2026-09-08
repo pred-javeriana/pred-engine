@@ -1,32 +1,26 @@
-"""Componente 5: Asynchronous Successive Halving (ASHA) + poda greedy.
+"""Componente 5: Asynchronous Successive Halving (ASHA) como pruner de Optuna.
 
 Decide 'seguir o descartar'. NO recorre ventanas por su cuenta: eso es
 responsabilidad exclusiva del componente 8.2 (`EjecutorGreedy`). Asincronia:
 cada trial se compara contra los demas que alcanzaron el MISMO escalon, sin
 esperar a que una ronda completa termine (regla de seguridad #1 y #2).
+
+Implementado como `optuna.pruners.BasePruner` (ADR-02-006): Optuna no trae
+esta regla de fabrica (sus pruners nativos no exigen un piso de ventanas de
+gracia ni comparan agregados recortados por escalon), asi que se porta tal
+cual desde la implementacion propia anterior, solo que ahora consulta
+`study.get_trials()`/`trial.intermediate_values` en vez de un registro
+interno propio.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
+import optuna
 
-from pred_engine.comun.dataclasses.validacion_temporal import EstadoParcial
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 
 
-class Decision(StrEnum):
-    CONTINUAR = "continuar"
-    PODAR = "podar"
-
-
-@dataclass
-class _RegistroTrialASHA:
-    ultimo_n_evaluadas: int = 0
-    ultimo_valor: float = float("inf")
-
-
-class AsignadorRecursosASHA:
+class PodadorASHA(optuna.pruners.BasePruner):
     def __init__(self, reglas: ReglasPoda, *, n_ventanas_totales: int) -> None:
         if n_ventanas_totales < reglas.min_ventanas:
             raise ValueError(
@@ -36,10 +30,7 @@ class AsignadorRecursosASHA:
         self._reglas = reglas
         self._n_ventanas_totales = n_ventanas_totales
         self._escalones = self._calcular_escalones()
-        self._valores_por_escalon: dict[int, dict[str, float]] = {
-            e: {} for e in self._escalones
-        }
-        self._estado: dict[str, _RegistroTrialASHA] = {}
+        self.ultimo_motivo: str | None = None
 
     def escalones(self) -> tuple[int, ...]:
         return self._escalones
@@ -52,41 +43,36 @@ class AsignadorRecursosASHA:
             escalones.append(self._n_ventanas_totales)
         return tuple(escalones)
 
-    def registrar(self, trial_id: str, estado: EstadoParcial) -> None:
-        registro = self._estado.setdefault(trial_id, _RegistroTrialASHA())
-        registro.ultimo_n_evaluadas = estado.n_evaluadas
-        registro.ultimo_valor = estado.valor_parcial
-        if estado.n_evaluadas in self._valores_por_escalon:
-            self._valores_por_escalon[estado.n_evaluadas][trial_id] = (
-                estado.valor_parcial
-            )
+    def prune(self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial) -> bool:
+        self.ultimo_motivo = None
+        valores_intermedios = trial.intermediate_values
+        if not valores_intermedios:
+            return False
 
-    def decidir(self, trial_id: str) -> tuple[Decision, str | None]:
-        registro = self._estado.get(trial_id)
-        if registro is None:
-            return Decision.CONTINUAR, None
+        n_evaluadas = max(valores_intermedios.keys())
+        if n_evaluadas < self._reglas.min_ventanas:
+            return False
 
-        if registro.ultimo_n_evaluadas < self._reglas.min_ventanas:
-            return Decision.CONTINUAR, None
+        escalon = max((e for e in self._escalones if e <= n_evaluadas), default=None)
+        if escalon is None:
+            return False
 
-        escalon_alcanzado = max(
-            (e for e in self._escalones if e <= registro.ultimo_n_evaluadas),
-            default=None,
-        )
-        if escalon_alcanzado is None:
-            return Decision.CONTINUAR, None
-
-        pares_en_escalon = self._valores_por_escalon[escalon_alcanzado]
-        if trial_id not in pares_en_escalon or len(pares_en_escalon) < 2:
-            return Decision.CONTINUAR, None
+        pares_en_escalon = {
+            t.number: t.intermediate_values[escalon]
+            for t in study.get_trials(deepcopy=False)
+            if escalon in t.intermediate_values
+        }
+        if trial.number not in pares_en_escalon or len(pares_en_escalon) < 2:
+            return False
 
         valores = sorted(pares_en_escalon.values())
         corte = max(1, len(valores) // self._reglas.factor_reduccion)
         umbral = valores[corte - 1]
-        if pares_en_escalon[trial_id] > umbral:
-            return (
-                Decision.PODAR,
-                f"escalon={escalon_alcanzado} valor={pares_en_escalon[trial_id]:.6g} "
-                f"umbral_top_{corte}={umbral:.6g}",
+        valor_actual = pares_en_escalon[trial.number]
+        if valor_actual > umbral:
+            self.ultimo_motivo = (
+                f"escalon={escalon} valor={valor_actual:.6g} "
+                f"umbral_top_{corte}={umbral:.6g}"
             )
-        return Decision.CONTINUAR, None
+            return True
+        return False

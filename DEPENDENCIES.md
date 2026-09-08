@@ -13,6 +13,7 @@ Dependency manifest for `pred-engine` — updated on every dependency change
 | pydantic | >=2.6 | Strict row/mapping contracts for semantic alignment (TASK-DATA-1.2) |
 | httpx | >=0.27 | Stateless HTTP client with first-class timeouts for LLM providers |
 | statsmodels | >=0.14 | SARIMAX (`comun.modelos.modelos_clasicos.sarima`) y descomposición STL (`aumentacion.mbb`) |
+| optuna | >=4.0 | Sampler TPE multivariado y `Study`/pruner del motor de HPO (`optimizacion.optimizadores.HPO`) — ver ADR-02-006 |
 
 > Direct runtime dependencies are added here as each layer is implemented.
 > Vendor SDKs (google-genai, openai, anthropic) are intentionally not used;

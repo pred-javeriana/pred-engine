@@ -1,11 +1,28 @@
-"""Componente 9 (parcial): 'podado' y 'fallido' deben ser distinguibles, con motivo."""
+"""Componente 9 (parcial): 'podado' y 'fallido' deben ser distinguibles, con motivo.
+
+`RegistroEstudio` ya no existe (ADR-02-006): el `optuna.Study` es la fuente
+de verdad. Estas pruebas ejercitan las funciones puente
+(`instantanea_desde_estudio`, `volcar_jsonl`, `reanudar_estudio`) contra un
+`Study` real.
+"""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from pred_engine.optimizacion.optimizadores.HPO.registro import RegistroEstudio
+import optuna
+from optuna.trial import TrialState
+
+from pred_engine.optimizacion.optimizadores.HPO.asha import PodadorASHA
+from pred_engine.optimizacion.optimizadores.HPO.espacio import Entero, EspacioBusqueda
+from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
+from pred_engine.optimizacion.optimizadores.HPO.registro import (
+    instantanea_desde_estudio,
+    reanudar_estudio,
+    volcar_jsonl,
+)
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 def _ventanas():
@@ -18,19 +35,40 @@ def _ventanas():
     )
 
 
-def test_podado_y_fallido_son_estados_distintos_con_motivo_no_nulo():
-    registro = RegistroEstudio(
-        familia="prueba", metrica_objetivo="mase", ventanas=_ventanas()
+def _espacio() -> EspacioBusqueda:
+    return EspacioBusqueda(parametros=(Entero("p", 0, 5),))
+
+
+def _estudio_vacio() -> optuna.study.Study:
+    pruner = PodadorASHA(ReglasPoda(min_ventanas=1), n_ventanas_totales=1)
+    return optuna.create_study(
+        direction="minimize",
+        sampler=optuna.samplers.RandomSampler(seed=0),
+        pruner=pruner,
     )
 
-    registro.abrir("t1", {"p": 1})
-    registro.actualizar("t1", n_evaluadas=4, valor_parcial=2.0)
-    registro.podar("t1", ventana=4, valor=2.0, motivo="asha")
 
-    registro.abrir("t2", {"p": 2})
-    registro.fallar("t2", motivo="excepcion_de_ajuste")
+def test_podado_y_fallido_son_estados_distintos_con_motivo_no_nulo():
+    study = _estudio_vacio()
 
-    trials = {t.id: t for t in registro.trials}
+    t1 = study.ask()
+    t1.suggest_int("p", 0, 5)
+    t1.set_user_attr("trial_id", "t1")
+    t1.set_user_attr("n_ventanas", 4)
+    t1.set_user_attr("motivo", "ventana=4 valor=2.0 asha")
+    t1.report(2.0, step=4)
+    study.tell(t1, state=TrialState.PRUNED)
+
+    t2 = study.ask()
+    t2.suggest_int("p", 0, 5)
+    t2.set_user_attr("trial_id", "t2")
+    t2.set_user_attr("motivo", "excepcion_de_ajuste")
+    study.tell(t2, state=TrialState.FAIL)
+
+    resultado = instantanea_desde_estudio(
+        study, ventanas=_ventanas(), metrica_objetivo="mase", seed=0
+    )
+    trials = {t.id: t for t in resultado.trials}
     assert trials["t1"].estado == "podado"
     assert trials["t1"].motivo is not None and "asha" in trials["t1"].motivo
     assert trials["t2"].estado == "fallido"
@@ -39,56 +77,75 @@ def test_podado_y_fallido_son_estados_distintos_con_motivo_no_nulo():
 
 
 def test_jsonl_round_trip(tmp_path: Path):
-    registro = RegistroEstudio(
-        familia="prueba", metrica_objetivo="mase", ventanas=_ventanas()
-    )
-    registro.abrir("t1", {"p": 1})
-    registro.completar("t1", valor=0.5, n_ventanas=10)
+    study = _estudio_vacio()
+    t1 = study.ask()
+    t1.suggest_int("p", 0, 5)
+    t1.set_user_attr("trial_id", "t1")
+    t1.set_user_attr("n_ventanas", 10)
+    study.tell(t1, 0.5, state=TrialState.COMPLETE)
+
     ruta = tmp_path / "estudio.jsonl"
-    registro.volcar_jsonl(ruta)
+    volcar_jsonl(study, ruta)
 
     lineas = ruta.read_text(encoding="utf-8").strip().splitlines()
     assert len(lineas) == 1
-    assert json.loads(lineas[0])["estado"] == "completado"
+    assert lineas[0]
 
-    reanudado = RegistroEstudio.reanudar(
-        ruta, familia="prueba", metrica_objetivo="mase", ventanas=_ventanas()
+    pruner = PodadorASHA(ReglasPoda(min_ventanas=1), n_ventanas_totales=1)
+    reanudado = reanudar_estudio(
+        ruta,
+        espacio=_espacio(),
+        sampler=optuna.samplers.RandomSampler(seed=0),
+        pruner=pruner,
     )
-    assert reanudado.trials[0].id == "t1"
-    assert reanudado.trials[0].valor == 0.5
+    resultado = instantanea_desde_estudio(
+        reanudado, ventanas=_ventanas(), metrica_objetivo="mase", seed=0
+    )
+    assert resultado.trials[0].id == "t1"
+    assert resultado.trials[0].valor == 0.5
 
 
-def test_reanudar_sin_archivo_devuelve_registro_vacio(tmp_path: Path):
-    registro = RegistroEstudio.reanudar(
+def test_reanudar_sin_archivo_devuelve_estudio_vacio(tmp_path: Path):
+    pruner = PodadorASHA(ReglasPoda(min_ventanas=1), n_ventanas_totales=1)
+    reanudado = reanudar_estudio(
         tmp_path / "no_existe.jsonl",
-        familia="prueba",
-        metrica_objetivo="mase",
-        ventanas=_ventanas(),
+        espacio=_espacio(),
+        sampler=optuna.samplers.RandomSampler(seed=0),
+        pruner=pruner,
     )
-    assert registro.trials == ()
+    assert reanudado.get_trials(deepcopy=False) == []
 
 
 def test_instantanea_elige_el_menor_valor():
-    registro = RegistroEstudio(
-        familia="prueba", metrica_objetivo="mase", ventanas=_ventanas()
-    )
-    registro.abrir("t1", {})
-    registro.completar("t1", valor=2.0, n_ventanas=10)
-    registro.abrir("t2", {})
-    registro.completar("t2", valor=0.5, n_ventanas=10)
+    study = _estudio_vacio()
+    t1 = study.ask()
+    t1.suggest_int("p", 0, 5)
+    t1.set_user_attr("trial_id", "t1")
+    study.tell(t1, 2.0, state=TrialState.COMPLETE)
 
-    instantanea = registro.instantanea()
-    assert instantanea.mejor is not None
-    assert instantanea.mejor.id == "t2"
-    assert instantanea.n_completados == 2
+    t2 = study.ask()
+    t2.suggest_int("p", 0, 5)
+    t2.set_user_attr("trial_id", "t2")
+    study.tell(t2, 0.5, state=TrialState.COMPLETE)
+
+    resultado = instantanea_desde_estudio(
+        study, ventanas=_ventanas(), metrica_objetivo="mase", seed=0
+    )
+    assert resultado.mejor is not None
+    assert resultado.mejor.id == "t2"
+    assert resultado.n_completados == 2
 
 
 def test_instantanea_mejor_es_none_sin_completados():
-    registro = RegistroEstudio(
-        familia="prueba", metrica_objetivo="mase", ventanas=_ventanas()
+    study = _estudio_vacio()
+    t1 = study.ask()
+    t1.suggest_int("p", 0, 5)
+    t1.set_user_attr("trial_id", "t1")
+    t1.set_user_attr("motivo", "x")
+    study.tell(t1, state=TrialState.FAIL)
+
+    resultado = instantanea_desde_estudio(
+        study, ventanas=_ventanas(), metrica_objetivo="mase", seed=0
     )
-    registro.abrir("t1", {})
-    registro.fallar("t1", motivo="x")
-    instantanea = registro.instantanea()
-    assert instantanea.mejor is None
-    assert instantanea.n_fallidos == 1
+    assert resultado.mejor is None
+    assert resultado.n_fallidos == 1

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import optuna
 import pandas as pd
 
 from pred_engine.comun.dataclasses.modelos_clasicos import (
@@ -17,9 +18,7 @@ from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos.modelos_clasicos.sarima import SarimaForecaster
 from pred_engine.optimizacion.optimizadores.HPO.espacio import Entero, EspacioBusqueda
 from pred_engine.optimizacion.optimizadores.HPO.estudio import ejecutar_estudio
-from pred_engine.optimizacion.optimizadores.HPO.muestreadores import Muestreador
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
-from pred_engine.optimizacion.optimizadores.HPO.registro import RegistroEstudio
 
 _logger = get_logger(__name__)
 
@@ -109,9 +108,8 @@ def seleccionar_configuracion_clasica(
     horizonte: int = 7,
     paso: int = 7,
     metrica_objetivo: str = "mase",
-    muestreador: Muestreador | None = None,
+    muestreador: optuna.samplers.BaseSampler | None = None,
     reglas: ReglasPoda | None = None,
-    registro: RegistroEstudio | None = None,
     seed: int = 0,
 ) -> ResultadoSeleccionClasica:
     cfg = espacio or EspacioClasico()
@@ -150,7 +148,6 @@ def seleccionar_configuracion_clasica(
         estacionalidad=cfg.m if cfg.m > 1 else 1,
         muestreador=muestreador,
         reglas=reglas,
-        registro=registro,
         seed=seed,
         familia="clasicos",
         sku_id=sku_id,
