@@ -1,26 +1,36 @@
-"""Componente 5: Asynchronous Successive Halving (ASHA) como pruner de Optuna.
+"""Componente 5: Asynchronous Successive Halving (ASHA), algoritmo puro.
 
 Decide 'seguir o descartar'. NO recorre ventanas por su cuenta: eso es
 responsabilidad exclusiva del componente 8.2 (`EjecutorGreedy`). Asincronia:
 cada trial se compara contra los demas que alcanzaron el MISMO escalon, sin
 esperar a que una ronda completa termine (regla de seguridad #1 y #2).
 
-Implementado como `optuna.pruners.BasePruner` (ADR-02-006): Optuna no trae
-esta regla de fabrica (sus pruners nativos no exigen un piso de ventanas de
-gracia ni comparan agregados recortados por escalon), asi que se porta tal
-cual desde la implementacion propia anterior, solo que ahora consulta
-`study.get_trials()`/`trial.intermediate_values` en vez de un registro
-interno propio.
+`DecisorASHA` no importa ni conoce Optuna: recibe numeros (cuantas ventanas
+lleva el trial, los valores de sus competidores en el mismo escalon) y
+devuelve una `DecisionPoda`. Quien lo conecta a un backend concreto de HPO
+es el adaptador correspondiente (hoy, `adaptador_optuna.PodadorASHAOptuna`,
+que implementa `optuna.pruners.BasePruner` delegando aqui la decision).
+Esta separacion es deliberada: si el dia de manana se cambia de backend,
+este archivo no cambia una linea -- solo se escribe un adaptador nuevo.
 """
 
 from __future__ import annotations
 
-import optuna
+from dataclasses import dataclass
 
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 
 
-class PodadorASHA(optuna.pruners.BasePruner):
+@dataclass(frozen=True, slots=True)
+class DecisionPoda:
+    podar: bool
+    motivo: str | None = None
+
+
+class DecisorASHA:
+    """Algoritmo ASHA puro. No sabe que existe un `study` ni un `trial`
+    concretos: opera sobre `dict[int, float]` (numero de trial -> valor)."""
+
     def __init__(self, reglas: ReglasPoda, *, n_ventanas_totales: int) -> None:
         if n_ventanas_totales < reglas.min_ventanas:
             raise ValueError(
@@ -30,7 +40,6 @@ class PodadorASHA(optuna.pruners.BasePruner):
         self._reglas = reglas
         self._n_ventanas_totales = n_ventanas_totales
         self._escalones = self._calcular_escalones()
-        self.ultimo_motivo: str | None = None
 
     def escalones(self) -> tuple[int, ...]:
         return self._escalones
@@ -43,36 +52,39 @@ class PodadorASHA(optuna.pruners.BasePruner):
             escalones.append(self._n_ventanas_totales)
         return tuple(escalones)
 
-    def prune(self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial) -> bool:
-        self.ultimo_motivo = None
-        valores_intermedios = trial.intermediate_values
-        if not valores_intermedios:
-            return False
-
-        n_evaluadas = max(valores_intermedios.keys())
+    def decidir(
+        self,
+        *,
+        n_evaluadas: int,
+        numero_trial: int,
+        valores_competidores_en_escalon: dict[int, float],
+    ) -> DecisionPoda:
+        """Puro: recibe ya resueltos los pares (numero_trial, valor) de los
+        competidores que llegaron al escalon relevante. No consulta ningun
+        `study`; eso es responsabilidad del adaptador."""
         if n_evaluadas < self._reglas.min_ventanas:
-            return False
+            return DecisionPoda(podar=False)
 
         escalon = max((e for e in self._escalones if e <= n_evaluadas), default=None)
         if escalon is None:
-            return False
+            return DecisionPoda(podar=False)
 
-        pares_en_escalon = {
-            t.number: t.intermediate_values[escalon]
-            for t in study.get_trials(deepcopy=False)
-            if escalon in t.intermediate_values
-        }
-        if trial.number not in pares_en_escalon or len(pares_en_escalon) < 2:
-            return False
+        if (
+            numero_trial not in valores_competidores_en_escalon
+            or len(valores_competidores_en_escalon) < 2
+        ):
+            return DecisionPoda(podar=False)
 
-        valores = sorted(pares_en_escalon.values())
+        valores = sorted(valores_competidores_en_escalon.values())
         corte = max(1, len(valores) // self._reglas.factor_reduccion)
         umbral = valores[corte - 1]
-        valor_actual = pares_en_escalon[trial.number]
-        if valor_actual > umbral:
-            self.ultimo_motivo = (
-                f"escalon={escalon} valor={valor_actual:.6g} "
-                f"umbral_top_{corte}={umbral:.6g}"
+        valor_propio = valores_competidores_en_escalon[numero_trial]
+        if valor_propio > umbral:
+            return DecisionPoda(
+                podar=True,
+                motivo=(
+                    f"escalon={escalon} valor={valor_propio:.6g} "
+                    f"umbral_top_{corte}={umbral:.6g}"
+                ),
             )
-            return True
-        return False
+        return DecisionPoda(podar=False)

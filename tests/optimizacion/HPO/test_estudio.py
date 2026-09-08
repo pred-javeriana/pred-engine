@@ -5,13 +5,19 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 from tests._dobles import (
     fabrica_falla_primeras_n,
     fabrica_nivel_constante,
     fabrica_rota,
 )
 
-from pred_engine.optimizacion.optimizadores.HPO.espacio import EspacioBusqueda, Flotante
+from pred_engine.optimizacion.optimizadores.HPO.errores import EstudioError
+from pred_engine.optimizacion.optimizadores.HPO.espacio import (
+    Categorico,
+    EspacioBusqueda,
+    Flotante,
+)
 from pred_engine.optimizacion.optimizadores.HPO.estudio import ejecutar_estudio
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 
@@ -134,6 +140,54 @@ def test_fallo_en_todas_las_ventanas_hasta_la_poda_se_marca_fallido_no_podado():
     assert resultado.n_podados == 0
     assert resultado.n_fallidos == 3
     assert all(t.estado == "fallido" for t in resultado.trials)
+
+
+def test_configuracion_invalida_no_quema_presupuesto_de_trials_reales():
+    """Antes, cada configuracion rechazada por una restriccion consumia un
+    `indice_trial` completo marcado FAIL sin evaluar nada -- con un espacio
+    donde el 90% de las combinaciones es invalido, varios de los `n_trials`
+    pedidos jamas llegaban a correr el walk-forward. Ahora esos intentos
+    invalidos no cuentan contra el presupuesto: se pide `n_trials=5` y se
+    obtienen 5 trials REALMENTE evaluados, mas los intentos invalidos
+    descartados aparte (identificables por su motivo)."""
+    y = _serie_objetivo()
+    espacio = EspacioBusqueda(
+        parametros=(
+            Flotante("nivel", 0.0, 100.0),
+            Categorico("modo", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)),
+        ),
+        # solo 1 de cada 10 valores de "modo" es valido: ~90% de rechazo
+        restricciones=(lambda c: c["modo"] == 1,),
+    )
+    resultado = ejecutar_estudio(
+        y,
+        espacio,
+        fabrica_nivel_constante,
+        n_trials=5,
+        min_train=20,
+        estacionalidad=1,
+        seed=3,
+    )
+    reales = [t for t in resultado.trials if t.motivo != "configuracion_invalida"]
+    invalidos = [t for t in resultado.trials if t.motivo == "configuracion_invalida"]
+    assert len(reales) == 5
+    assert len(invalidos) > 0
+
+
+def test_espacio_casi_totalmente_invalido_lanza_estudioerror():
+    """Techo de seguridad: si las restricciones rechazan casi todo el
+    espacio, el estudio debe fallar explicitamente en vez de intentar para
+    siempre (o de gastar miles de intentos en silencio)."""
+    y = _serie_objetivo()
+    espacio = EspacioBusqueda(
+        parametros=(Flotante("nivel", 0.0, 100.0),),
+        restricciones=(lambda c: False,),  # rechaza absolutamente todo
+    )
+    with pytest.raises(EstudioError):
+        ejecutar_estudio(
+            y, espacio, fabrica_nivel_constante,
+            n_trials=2, min_train=20, estacionalidad=1, seed=0,
+        )
 
 
 def test_poda_reduce_las_ventanas_evaluadas_respecto_al_modo_sin_poda():

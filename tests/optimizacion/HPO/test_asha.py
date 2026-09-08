@@ -1,115 +1,128 @@
 """Componente 5: la regla mas importante es 'nunca podar antes de min_ventanas'.
 
-`PodadorASHA` es un `optuna.pruners.BasePruner` real (ADR-02-006): las
-pruebas construyen un `optuna.Study` de verdad y llaman `trial.should_prune()`,
-en vez de invocar metodos propios (`registrar`/`decidir`) que ya no existen.
+`DecisorASHA` es el algoritmo puro (sin Optuna): recibe numeros y devuelve
+una `DecisionPoda`. Estas pruebas lo ejercitan directamente, sin construir
+ningun `optuna.Study` -- eso es justamente lo que prueba que el algoritmo
+esta desacoplado del backend. La integracion con Optuna (`PodadorASHAOptuna`,
+`should_prune()` real) se prueba en `test_adaptador_optuna.py`.
 """
 
 from __future__ import annotations
 
-import optuna
 import pytest
 
-from pred_engine.optimizacion.optimizadores.HPO.asha import PodadorASHA
+from pred_engine.optimizacion.optimizadores.HPO.asha import DecisionPoda, DecisorASHA
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 
 
-def _estudio(pruner: PodadorASHA) -> optuna.study.Study:
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    return optuna.create_study(
-        direction="minimize",
-        sampler=optuna.samplers.RandomSampler(seed=0),
-        pruner=pruner,
-    )
-
-
-def _reportar(
-    study: optuna.study.Study, valor: float, escalon: int
-) -> optuna.trial.Trial:
-    trial = study.ask()
-    trial.report(valor, step=escalon)
-    return trial
-
-
 def test_ningun_trial_se_poda_antes_de_min_ventanas():
-    pruner = PodadorASHA(ReglasPoda(min_ventanas=4), n_ventanas_totales=30)
-    study = _estudio(pruner)
-    trial = study.ask()
+    decisor = DecisorASHA(ReglasPoda(min_ventanas=4), n_ventanas_totales=30)
     for n in range(1, 4):
-        trial.report(1000.0, step=n)
-        assert trial.should_prune() is False
+        decision = decisor.decidir(
+            n_evaluadas=n, numero_trial=0, valores_competidores_en_escalon={0: 1000.0}
+        )
+        assert decision == DecisionPoda(podar=False)
 
 
 def test_n_ventanas_totales_menor_a_min_ventanas_es_invalido():
     with pytest.raises(ValueError):
-        PodadorASHA(ReglasPoda(min_ventanas=4), n_ventanas_totales=2)
+        DecisorASHA(ReglasPoda(min_ventanas=4), n_ventanas_totales=2)
 
 
 def test_escalones_arrancan_en_min_ventanas_y_terminan_en_el_total():
-    pruner = PodadorASHA(
+    decisor = DecisorASHA(
         ReglasPoda(min_ventanas=4, factor_reduccion=3), n_ventanas_totales=30
     )
-    assert pruner.escalones()[0] == 4
-    assert pruner.escalones()[-1] == 30
-    assert list(pruner.escalones()) == sorted(pruner.escalones())
+    assert decisor.escalones()[0] == 4
+    assert decisor.escalones()[-1] == 30
+    assert list(decisor.escalones()) == sorted(decisor.escalones())
 
 
 def test_promocion_del_mejor_tercio_en_un_escalon():
-    pruner = PodadorASHA(
+    decisor = DecisorASHA(
         ReglasPoda(min_ventanas=4, factor_reduccion=3), n_ventanas_totales=12
     )
-    study = _estudio(pruner)
-    escalon = pruner.escalones()[0]
-    trials = {i: _reportar(study, float(i), escalon) for i in range(6)}
-    assert trials[0].should_prune() is False
-    assert trials[5].should_prune() is True
+    escalon = decisor.escalones()[0]
+    competidores = {i: float(i) for i in range(6)}  # 0.0 .. 5.0
+
+    decision_mejor = decisor.decidir(
+        n_evaluadas=escalon,
+        numero_trial=0,
+        valores_competidores_en_escalon=competidores,
+    )
+    decision_peor = decisor.decidir(
+        n_evaluadas=escalon,
+        numero_trial=5,
+        valores_competidores_en_escalon=competidores,
+    )
+    assert decision_mejor.podar is False
+    assert decision_peor.podar is True
 
 
 def test_motivo_de_poda_incluye_escalon_y_valores():
-    pruner = PodadorASHA(
+    decisor = DecisorASHA(
         ReglasPoda(min_ventanas=4, factor_reduccion=3), n_ventanas_totales=12
     )
-    study = _estudio(pruner)
-    escalon = pruner.escalones()[0]
-    valores = {"a": 1.0, "b": 2.0, "c": 100.0}
-    trials = {
-        nombre: _reportar(study, valor, escalon) for nombre, valor in valores.items()
-    }
+    escalon = decisor.escalones()[0]
+    competidores = {0: 1.0, 1: 2.0, 2: 100.0}
 
-    assert trials["c"].should_prune() is True
-    assert pruner.ultimo_motivo is not None
-    assert f"escalon={escalon}" in pruner.ultimo_motivo
+    decision = decisor.decidir(
+        n_evaluadas=escalon,
+        numero_trial=2,
+        valores_competidores_en_escalon=competidores,
+    )
+    assert decision.podar is True
+    assert decision.motivo is not None
+    assert f"escalon={escalon}" in decision.motivo
 
 
 def test_asincronia_orden_de_llegada_no_cambia_el_veredicto():
     reglas = ReglasPoda(min_ventanas=4, factor_reduccion=3)
-    valores = {"t0": 1.0, "t1": 5.0, "t2": 9.0}
+    valores = {0: 1.0, 1: 5.0, 2: 9.0}
 
-    pruner_a = PodadorASHA(reglas, n_ventanas_totales=12)
-    study_a = _estudio(pruner_a)
-    escalon = pruner_a.escalones()[0]
-    trials_a = {
-        nombre: _reportar(study_a, valores[nombre], escalon)
-        for nombre in ("t0", "t1", "t2")
+    decisor_a = DecisorASHA(reglas, n_ventanas_totales=12)
+    escalon = decisor_a.escalones()[0]
+    veredicto_a = {
+        numero: decisor_a.decidir(
+            n_evaluadas=escalon,
+            numero_trial=numero,
+            valores_competidores_en_escalon=valores,
+        ).podar
+        for numero in (0, 1, 2)
     }
-    veredicto_a = {nombre: t.should_prune() for nombre, t in trials_a.items()}
 
-    pruner_b = PodadorASHA(reglas, n_ventanas_totales=12)
-    study_b = _estudio(pruner_b)
-    trials_b = {
-        nombre: _reportar(study_b, valores[nombre], escalon)
-        for nombre in ("t2", "t0", "t1")
+    decisor_b = DecisorASHA(reglas, n_ventanas_totales=12)
+    veredicto_b = {
+        numero: decisor_b.decidir(
+            n_evaluadas=escalon,
+            numero_trial=numero,
+            valores_competidores_en_escalon=valores,
+        ).podar
+        for numero in (2, 0, 1)  # mismo conjunto, orden de evaluacion distinto
     }
-    veredicto_b = {nombre: t.should_prune() for nombre, t in trials_b.items()}
 
     assert veredicto_a == veredicto_b
 
 
-def test_sin_suficientes_pares_no_decide_todavia():
-    pruner = PodadorASHA(
+def test_sin_suficientes_competidores_no_decide_todavia():
+    decisor = DecisorASHA(
         ReglasPoda(min_ventanas=4, factor_reduccion=3), n_ventanas_totales=12
     )
-    study = _estudio(pruner)
-    escalon = pruner.escalones()[0]
-    trial = _reportar(study, 1000.0, escalon)
-    assert trial.should_prune() is False
+    escalon = decisor.escalones()[0]
+    decision = decisor.decidir(
+        n_evaluadas=escalon, numero_trial=0, valores_competidores_en_escalon={0: 1000.0}
+    )
+    assert decision.podar is False
+
+
+def test_trial_ausente_del_escalon_no_se_poda():
+    decisor = DecisorASHA(
+        ReglasPoda(min_ventanas=4, factor_reduccion=3), n_ventanas_totales=12
+    )
+    escalon = decisor.escalones()[0]
+    decision = decisor.decidir(
+        n_evaluadas=escalon,
+        numero_trial=99,  # no esta en el dict de competidores
+        valores_competidores_en_escalon={0: 1.0, 1: 2.0},
+    )
+    assert decision.podar is False
