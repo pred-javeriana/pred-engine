@@ -11,6 +11,7 @@ dependencies = [
     "pyarrow>=16",
     "pydantic>=2.6",
     "httpx>=0.27",
+    "statsmodels>=0.14",
 ]
 
 [project.optional-dependencies]
@@ -19,10 +20,12 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.5",
     "pre-commit>=3.7",
+    "pyright>=1.1",
 ]
 
 [project.scripts]
 pred-engine = "pred_engine.cli:main"
+pred-engine-fase0 = "pred_engine.aumentacion.fase0:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -42,7 +45,6 @@ omit = [
     "src/pred_engine/optimizacion/*",
     "src/pred_engine/config/*",
     "src/pred_engine/ingesta/validador_tipo_archivo/*",
-    "src/pred_engine/ingesta/categorizacion/*",
     "src/pred_engine/forecasting/control_reanudacion/*",
     "src/pred_engine/forecasting/evaluaciones/*",
     "src/pred_engine/forecasting/generador_pronosticos/*",
@@ -60,3 +62,14 @@ ignore = []
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.pyright]
+include = [
+    "src/pred_engine/ingesta/categorizacion",
+    "src/pred_engine/ingesta/salida",
+    "src/pred_engine/comun/modelos",
+]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"

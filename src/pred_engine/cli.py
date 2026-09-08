@@ -1,4 +1,4 @@
-"""CLI de operador para ingesta 1.2 y consulta del catalogo LLM."""
+"""CLI de operador para ingesta 1.2, topologia 1.3 y handoff 1.4."""
 
 from __future__ import annotations
 
@@ -19,7 +19,14 @@ from pred_engine.comun.llm import (
     resolve_model,
 )
 from pred_engine.comun.logger import configure_json_logger, get_logger
+from pred_engine.ingesta.categorizacion import (
+    TopologyArtifact,
+    TopologyContractError,
+    TopologyMathError,
+    TopologyRoutingError,
+)
 from pred_engine.ingesta.lector import extract_csv
+from pred_engine.ingesta.salida import OutputHandoffError
 from pred_engine.ingesta.sonda import SemanticAlignmentError, probe_headers
 
 _logger = get_logger(__name__)
@@ -45,11 +52,39 @@ def resolve_api_key(provider: str, explicit: str | None) -> str:
     )
 
 
+def _imprimir_topologia(artefacto: TopologyArtifact) -> None:
+    print("sku_id,n_periods,n_positive,adi,cv2,sku_class")
+    for m in artefacto.metrics:
+        print(
+            f"{m.sku_id},{m.n_periods},{m.n_positive},"
+            f"{m.adi:.6f},{m.cv2:.6f},{m.sku_class}"
+        )
+    resumen: dict[str, int] = {}
+    for m in artefacto.metrics:
+        resumen[m.sku_class] = resumen.get(m.sku_class, 0) + 1
+    print("sku_class_resumen:", resumen)
+
+
+def _imprimir_contrato(marco, parquet: Path) -> None:
+    print("contrato_1_4: accepted")
+    print("parquet:", parquet)
+    print("filas:", len(marco))
+    print("skus:", int(marco["sku_id"].nunique()))
+    print("columnas:", ",".join(str(c) for c in marco.columns))
+    por_sku = (
+        marco.drop_duplicates("sku_id")["sku_class"]
+        .astype(str)
+        .value_counts()
+        .to_dict()
+    )
+    print("sku_class_resumen_sku:", por_sku)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pred-engine",
         description=(
-            "PRED engine — ingesta 1.2 (sonda consultiva + esquema + remuestreo)."
+            "PRED engine — ingesta 1.2, topologia 1.3 y contrato de salida 1.4."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -90,7 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--timeout", type=float, default=30.0)
 
     ingest = sub.add_parser(
-        "ingest", help="Diagnosticar, validar y exportar Parquet si la sonda acepta"
+        "ingest",
+        help="Diagnosticar, validar, remuestrear, clasificar, validar 1.4 y publicar",
     )
     ingest.add_argument(
         "--csv", required=True, type=Path, help="Ruta al CSV del operador"
@@ -112,6 +148,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("--data-root", type=Path, default=Path("data"))
     ingest.add_argument("--timeout", type=float, default=30.0)
+
+    classify = sub.add_parser(
+        "classify",
+        help="Motor 1.3: ADI/CV2/sku_class sobre CSV canonico o Parquet 1.2 (sin LLM)",
+    )
+    classify.add_argument(
+        "--csv", type=Path, default=None, help="CSV con cabeceras canonicas"
+    )
+    classify.add_argument(
+        "--parquet",
+        type=Path,
+        default=None,
+        help="Parquet de panel diario (salida 1.2)",
+    )
+    classify.add_argument("--data-root", type=Path, default=Path("data"))
+
+    verify = sub.add_parser(
+        "verify",
+        help="Releer un Parquet 1.4 y validar el contrato (sin LLM)",
+    )
+    verify.add_argument(
+        "--parquet",
+        required=True,
+        type=Path,
+        help="Parquet publicado en processed/",
+    )
     return parser
 
 
@@ -219,6 +281,14 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
         return 3
+    except OutputHandoffError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 6
+    except (TopologyMathError, TopologyRoutingError, TopologyContractError) as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 5
     except LlmTimeoutError as exc:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
@@ -247,7 +317,63 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     print("filas_crudas:", resultado.source.row_count)
     print("filas_validadas:", len(resultado.validated))
     print("filas_panel_diario:", len(resultado.panel))
-    print("parquet:", resultado.parquet_path)
+    _imprimir_topologia(resultado.topology)
+    _imprimir_contrato(resultado.panel, resultado.parquet_path)
+    return 0
+
+
+def _cmd_classify(args: argparse.Namespace) -> int:
+    from pred_engine.ingesta.pipeline import run_classify_csv, run_classify_parquet
+    from pred_engine.ingesta.validador_formato import SchemaBarrierError
+
+    if (args.csv is None) == (args.parquet is None):
+        print("Pase exactamente uno de --csv o --parquet", file=sys.stderr)
+        return 1
+    try:
+        if args.csv is not None:
+            topologia, destino = run_classify_csv(args.csv, data_root=args.data_root)
+        else:
+            topologia, destino = run_classify_parquet(
+                args.parquet, data_root=args.data_root
+            )
+    except SchemaBarrierError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 3
+    except OutputHandoffError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 6
+    except (TopologyMathError, TopologyRoutingError, TopologyContractError) as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 5
+    except (ValueError, FileNotFoundError) as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 1
+
+    print("filas_panel_diario:", len(topologia.frame))
+    _imprimir_topologia(topologia)
+    _imprimir_contrato(topologia.frame, destino)
+    return 0
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    from pred_engine.ingesta.pipeline import run_verify_parquet
+
+    try:
+        marco = run_verify_parquet(args.parquet)
+    except OutputHandoffError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 6
+    except FileNotFoundError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 1
+
+    _imprimir_contrato(marco, Path(args.parquet).expanduser().resolve())
     return 0
 
 
@@ -265,6 +391,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_probe(args)
     if args.command == "ingest":
         return _cmd_ingest(args)
+    if args.command == "classify":
+        return _cmd_classify(args)
+    if args.command == "verify":
+        return _cmd_verify(args)
     return 1
 
 
