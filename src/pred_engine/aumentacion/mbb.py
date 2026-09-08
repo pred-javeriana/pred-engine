@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-
 import numpy as np
 from statsmodels.tsa.seasonal import STL
-
-
 
 
 def aumentar(
