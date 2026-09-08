@@ -66,12 +66,18 @@ def test_podado_y_fallido_son_estados_distintos_con_motivo_no_nulo():
 def test_instantanea_elige_el_menor_valor_entre_completados():
     trials = [
         InfoTrial(
-            numero=0, estado="completado", valor=2.0,
-            parametros={"p": 1}, atributos={"trial_id": "t1"},
+            numero=0,
+            estado="completado",
+            valor=2.0,
+            parametros={"p": 1},
+            atributos={"trial_id": "t1"},
         ),
         InfoTrial(
-            numero=1, estado="completado", valor=0.5,
-            parametros={"p": 2}, atributos={"trial_id": "t2"},
+            numero=1,
+            estado="completado",
+            valor=0.5,
+            parametros={"p": 2},
+            atributos={"trial_id": "t2"},
         ),
     ]
     resultado = instantanea_desde_estudio(
@@ -85,8 +91,11 @@ def test_instantanea_elige_el_menor_valor_entre_completados():
 def test_instantanea_mejor_es_none_sin_completados():
     trials = [
         InfoTrial(
-            numero=0, estado="fallido", valor=None,
-            parametros={"p": 1}, atributos={"trial_id": "t1", "motivo": "x"},
+            numero=0,
+            estado="fallido",
+            valor=None,
+            parametros={"p": 1},
+            atributos={"trial_id": "t1", "motivo": "x"},
         ),
     ]
     resultado = instantanea_desde_estudio(
@@ -104,8 +113,11 @@ def test_instantanea_no_cuenta_como_completado_un_trial_sin_valor():
     # minimo NI al conteo de completados -- ambos exigen `valor is not None`).
     trials = [
         InfoTrial(
-            numero=0, estado="completado", valor=None,
-            parametros={}, atributos={"trial_id": "t1"},
+            numero=0,
+            estado="completado",
+            valor=None,
+            parametros={},
+            atributos={"trial_id": "t1"},
         ),
     ]
     resultado = instantanea_desde_estudio(

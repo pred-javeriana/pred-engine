@@ -190,24 +190,52 @@ def test_proporcion_recorte_cambia_el_agregado_en_ambos_modos():
     ventanas = generar_ventanas(len(y), min_train=20, horizonte=1, paso=1)
 
     integro_sin_recorte = evaluar_walk_forward(
-        y, fabrica_ultimo_valor, {}, min_train=20, horizonte=1, paso=1,
-        seed=0, estacionalidad=1, agregacion="media_recortada", proporcion_recorte=0.0,
+        y,
+        fabrica_ultimo_valor,
+        {},
+        min_train=20,
+        horizonte=1,
+        paso=1,
+        seed=0,
+        estacionalidad=1,
+        agregacion="media_recortada",
+        proporcion_recorte=0.0,
     )
     integro_con_recorte = evaluar_walk_forward(
-        y, fabrica_ultimo_valor, {}, min_train=20, horizonte=1, paso=1,
-        seed=0, estacionalidad=1, agregacion="media_recortada", proporcion_recorte=0.3,
+        y,
+        fabrica_ultimo_valor,
+        {},
+        min_train=20,
+        horizonte=1,
+        paso=1,
+        seed=0,
+        estacionalidad=1,
+        agregacion="media_recortada",
+        proporcion_recorte=0.3,
     )
 
     ejecutor_sin_recorte = EjecutorGreedy(
-        y, fabrica_ultimo_valor, {}, ventanas=ventanas, seed=0, estacionalidad=1,
-        agregacion="media_recortada", proporcion_recorte=0.0,
+        y,
+        fabrica_ultimo_valor,
+        {},
+        ventanas=ventanas,
+        seed=0,
+        estacionalidad=1,
+        agregacion="media_recortada",
+        proporcion_recorte=0.0,
     )
     while ejecutor_sin_recorte.avanzar() is not None:
         pass
 
     ejecutor_con_recorte = EjecutorGreedy(
-        y, fabrica_ultimo_valor, {}, ventanas=ventanas, seed=0, estacionalidad=1,
-        agregacion="media_recortada", proporcion_recorte=0.3,
+        y,
+        fabrica_ultimo_valor,
+        {},
+        ventanas=ventanas,
+        seed=0,
+        estacionalidad=1,
+        agregacion="media_recortada",
+        proporcion_recorte=0.3,
     )
     while ejecutor_con_recorte.avanzar() is not None:
         pass

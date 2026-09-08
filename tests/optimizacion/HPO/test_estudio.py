@@ -185,8 +185,13 @@ def test_espacio_casi_totalmente_invalido_lanza_estudioerror():
     )
     with pytest.raises(EstudioError):
         ejecutar_estudio(
-            y, espacio, fabrica_nivel_constante,
-            n_trials=2, min_train=20, estacionalidad=1, seed=0,
+            y,
+            espacio,
+            fabrica_nivel_constante,
+            n_trials=2,
+            min_train=20,
+            estacionalidad=1,
+            seed=0,
         )
 
 

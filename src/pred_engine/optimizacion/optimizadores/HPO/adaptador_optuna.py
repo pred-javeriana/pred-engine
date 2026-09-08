@@ -69,9 +69,7 @@ class PodadorASHAOptuna(optuna.pruners.BasePruner):
         """Consume (pop) el motivo de poda de un trial concreto."""
         return self._motivos.pop(trial_number, None)
 
-    def prune(
-        self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial
-    ) -> bool:
+    def prune(self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial) -> bool:
         valores_intermedios = trial.intermediate_values
         if not valores_intermedios:
             return False
