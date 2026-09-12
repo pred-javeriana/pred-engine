@@ -13,6 +13,26 @@ from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection
     min_train_recomendado,
     seleccionar_configuracion_clasica,
     seleccionar_por_panel,
+    series_por_sku,
+)
+
+
+def _panel(n: int = 60, skus: tuple[str, ...] = ("A", "B")) -> pd.DataFrame:
+    fechas = list(pd.date_range("2024-01-01", periods=n, freq="D"))
+    return pd.DataFrame(
+        {
+            "sku_id": [s for s in skus for _ in range(n)],
+            "timestamp": fechas * len(skus),
+            "demand_qty": np.concatenate(
+                [_serie_estacional(n, seed=i + 1) for i in range(len(skus))]
+            ),
+            "lead_time_days": [3] * (n * len(skus)),
+        }
+    )
+
+
+_ESPACIO_MINIMO = EspacioClasico(
+    p_max=1, d_max=1, q_max=1, P_max=0, D_max=0, Q_max=0, m=7
 )
 
 
@@ -132,3 +152,51 @@ def test_seleccionar_por_panel_no_mezcla_series_de_distintos_skus():
         seed=0,
     )
     assert set(resultados.keys()) == {"A", "B"}
+
+
+def test_series_por_sku_ordena_alfabeticamente_los_skus():
+    panel = _panel(n=20, skus=("Z9", "A1", "M5"))
+    assert [sku for sku, _ in series_por_sku(panel)] == ["A1", "M5", "Z9"]
+
+
+def test_series_por_sku_ordena_cada_serie_por_timestamp():
+    # El panel llega con las filas barajadas: la causalidad de Walk-Forward
+    # depende de que la serie salga en orden cronologico de aqui.
+    panel = _panel(n=30, skus=("A",))
+    barajado = panel.sample(frac=1.0, random_state=7).reset_index(drop=True)
+
+    ((_, serie),) = series_por_sku(barajado)
+    esperado = panel.sort_values("timestamp")["demand_qty"].to_numpy(dtype=float)
+    np.testing.assert_array_equal(serie, esperado)
+
+
+def test_series_por_sku_exige_las_columnas_del_contrato():
+    panel = _panel(n=10).drop(columns=["demand_qty"])
+    with pytest.raises(ValueError, match="demand_qty"):
+        series_por_sku(panel)
+
+
+def test_n_procesos_invalido_falla_antes_de_calcular():
+    with pytest.raises(ValueError, match="n_procesos"):
+        seleccionar_por_panel(_panel(n=10), n_procesos=0)
+
+
+@pytest.mark.slow
+def test_paralelo_entre_skus_da_el_mismo_resultado_que_secuencial():
+    # La promesa del nivel 1: repartir SKUs entre procesos no cambia nada.
+    # Se sostiene porque los estudios no comparten estado y `derivar_semilla`
+    # es un hash de (seed, trial_id, indice_ventana), no un contador global.
+    panel = _panel(n=60, skus=("A", "B"))
+    kwargs = dict(espacio=_ESPACIO_MINIMO, n_trials=5, horizonte=7, paso=7, seed=0)
+
+    secuencial = seleccionar_por_panel(panel, **kwargs)
+    paralelo = seleccionar_por_panel(panel, n_procesos=2, **kwargs)
+
+    assert list(paralelo.keys()) == list(secuencial.keys()) == ["A", "B"]
+    for sku_id in secuencial:
+        s, p = secuencial[sku_id].seleccionada, paralelo[sku_id].seleccionada
+        assert s is not None and p is not None
+        assert p.order == s.order
+        assert p.seasonal_order == s.seasonal_order
+        assert p.valor == s.valor
+        assert p.n_ventanas == s.n_ventanas

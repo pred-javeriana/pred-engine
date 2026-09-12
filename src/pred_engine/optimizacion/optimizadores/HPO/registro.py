@@ -1,10 +1,10 @@
-"""Componente 9 (parcial): traduce el backend de HPO al contrato externo.
+"""Componente 9 (parcial): traduce el snapshot del backend al contrato externo.
 
-La fuente de verdad de cada trial vive en el backend (hoy, un
-`optuna.Study` -- ADR-02-006). Este modulo NO conoce ese backend: recibe
-`Sequence[InfoTrial]` (el snapshot ya traducido por el adaptador, ver
-`adaptador_optuna.py`) y produce el contrato externo estable
-(`Trial`/`ResultadoEstudio` de `comun.dataclasses.hpo`) que ya consumen
+La fuente de verdad de cada trial vive en el backend de HPO (hoy, un
+`optuna.Study`). Este modulo NO conoce ese backend: recibe
+`Sequence[InfoTrial]` -- el snapshot ya traducido por el adaptador, ver
+`adaptador_optuna.py` -- y produce el contrato externo estable
+(`Trial`/`ResultadoEstudio` de `comun.dataclasses.hpo`) que consumen
 `classical_selection.py` y las pruebas.
 
 Distingue 'podado' de 'fallido' con `motivo` SIEMPRE presente en ambos
@@ -14,7 +14,8 @@ se descarto por poda o porque el ajuste fallo?".
 La persistencia/reanudacion en JSONL (`volcar_jsonl`/`reanudar_estudio`) es
 formato-Optuna por naturaleza -- serializa/reconstruye un
 `optuna.trial.FrozenTrial` -- y por eso vive en `adaptador_optuna.py`, no
-aqui.
+aqui. Este archivo no importa el backend: si algun dia aparece un `import
+optuna` en estas lineas, la frontera se volvio a cruzar.
 """
 
 from __future__ import annotations

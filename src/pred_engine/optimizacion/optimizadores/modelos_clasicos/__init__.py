@@ -7,6 +7,7 @@ from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection
     min_train_recomendado,
     seleccionar_configuracion_clasica,
     seleccionar_por_panel,
+    series_por_sku,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "min_train_recomendado",
     "seleccionar_configuracion_clasica",
     "seleccionar_por_panel",
+    "series_por_sku",
 ]

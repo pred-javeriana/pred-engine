@@ -4,15 +4,6 @@ Clasicos, ML y DL solo cambian `espacio` y `fabrica` el resto (muestreo,
 poda semantica, asignacion de recursos ASHA, registro) es compartido. Las
 ventanas se generan UNA VEZ y se comparten entre todos los trials, para que
 sean comparables entre si.
-
-ADR-02-006: el bucle usa la interfaz ask/tell de un backend de HPO --
-`EjecutorGreedy` sigue siendo quien decide cuando avanzar una ventana
-(ADR-02-004) y `DecisorASHA` quien decide cuando podar (ADR-02-005); el
-backend (hoy Optuna, vease `adaptador_optuna.py`) solo aporta el
-muestreador y el registro de trials. Este modulo NO importa el backend
-concreto -- habla unicamente `contratos.py` (`EstudioHPO`/`TrialHPO`) y
-`DecisorASHA` (algoritmo puro). El contrato externo (`Trial`/
-`ResultadoEstudio`) no cambia.
 """
 
 from __future__ import annotations
@@ -119,7 +110,7 @@ def ejecutar_estudio(
                     f"muestreadas ({intentos_invalidos} intentos invalidos); revise "
                     "las restricciones de EspacioBusqueda"
                 )
-            continue  # no incrementa indice_trial: no gasta presupuesto real
+            continue
         intentos_invalidos = 0
 
         ejecutor = EjecutorGreedy(
