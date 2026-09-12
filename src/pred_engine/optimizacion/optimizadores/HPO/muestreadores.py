@@ -1,9 +1,4 @@
-"""Muestreadores de HPO: como se propone la siguiente configuracion a evaluar.
-
-ADR-02-006: se adopta `optuna.samplers.TPESampler` en vez de la
-implementacion propia en NumPy. `multivariate=True` es la mejora algoritmica
-real sobre la version anterior (que asumia independencia entre parametros).
-"""
+"""Muestreadores de HPO: como se propone la siguiente configuracion a evaluar."""
 
 from __future__ import annotations
 

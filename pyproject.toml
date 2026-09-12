@@ -38,6 +38,9 @@ packages = ["src/pred_engine"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=pred_engine --cov-report=term-missing --cov-fail-under=80"
+markers = [
+    "slow: pruebas que ajustan modelos reales o levantan procesos (segundos, no milisegundos)",
+]
 
 [tool.coverage.run]
 source = ["src/pred_engine"]
