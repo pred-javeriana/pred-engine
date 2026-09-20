@@ -90,6 +90,7 @@ Transiciones permitidas:
 | Pruebas genericas | `tests/optimizacion/control_reanudacion/` |
 | Prueba integral | `tests/optimizacion/HPO/test_estudio_reanudacion.py` |
 | API | `API_SPECIFICATION.md` (este directorio) |
+| Guia para extender Modulo 2 | `../GUIA_CICLO_VIDA_CORRIDA.md` |
 | ADR GitHub | `docs/adr/ADR-010-control-corrida-vs-backend.md`, `docs/adr/ADR-011-checkpoints-atomicos-idempotentes.md` |
 | Notion | ADR-02-013, ADR-02-014 |
 
