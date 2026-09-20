@@ -129,3 +129,18 @@ def test_muestreo_imposible_lanza_error_claro():
     )
     with pytest.raises(EspacioInvalidoError):
         espacio.muestrear(np.random.default_rng(0), intentos_max=10)
+
+
+def test_descripcion_canonica_es_determinista_e_independiente_de_callables_anonimos():
+    def _cota(configuracion):
+        return configuracion["p"] < 3
+
+    a = EspacioBusqueda(parametros=(Entero("p", 0, 5),), restricciones=(_cota,))
+    b = EspacioBusqueda(parametros=(Entero("p", 0, 5),), restricciones=(_cota,))
+    assert a.descripcion_canonica() == b.descripcion_canonica()
+
+
+def test_descripcion_canonica_cambia_si_cambia_el_rango():
+    a = EspacioBusqueda(parametros=(Entero("p", 0, 5),))
+    b = EspacioBusqueda(parametros=(Entero("p", 0, 6),))
+    assert a.descripcion_canonica() != b.descripcion_canonica()

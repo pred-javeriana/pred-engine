@@ -24,6 +24,10 @@ from pred_engine.optimizacion.control_reanudacion.errores import (
     TransicionEstadoError,
     VersionManifiestoError,
 )
+from pred_engine.optimizacion.control_reanudacion.huella import (
+    calcular_huella,
+    verificar_compatibilidad,
+)
 from pred_engine.optimizacion.control_reanudacion.transiciones import (
     TRANSICIONES_PERMITIDAS,
     transicionar,
@@ -35,6 +39,7 @@ __all__ = [
     "BackendHPO",
     "ConfiguracionOptimizador",
     "ConfiguracionValidacion",
+    "calcular_huella",
     "CorridaFallidaError",
     "EstadoCorrida",
     "IncompatibilidadCorridaError",
@@ -46,6 +51,7 @@ __all__ = [
     "SolicitudCorrida",
     "TRANSICIONES_PERMITIDAS",
     "TransicionEstadoError",
+    "verificar_compatibilidad",
     "VersionManifiestoError",
     "transicionar",
 ]

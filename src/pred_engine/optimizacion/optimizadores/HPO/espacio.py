@@ -8,6 +8,7 @@ tres formas con el mismo vocabulario.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -145,3 +146,66 @@ class EspacioBusqueda:
 
     def es_valida(self, configuracion: Mapping[str, Any]) -> bool:
         return all(restriccion(configuracion) for restriccion in self.restricciones)
+
+    def descripcion_canonica(self) -> dict[str, Any]:
+        return descripcion_canonica(self)
+
+
+def _etiqueta_restriccion(restriccion: Callable[..., Any]) -> str:
+    # Las restricciones vigentes son callables (a menudo lambdas). Un
+    # nombre calificado basta para funciones definidas; el bytecode
+    # distingue lambdas distintas sin exigir un DSL extra de predicados.
+    nombre = getattr(restriccion, "__qualname__", "") or getattr(
+        restriccion, "__name__", ""
+    )
+    modulo = getattr(restriccion, "__module__", "") or ""
+    if nombre and "<lambda>" not in nombre:
+        return f"{modulo}.{nombre}" if modulo else nombre
+    codigo = getattr(restriccion, "__code__", None)
+    if codigo is None:
+        digest = hashlib.sha256(repr(restriccion).encode("utf-8")).hexdigest()[:16]
+        return f"anon:{digest}"
+    digest = hashlib.sha256(codigo.co_code).hexdigest()[:16]
+    return f"lambda:{digest}"
+
+
+def _parametro_canonico(parametro: Parametro) -> dict[str, Any]:
+    if isinstance(parametro, Entero):
+        return {
+            "tipo": "entero",
+            "nombre": parametro.nombre,
+            "bajo": parametro.bajo,
+            "alto": parametro.alto,
+            "paso": parametro.paso,
+        }
+    if isinstance(parametro, Flotante):
+        return {
+            "tipo": "flotante",
+            "nombre": parametro.nombre,
+            "bajo": parametro.bajo,
+            "alto": parametro.alto,
+            "log": parametro.log,
+        }
+    if isinstance(parametro, Categorico):
+        return {
+            "tipo": "categorico",
+            "nombre": parametro.nombre,
+            "opciones": list(parametro.opciones),
+        }
+    raise TypeError(f"tipo de parametro no soportado: {type(parametro)!r}")
+
+
+def descripcion_canonica(espacio: EspacioBusqueda) -> dict[str, Any]:
+    """Representacion JSON-serializable del espacio para la huella 2.9."""
+    return {
+        "parametros": [_parametro_canonico(p) for p in espacio.parametros],
+        "condiciones": [
+            {
+                "parametro": c.parametro,
+                "padre": c.padre,
+                "valores": list(c.valores),
+            }
+            for c in espacio.condiciones
+        ],
+        "restricciones": [_etiqueta_restriccion(r) for r in espacio.restricciones],
+    }
