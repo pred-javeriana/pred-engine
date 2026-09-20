@@ -98,3 +98,21 @@ class SelectionStrategy(Protocol):
     def select(
         self, request: SelectionRequest, profile: TopologicalProfile
     ) -> SelectionResult: ...
+
+
+class RoutingDecision(BaseModel):
+    """Familia candidata junto al perfil topológico con el que debe ejecutarse."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    family: PredictorFamily
+    profile: TopologicalProfile
+
+
+@runtime_checkable
+class RoutingPolicy(Protocol):
+    """Politica inyectable: sku_class -> decisiones ordenadas. Sin modelos concretos."""
+
+    version: str
+
+    def decide(self, sku_class: SkuClass) -> tuple[RoutingDecision, ...]: ...

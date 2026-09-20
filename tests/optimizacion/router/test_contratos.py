@@ -7,10 +7,12 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from pred_engine.comun.modelos import SKU_CLASSES, ClassifiedObservation
+from pred_engine.comun.modelos import SKU_CLASSES, ClassifiedObservation, SkuClass
 from pred_engine.optimizacion.router import (
     PREDICTOR_FAMILIES,
     TOPOLOGICAL_PROFILES,
+    RoutingDecision,
+    RoutingPolicy,
     SelectionRequest,
     SelectionResult,
     SelectionStrategy,
@@ -133,3 +135,38 @@ def test_estrategia_simulada_satisface_el_protocolo() -> None:
     out = dummy.select(req, "dense_variable")
     assert out.family == "ml"
     assert out.profile == "dense_variable"
+
+
+def test_decision_es_igual_por_valor_y_es_inmutable() -> None:
+    a = RoutingDecision(family="classical", profile="sparse_variable")
+    b = RoutingDecision(family="classical", profile="sparse_variable")
+    c = RoutingDecision(family="foundation", profile="sparse_variable")
+    assert a == b
+    assert a != c
+    with pytest.raises(ValidationError):
+        a.family = "ml"  # type: ignore[misc]
+
+
+def test_decision_rechaza_familia_o_perfil_invalidos() -> None:
+    with pytest.raises(ValidationError):
+        RoutingDecision(family="CLASSICAL", profile="dense_stable")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        RoutingDecision(family="ml", profile="sparse")  # type: ignore[arg-type]
+
+
+def test_politica_simulada_satisface_el_protocolo() -> None:
+    class PoliticaFija:
+        version = "test-1"
+
+        def decide(self, sku_class: SkuClass) -> tuple[RoutingDecision, ...]:
+            return (
+                RoutingDecision(family="classical", profile="dense_stable"),
+                RoutingDecision(family="foundation", profile="dense_stable"),
+            )
+
+    politica = PoliticaFija()
+    assert isinstance(politica, RoutingPolicy)
+    d1 = politica.decide("smooth")
+    d2 = politica.decide("lumpy")
+    assert d1 == d2
+    assert d1[0].family == "classical"
