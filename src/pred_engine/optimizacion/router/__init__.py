@@ -19,6 +19,7 @@ from pred_engine.optimizacion.router.errores import (
     UnknownSkuClassError,
     UnregisteredFamilyError,
 )
+from pred_engine.optimizacion.router.registro import StrategyRegistry
 
 __all__ = [
     "DuplicateStrategyError",
@@ -32,6 +33,7 @@ __all__ = [
     "SelectionRequest",
     "SelectionResult",
     "SelectionStrategy",
+    "StrategyRegistry",
     "TOPOLOGICAL_PROFILES",
     "TopologicalProfile",
     "UnknownSkuClassError",
