@@ -19,6 +19,10 @@ from pred_engine.optimizacion.control_reanudacion.contratos import (
     PuertoPersistenciaMotor,
     SolicitudCorrida,
 )
+from pred_engine.optimizacion.control_reanudacion.controlador import (
+    ControladorReanudacion,
+    SesionCorrida,
+)
 from pred_engine.optimizacion.control_reanudacion.errores import (
     CorridaFallidaError,
     IncompatibilidadCorridaError,
@@ -45,6 +49,7 @@ __all__ = [
     "ConfiguracionOptimizador",
     "ConfiguracionValidacion",
     "calcular_huella",
+    "ControladorReanudacion",
     "CorridaFallidaError",
     "escribir_atomico",
     "EstadoCorrida",
@@ -54,6 +59,7 @@ __all__ = [
     "ManifiestoCorrida",
     "PuertoPersistenciaMotor",
     "ReanudacionError",
+    "SesionCorrida",
     "SolicitudCorrida",
     "TRANSICIONES_PERMITIDAS",
     "TransicionEstadoError",
