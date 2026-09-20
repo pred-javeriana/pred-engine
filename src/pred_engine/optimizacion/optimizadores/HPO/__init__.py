@@ -9,8 +9,11 @@ solo cambian `EspacioBusqueda` y `FabricaPronosticador`; el resto del motor
 """
 
 from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
+    AdaptadorPersistenciaOptuna,
     crear_estudio_optuna,
+    persistir_estudio_hpo,
     reanudar_estudio,
+    restaurar_estudio_hpo,
     volcar_jsonl,
 )
 from pred_engine.optimizacion.optimizadores.HPO.asha import DecisionPoda, DecisorASHA
@@ -44,6 +47,7 @@ from pred_engine.optimizacion.optimizadores.HPO.registro import (
 )
 
 __all__ = [
+    "AdaptadorPersistenciaOptuna",
     "Categorico",
     "Condicion",
     "DecisionPoda",
@@ -66,6 +70,8 @@ __all__ = [
     "ejecutar_estudio",
     "es_degenerada",
     "instantanea_desde_estudio",
+    "persistir_estudio_hpo",
     "reanudar_estudio",
+    "restaurar_estudio_hpo",
     "volcar_jsonl",
 ]

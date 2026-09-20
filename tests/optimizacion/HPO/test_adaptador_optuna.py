@@ -15,8 +15,10 @@ from pathlib import Path
 import optuna
 
 from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
+    AdaptadorPersistenciaOptuna,
     PodadorASHAOptuna,
     crear_estudio_optuna,
+    persistir_estudio_hpo,
     reanudar_estudio,
     trials_desde_study,
     volcar_jsonl,
@@ -197,3 +199,44 @@ def test_reanudar_sin_archivo_devuelve_estudio_vacio(tmp_path: Path):
         pruner=PodadorASHAOptuna(_decisor()),
     )
     assert reanudado.get_trials(deepcopy=False) == []
+
+
+def test_volcar_omite_trials_running(tmp_path: Path):
+    study, _ = crear_estudio_optuna(
+        muestreador=optuna.samplers.RandomSampler(seed=0), decisor_asha=_decisor()
+    )
+    cerrado = study.ask()
+    cerrado.suggest_int("p", 0, 5)
+    study.tell(cerrado, 1.0, estado="completado")
+    study.ask()  # RUNNING, sin tell
+    ruta = tmp_path / "backend.jsonl"
+    persistir_estudio_hpo(study, ruta)
+    lineas = [ln for ln in ruta.read_text(encoding="utf-8").splitlines() if ln]
+    assert len(lineas) == 1
+
+
+def test_adaptador_roundtrip_preserva_podado_y_fallido(tmp_path: Path):
+    espacio = _espacio()
+    sampler = optuna.samplers.RandomSampler(seed=0)
+    adaptador = AdaptadorPersistenciaOptuna(
+        ruta_checkpoint=tmp_path / "backend.jsonl",
+        espacio=espacio,
+        muestreador=sampler,
+        decisor_asha=_decisor(),
+    )
+    estudio, _ = adaptador.crear()
+    t_ok = estudio.ask()
+    t_ok.suggest_int("p", 0, 5)
+    estudio.tell(t_ok, 0.2, estado="completado")
+    t_pr = estudio.ask()
+    t_pr.suggest_int("p", 0, 5)
+    t_pr.report(0.9, 1)
+    estudio.tell(t_pr, None, estado="podado")
+    t_fail = estudio.ask()
+    t_fail.suggest_int("p", 0, 5)
+    estudio.tell(t_fail, None, estado="fallido")
+
+    ref = adaptador.persistir((estudio, _))
+    restaurado, _podador = adaptador.restaurar(ref)
+    estados = [t.estado for t in restaurado.trials_finalizados()]
+    assert estados == ["completado", "podado", "fallido"]
