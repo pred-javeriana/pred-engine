@@ -144,6 +144,64 @@ class _EstudioOptuna:
         return salida
 
 
+def persistir_estudio_hpo(estudio: EstudioHPO, ruta: str | Path) -> Path:
+    if not isinstance(estudio, _EstudioOptuna):
+        raise TypeError("persistencia Optuna requiere el adaptador Optuna")
+    destino = Path(ruta)
+    volcar_jsonl(estudio._study, destino)
+    return destino
+
+
+def restaurar_estudio_hpo(
+    ruta: str | Path,
+    *,
+    espacio: EspacioBusqueda,
+    muestreador: optuna.samplers.BaseSampler,
+    decisor_asha: DecisorASHA,
+) -> tuple[EstudioHPO, PodadorASHAOptuna]:
+    podador = PodadorASHAOptuna(decisor_asha)
+    study = reanudar_estudio(ruta, espacio=espacio, sampler=muestreador, pruner=podador)
+    return _EstudioOptuna(study), podador
+
+
+class AdaptadorPersistenciaOptuna:
+    """Implementa `PuertoPersistenciaMotor` sin exponer `optuna.Study`."""
+
+    def __init__(
+        self,
+        *,
+        ruta_checkpoint: str | Path,
+        espacio: EspacioBusqueda,
+        muestreador: optuna.samplers.BaseSampler,
+        decisor_asha: DecisorASHA,
+    ) -> None:
+        self._ruta = Path(ruta_checkpoint)
+        self._espacio = espacio
+        self._muestreador = muestreador
+        self._decisor = decisor_asha
+
+    def crear(self) -> object:
+        return crear_estudio_optuna(
+            muestreador=self._muestreador, decisor_asha=self._decisor
+        )
+
+    def persistir(self, handle: object) -> str:
+        estudio, _podador = handle  # type: ignore[misc]
+        persistir_estudio_hpo(estudio, self._ruta)
+        return self._ruta.name
+
+    def restaurar(self, referencia: str) -> object:
+        ruta = (
+            self._ruta if not referencia else self._ruta.parent / Path(referencia).name
+        )
+        return restaurar_estudio_hpo(
+            ruta,
+            espacio=self._espacio,
+            muestreador=self._muestreador,
+            decisor_asha=self._decisor,
+        )
+
+
 def crear_estudio_optuna(
     *,
     muestreador: optuna.samplers.BaseSampler,
@@ -160,11 +218,67 @@ def crear_estudio_optuna(
 
 
 def volcar_jsonl(study: optuna.study.Study, ruta: str | Path) -> None:
-    ruta = Path(ruta)
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    with ruta.open("w", encoding="utf-8") as archivo:
-        for t in study.get_trials(deepcopy=False):
-            archivo.write(json.dumps(_frozen_trial_a_dict(t)) + "\n")
+    """Serializa solo trials FINALIZADOS (COMPLETE / PRUNED / FAIL).
+
+    Un trial RUNNING se omite a proposito: es el ensayo activo durante una
+    interrupcion y debe reejecutarse desde cero al recuperar (seccion F).
+    """
+    from pred_engine.optimizacion.control_reanudacion.almacenamiento import (
+        escribir_atomico,
+    )
+
+    finalizados = (
+        TrialState.COMPLETE,
+        TrialState.PRUNED,
+        TrialState.FAIL,
+    )
+    lineas = [
+        json.dumps(_frozen_trial_a_dict(t))
+        for t in study.get_trials(deepcopy=False)
+        if t.state in finalizados
+    ]
+    escribir_atomico(Path(ruta), "\n".join(lineas) + ("\n" if lineas else ""))
+
+
+def _sincronizar_sampler_aleatorio(
+    sampler: optuna.samplers.BaseSampler,
+    espacio: EspacioBusqueda,
+    n_trials_cargados: int,
+) -> None:
+    """Avanza el RNG del RandomSampler para alinear la reanudacion.
+
+    `add_trial` restaura trials finalizados pero no consume el estado del
+    muestreador; sin este avance, el siguiente `ask()` repite la primera
+    muestra de la secuencia.
+    """
+    if n_trials_cargados <= 0:
+        return
+    if not isinstance(sampler, optuna.samplers.RandomSampler):
+        return
+
+    auxiliar = optuna.create_study(direction="minimize", sampler=sampler)
+    for _ in range(n_trials_cargados):
+        trial = auxiliar.ask()
+        for parametro in espacio.parametros:
+            if isinstance(parametro, Entero):
+                trial.suggest_int(
+                    parametro.nombre,
+                    parametro.bajo,
+                    parametro.alto,
+                    step=parametro.paso,
+                )
+            elif isinstance(parametro, Flotante):
+                trial.suggest_float(
+                    parametro.nombre,
+                    parametro.bajo,
+                    parametro.alto,
+                    log=parametro.log,
+                )
+            elif isinstance(parametro, Categorico):
+                trial.suggest_categorical(parametro.nombre, parametro.opciones)
+            else:
+                raise TypeError(f"tipo de parametro no soportado: {type(parametro)!r}")
+        auxiliar.tell(trial, state=TrialState.FAIL)
 
 
 def reanudar_estudio(
@@ -180,6 +294,7 @@ def reanudar_estudio(
         return study
 
     distribuciones = {p.nombre: _distribucion_de(p) for p in espacio.parametros}
+    n_trials_cargados = 0
     with ruta.open("r", encoding="utf-8") as archivo:
         for linea in archivo:
             linea = linea.strip()
@@ -200,6 +315,8 @@ def reanudar_estudio(
                 },
             )
             study.add_trial(trial)
+            n_trials_cargados += 1
+    _sincronizar_sampler_aleatorio(sampler, espacio, n_trials_cargados)
     return study
 
 
