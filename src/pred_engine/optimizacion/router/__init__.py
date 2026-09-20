@@ -25,6 +25,7 @@ from pred_engine.optimizacion.router.politica import (
     InitialTopologyPolicy,
     PROFILE_BY_SKU_CLASS,
 )
+from pred_engine.optimizacion.router.enrutador import SelectionRouter
 from pred_engine.optimizacion.router.registro import StrategyRegistry
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "SelectionError",
     "SelectionRequest",
     "SelectionResult",
+    "SelectionRouter",
     "SelectionStrategy",
     "StrategyRegistry",
     "TOPOLOGICAL_PROFILES",
