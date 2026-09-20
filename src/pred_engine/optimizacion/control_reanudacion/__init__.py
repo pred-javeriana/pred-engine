@@ -4,6 +4,10 @@ Administra manifiesto, huella y recuperacion. No importa Optuna: el
 estado de los trials vive en el adaptador del backend HPO.
 """
 
+from pred_engine.optimizacion.control_reanudacion.almacenamiento import (
+    AlmacenManifiestosFs,
+    escribir_atomico,
+)
 from pred_engine.optimizacion.control_reanudacion.contratos import (
     SCHEMA_VERSION,
     AlmacenManifiestos,
@@ -36,11 +40,13 @@ from pred_engine.optimizacion.control_reanudacion.transiciones import (
 __all__ = [
     "SCHEMA_VERSION",
     "AlmacenManifiestos",
+    "AlmacenManifiestosFs",
     "BackendHPO",
     "ConfiguracionOptimizador",
     "ConfiguracionValidacion",
     "calcular_huella",
     "CorridaFallidaError",
+    "escribir_atomico",
     "EstadoCorrida",
     "IncompatibilidadCorridaError",
     "ManifiestoAusenteError",
