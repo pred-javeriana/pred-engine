@@ -37,6 +37,7 @@ packages = ["src/pred_engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "--cov=pred_engine --cov-report=term-missing --cov-fail-under=80"
 markers = [
     "slow: pruebas que ajustan modelos reales o levantan procesos (segundos, no milisegundos)",
@@ -47,7 +48,6 @@ source = ["src/pred_engine"]
 omit = [
     "src/pred_engine/analisis/*",
     "src/pred_engine/optimizacion/optimizadores/*",
-    "src/pred_engine/optimizacion/control_reanudacion/*",
     "src/pred_engine/config/*",
     "src/pred_engine/ingesta/validador_tipo_archivo/*",
     "src/pred_engine/forecasting/control_reanudacion/*",
@@ -74,6 +74,7 @@ include = [
     "src/pred_engine/ingesta/salida",
     "src/pred_engine/comun/modelos",
     "src/pred_engine/optimizacion/router",
+    "src/pred_engine/optimizacion/control_reanudacion",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"

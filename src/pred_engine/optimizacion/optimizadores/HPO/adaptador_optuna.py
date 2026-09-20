@@ -240,6 +240,47 @@ def volcar_jsonl(study: optuna.study.Study, ruta: str | Path) -> None:
     escribir_atomico(Path(ruta), "\n".join(lineas) + ("\n" if lineas else ""))
 
 
+def _sincronizar_sampler_aleatorio(
+    sampler: optuna.samplers.BaseSampler,
+    espacio: EspacioBusqueda,
+    n_trials_cargados: int,
+) -> None:
+    """Avanza el RNG del RandomSampler para alinear la reanudacion.
+
+    `add_trial` restaura trials finalizados pero no consume el estado del
+    muestreador; sin este avance, el siguiente `ask()` repite la primera
+    muestra de la secuencia.
+    """
+    if n_trials_cargados <= 0:
+        return
+    if not isinstance(sampler, optuna.samplers.RandomSampler):
+        return
+
+    auxiliar = optuna.create_study(direction="minimize", sampler=sampler)
+    for _ in range(n_trials_cargados):
+        trial = auxiliar.ask()
+        for parametro in espacio.parametros:
+            if isinstance(parametro, Entero):
+                trial.suggest_int(
+                    parametro.nombre,
+                    parametro.bajo,
+                    parametro.alto,
+                    step=parametro.paso,
+                )
+            elif isinstance(parametro, Flotante):
+                trial.suggest_float(
+                    parametro.nombre,
+                    parametro.bajo,
+                    parametro.alto,
+                    log=parametro.log,
+                )
+            elif isinstance(parametro, Categorico):
+                trial.suggest_categorical(parametro.nombre, parametro.opciones)
+            else:
+                raise TypeError(f"tipo de parametro no soportado: {type(parametro)!r}")
+        auxiliar.tell(trial, state=TrialState.FAIL)
+
+
 def reanudar_estudio(
     ruta: str | Path,
     *,
@@ -253,6 +294,7 @@ def reanudar_estudio(
         return study
 
     distribuciones = {p.nombre: _distribucion_de(p) for p in espacio.parametros}
+    n_trials_cargados = 0
     with ruta.open("r", encoding="utf-8") as archivo:
         for linea in archivo:
             linea = linea.strip()
@@ -273,6 +315,8 @@ def reanudar_estudio(
                 },
             )
             study.add_trial(trial)
+            n_trials_cargados += 1
+    _sincronizar_sampler_aleatorio(sampler, espacio, n_trials_cargados)
     return study
 
 
