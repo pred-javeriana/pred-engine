@@ -2,11 +2,12 @@
 
 ## Que se hizo en esta sesion
 
-Compilacion del **motor de enrutamiento** del Modulo 2 (tareas
-`TASK-SEL-2.1-A1/A2/B1` y `TASK-SEL-2.2-A1/A2/B1`). El codigo listo para
-pegar vive en `project/current-plan/IMPLEMENTATION.md`. Este directorio
-documenta el diseno ya anclado al repo real (contrato 1.4 + stub
-`optimizacion/router/`).
+Implementacion del **motor de enrutamiento** del Modulo 2 (tareas
+`TASK-SEL-2.1-A1/A2/B1` y `TASK-SEL-2.2-A1/A2/B1`). El codigo vive en
+`src/pred_engine/optimizacion/router/`; el plan TDD compilado esta en
+`project/current-plan/IMPLEMENTATION.md`. Este directorio documenta el
+diseno anclado al contrato 1.4 y a las pruebas en
+`tests/optimizacion/router/`.
 
 1. **Contratos Pydantic frozen:** `SelectionRequest`, `SelectionResult`,
    `RoutingDecision`. Familias `classical|ml|dl|foundation`. Perfiles
@@ -88,6 +89,13 @@ tuple[SelectionResult, …]  →  estrategias HPO / foundation (sesiones 2.3+)
 - **Coverage omit estrecha.** `optimizacion/*` entero estaba fuera del
   umbral 80 %. El router se mide; HPO y reanudacion siguen omitidos.
 - **`git add` por rutas.** Evita mezclar cambios ajenos en el arbol.
+
+## Verificacion
+
+- `tests/optimizacion/router/`: 46 pruebas (contratos, registro, politica, enrutador).
+- Suite completa: 387 pruebas, cobertura global 91 % (`uv run pytest`).
+- `ruff check` / `ruff format` sobre `optimizacion/router`.
+- `pyproject.toml`: omit de coverage estrechado para medir `router/`; pyright incluye el paquete.
 
 ## Fuera de alcance
 

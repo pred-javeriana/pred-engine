@@ -1,7 +1,7 @@
 # ADR-008: Router + Strategy sin estado (Modulo 2)
 
 **Date:** 2026-09-20
-**Status:** Proposed
+**Status:** Accepted
 **Notion ADR:** ADR-02-003
 **Notion Task:** TASK-SEL-2.1-A1 / A2 / B1
 

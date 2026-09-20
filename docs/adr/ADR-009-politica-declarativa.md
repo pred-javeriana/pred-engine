@@ -1,7 +1,7 @@
 # ADR-009: Politica declarativa de routing por `sku_class`
 
 **Date:** 2026-09-20
-**Status:** Proposed
+**Status:** Accepted
 **Notion ADR:** ADR-02-012
 **Notion Task:** TASK-SEL-2.2-A1 / A2 / B1
 

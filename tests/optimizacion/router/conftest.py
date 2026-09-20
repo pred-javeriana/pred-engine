@@ -35,9 +35,7 @@ class FakeStrategy:
         )
 
 
-def make_request(
-    sku_class: str = "smooth", sku_id: str = "105"
-) -> SelectionRequest:
+def make_request(sku_class: str = "smooth", sku_id: str = "105") -> SelectionRequest:
     return SelectionRequest(sku_id=sku_id, sku_class=sku_class)  # type: ignore[arg-type]
 
 

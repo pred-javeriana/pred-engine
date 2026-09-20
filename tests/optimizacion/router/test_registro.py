@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from tests.optimizacion.router.conftest import FakeStrategy, make_request
 
 from pred_engine.optimizacion.router import (
     DuplicateStrategyError,
@@ -11,7 +12,6 @@ from pred_engine.optimizacion.router import (
     StrategyRegistry,
     UnregisteredFamilyError,
 )
-from tests.optimizacion.router.conftest import FakeStrategy, make_request
 
 
 def test_registrar_y_resolver_sin_conocer_la_clase_concreta() -> None:
@@ -49,7 +49,9 @@ def test_rechaza_overwrite_silencioso() -> None:
     registro.register("dl", FakeStrategy("dl", name="A"))
     with pytest.raises(DuplicateStrategyError):
         registro.register("dl", FakeStrategy("dl", name="B"))
-    assert registro.resolve("dl").select(make_request(), "dense_stable").produced_by == "A"
+    assert (
+        registro.resolve("dl").select(make_request(), "dense_stable").produced_by == "A"
+    )
 
 
 def test_replace_true_sustituye_la_estrategia() -> None:
@@ -58,7 +60,9 @@ def test_replace_true_sustituye_la_estrategia() -> None:
     registro.register(
         "foundation", FakeStrategy("foundation", name="Chronos"), replace=True
     )
-    out = registro.resolve("foundation").select(make_request("lumpy"), "sparse_variable")
+    out = registro.resolve("foundation").select(
+        make_request("lumpy"), "sparse_variable"
+    )
     assert out.produced_by == "Chronos"
 
 

@@ -11,6 +11,7 @@ from pred_engine.optimizacion.router.contratos import (
     SelectionStrategy,
     TopologicalProfile,
 )
+from pred_engine.optimizacion.router.enrutador import SelectionRouter
 from pred_engine.optimizacion.router.errores import (
     DuplicateStrategyError,
     RouterConfigurationError,
@@ -22,10 +23,9 @@ from pred_engine.optimizacion.router.errores import (
 from pred_engine.optimizacion.router.politica import (
     FAMILIES_BY_SKU_CLASS,
     INITIAL_POLICY_VERSION,
-    InitialTopologyPolicy,
     PROFILE_BY_SKU_CLASS,
+    InitialTopologyPolicy,
 )
-from pred_engine.optimizacion.router.enrutador import SelectionRouter
 from pred_engine.optimizacion.router.registro import StrategyRegistry
 
 __all__ = [

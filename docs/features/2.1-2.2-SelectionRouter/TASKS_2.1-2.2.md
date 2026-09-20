@@ -3,8 +3,9 @@
 Fuente Notion: `project/current-context/target_task.md`.
 Codigo: `project/current-plan/IMPLEMENTATION.md`.
 
-Las casillas de implementacion se marcan cuando el usuario copie los
-bloques a `src/` / `tests/` y ejecute los commits de cada paso.
+Implementacion completada en `src/pred_engine/optimizacion/router/` y
+`tests/optimizacion/router/` (Steps 1–6 de `IMPLEMENTATION.md`).
+Verificacion: 387 pruebas, cobertura global >= 80 %.
 
 Orden de compilacion (dependencias reales, no el orden lineal de Notion):
 
@@ -38,13 +39,13 @@ Orden de compilacion (dependencias reales, no el orden lineal de Notion):
 
 ### Criterios de aceptacion
 
-- [ ] Definir contratos suficientes para invocar estrategias sin conocer su implementacion concreta.
-- [ ] Evitar dependencias directas hacia Optuna, ASHA, Walk-Forward o modelos especificos.
-- [ ] Representar explicitamente las familias soportadas y rechazar valores invalidos.
-- [ ] Verificar los contratos mediante pruebas unitarias.
-- [ ] README.md y API_SPECIFICATION.md reflejan el estado actual.
-- [ ] La cobertura de pruebas se verifica en >= 80 %.
-- [ ] Los errores se registran mediante el modulo `logging` de Python (`logger`).
+- [x] Definir contratos suficientes para invocar estrategias sin conocer su implementacion concreta.
+- [x] Evitar dependencias directas hacia Optuna, ASHA, Walk-Forward o modelos especificos.
+- [x] Representar explicitamente las familias soportadas y rechazar valores invalidos.
+- [x] Verificar los contratos mediante pruebas unitarias.
+- [x] README.md y API_SPECIFICATION.md reflejan el estado actual.
+- [x] La cobertura de pruebas se verifica en >= 80 %.
+- [x] Los errores se registran mediante el modulo `logging` de Python (`logger`).
 
 **Compilado en:** `IMPLEMENTATION.md` Step 1.
 **Archivos:** `router/contratos.py`, `router/errores.py`, `tests/.../test_contratos.py`.

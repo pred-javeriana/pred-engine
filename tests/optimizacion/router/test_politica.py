@@ -8,8 +8,8 @@ from pred_engine.comun.modelos import SKU_CLASSES
 from pred_engine.optimizacion.router import (
     FAMILIES_BY_SKU_CLASS,
     INITIAL_POLICY_VERSION,
-    InitialTopologyPolicy,
     PROFILE_BY_SKU_CLASS,
+    InitialTopologyPolicy,
     RoutingPolicy,
     UnknownSkuClassError,
 )
