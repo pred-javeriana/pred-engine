@@ -13,6 +13,7 @@ dependencies = [
     "httpx>=0.27",
     "statsmodels>=0.14",
     "optuna>=4.0",
+    "lightgbm>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -76,6 +77,8 @@ include = [
     "src/pred_engine/optimizacion/router",
     "src/pred_engine/optimizacion/control_reanudacion",
     "src/pred_engine/optimizacion/optimizadores/HPO",
+    "src/pred_engine/optimizacion/optimizadores/seleccion_hpo.py",
+    "src/pred_engine/optimizacion/optimizadores/modelos_machine_learning",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"

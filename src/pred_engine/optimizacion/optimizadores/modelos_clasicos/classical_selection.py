@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import os
-from collections.abc import Iterator, Mapping
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,8 +18,13 @@ from pred_engine.comun.dataclasses.modelos_clasicos import (
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos.modelos_clasicos.sarima import SarimaForecaster
 from pred_engine.optimizacion.optimizadores.HPO.espacio import Entero, EspacioBusqueda
-from pred_engine.optimizacion.optimizadores.HPO.estudio import ejecutar_estudio
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
+from pred_engine.optimizacion.optimizadores.seleccion_hpo import (
+    exigir_serie,
+    seleccionar_con_hpo,
+    seleccionar_panel,
+    series_por_sku,  # noqa: F401  (reexportado por el paquete)
+)
 
 _logger = get_logger(__name__)
 
@@ -119,20 +121,12 @@ def seleccionar_configuracion_clasica(
     run_id: str | None = None,
 ) -> ResultadoSeleccionClasica:
     cfg = espacio or EspacioClasico()
-    serie = np.asarray(y, dtype=float)
-    if serie.ndim != 1:
-        raise ValueError("y debe ser un array 1D")
-
     min_train_efectivo = (
         min_train if min_train is not None else min_train_recomendado(cfg)
     )
-    minimo_requerido = min_train_efectivo + horizonte
-    if len(serie) < minimo_requerido:
-        raise ValueError(
-            f"serie de longitud {len(serie)} insuficiente para SKU={sku_id!r}: "
-            f"se requieren al menos {minimo_requerido} observaciones "
-            f"(min_train={min_train_efectivo} + horizonte={horizonte})"
-        )
+    serie = exigir_serie(
+        y, min_train=min_train_efectivo, horizonte=horizonte, sku_id=sku_id
+    )
 
     espacio_hpo = construir_espacio(cfg)
     m_efectivo = cfg.m if cfg.m > 1 else 0
@@ -142,7 +136,7 @@ def seleccionar_configuracion_clasica(
         configuracion_completa["m"] = m_efectivo
         return fabrica_sarima(configuracion_completa, seed=seed)
 
-    resultado_estudio = ejecutar_estudio(
+    resultado_estudio = seleccionar_con_hpo(
         serie,
         espacio_hpo,
         _fabrica,
@@ -187,52 +181,18 @@ def seleccionar_configuracion_clasica(
     )
 
 
-def series_por_sku(panel: pd.DataFrame) -> list[tuple[str, np.ndarray]]:
-    """Extrae una serie 1D por SKU, en orden alfabetico de `sku_id`.
-
-    Separado de `seleccionar_por_panel` porque el modo paralelo necesita
-    materializar TODAS las series antes de repartirlas: lo que viaja a cada
-    proceso es el array de NumPy, nunca el `DataFrame` (mucho mas caro de
-    serializar). El orden alfabetico fija el orden del diccionario de salida
-    y, con el, la reproducibilidad de logs e identificadores de trial.
-    """
-    if "sku_id" not in panel.columns or "demand_qty" not in panel.columns:
-        raise ValueError("panel debe tener columnas 'sku_id' y 'demand_qty'")
-
-    columna_orden = "timestamp" if "timestamp" in panel.columns else None
-    series: list[tuple[str, np.ndarray]] = []
-    for sku_id, grupo in panel.groupby("sku_id", sort=True):
-        if columna_orden is not None:
-            grupo = grupo.sort_values(columna_orden)
-        series.append((str(sku_id), grupo["demand_qty"].to_numpy(dtype=float)))
-    return series
-
-
 def seleccionar_por_panel(
     panel: pd.DataFrame,
     *,
     n_procesos: int | None = None,
     **kwargs: Any,
 ) -> dict[str, ResultadoSeleccionClasica]:
-    """Un estudio de HPO independiente por SKU.
+    """Un estudio de HPO independiente por SKU (ver `seleccionar_panel`).
 
     `n_procesos=None` (o `1`) ejecuta en el proceso actual, igual que siempre.
-    Con `n_procesos > 1` los SKU se reparten entre procesos: los estudios no
-    comparten NINGUN estado (serie, `Study`, `DecisorASHA` y podador son
-    propios de cada uno), asi que el reparto es seguro y el resultado es
-    identico al secuencial -- `derivar_semilla` es un hash de coordenadas
-    estables, no un contador, de modo que las semillas por ventana no
-    dependen del orden de ejecucion.
-
-    En Windows (metodo `spawn`) el proceso hijo reimporta este modulo, asi
-    que el script que llame con `n_procesos > 1` DEBE protegerse con
-    `if __name__ == "__main__":` o se replicara indefinidamente.
+    Con `n_procesos > 1` los SKU se reparten entre procesos con resultado
+    identico al secuencial.
     """
-    if n_procesos is not None and n_procesos < 1:
-        raise ValueError(
-            "n_procesos debe ser >= 1 o None (modo secuencial); "
-            f"se recibio {n_procesos}"
-        )
     if "run_id" in kwargs:
         raise ValueError(
             "seleccionar_por_panel no acepta 'run_id' (colisionaria entre "
@@ -240,104 +200,6 @@ def seleccionar_por_panel(
             "seleccionar_configuracion_clasica por SKU con un run_id propio "
             "si necesitas persistencia/reanudacion en modo panel"
         )
-
-    series = series_por_sku(panel)
-    if n_procesos is None or n_procesos == 1 or len(series) < 2:
-        return {
-            sku_id: seleccionar_configuracion_clasica(serie, sku_id=sku_id, **kwargs)
-            for sku_id, serie in series
-        }
-
-    return _seleccionar_en_paralelo(series, n_procesos=n_procesos, kwargs=kwargs)
-
-
-def _trabajo_sku(
-    sku_id: str, serie: np.ndarray, kwargs: dict[str, Any]
-) -> tuple[str, ResultadoSeleccionClasica]:
-    """Unidad de trabajo de un proceso hijo.
-
-    Vive a nivel de modulo (y no como closure dentro de
-    `seleccionar_por_panel`) porque `ProcessPoolExecutor` serializa el
-    invocable con `pickle`, y `pickle` no serializa funciones anidadas.
-    Devuelve el `sku_id` junto al resultado para poder reordenar la salida:
-    los futuros se resuelven en orden de terminacion, no de envio.
-    """
-    return sku_id, seleccionar_configuracion_clasica(serie, sku_id=sku_id, **kwargs)
-
-
-_VARS_HILOS_BLAS = (
-    "OMP_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-    "VECLIB_MAXIMUM_THREADS",
-)
-
-
-def _fijar_una_hebra_blas() -> None:
-    for variable in _VARS_HILOS_BLAS:
-        os.environ[variable] = "1"
-
-
-@contextmanager
-def _blas_de_una_hebra() -> Iterator[None]:
-    """Evita la sobresuscripcion de hilos mientras vive el pool.
-
-    NumPy/SciPy lanzan sus propios hilos de BLAS dentro de cada ajuste de
-    SARIMAX. Con N procesos x M hilos de BLAS el planificador del sistema
-    operativo pasa mas tiempo cambiando de contexto que calculando, y el
-    modo paralelo puede resultar MAS LENTO que el secuencial.
-
-    Se fija en el proceso padre y no solo en el `initializer` porque con
-    `spawn` el hijo hereda `os.environ` al arrancar, y las bibliotecas de
-    BLAS leen estas variables UNA VEZ, al importarse: fijarlas despues del
-    import no tendria efecto. El entorno del padre se restaura al salir.
-    """
-    previos = {variable: os.environ.get(variable) for variable in _VARS_HILOS_BLAS}
-    _fijar_una_hebra_blas()
-    try:
-        yield
-    finally:
-        for variable, valor in previos.items():
-            if valor is None:
-                os.environ.pop(variable, None)
-            else:
-                os.environ[variable] = valor
-
-
-def _seleccionar_en_paralelo(
-    series: list[tuple[str, np.ndarray]],
-    *,
-    n_procesos: int,
-    kwargs: dict[str, Any],
-) -> dict[str, ResultadoSeleccionClasica]:
-    procesos = min(n_procesos, len(series))
-    parciales: dict[str, ResultadoSeleccionClasica] = {}
-
-    _logger.info(
-        "Seleccion clasica en paralelo | skus=%d | procesos=%d", len(series), procesos
+    return seleccionar_panel(
+        panel, seleccionar_configuracion_clasica, n_procesos=n_procesos, **kwargs
     )
-    with (
-        _blas_de_una_hebra(),
-        ProcessPoolExecutor(
-            max_workers=procesos, initializer=_fijar_una_hebra_blas
-        ) as ejecutor,
-    ):
-        futuros = {
-            ejecutor.submit(_trabajo_sku, sku_id, serie, kwargs): sku_id
-            for sku_id, serie in series
-        }
-        try:
-            for futuro in as_completed(futuros):
-                sku_id, resultado = futuro.result()
-                parciales[sku_id] = resultado
-        except BaseException:
-            # Un SKU que falla no debe dejar corriendo los que aun no
-            # arrancaron; los ya iniciados sí se esperan al cerrar el pool.
-            for pendiente in futuros:
-                pendiente.cancel()
-            raise
-
-    # Se reconstruye en el orden de `series` (alfabetico por SKU) para que la
-    # salida sea identica a la del modo secuencial, no la de terminacion.
-    return {sku_id: parciales[sku_id] for sku_id, _ in series}
