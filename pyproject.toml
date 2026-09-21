@@ -75,6 +75,7 @@ include = [
     "src/pred_engine/comun/modelos",
     "src/pred_engine/optimizacion/router",
     "src/pred_engine/optimizacion/control_reanudacion",
+    "src/pred_engine/optimizacion/optimizadores/HPO",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"

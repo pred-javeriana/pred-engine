@@ -6,6 +6,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from pred_engine.optimizacion.control_reanudacion import (
+    AlmacenManifiestosFs,
+    EstadoCorrida,
+)
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
     EspacioClasico,
     construir_espacio,
@@ -179,6 +183,42 @@ def test_series_por_sku_exige_las_columnas_del_contrato():
 def test_n_procesos_invalido_falla_antes_de_calcular():
     with pytest.raises(ValueError, match="n_procesos"):
         seleccionar_por_panel(_panel(n=10), n_procesos=0)
+
+
+def test_seleccionar_por_panel_rechaza_run_id_explicito():
+    # run_id se transmitiria identico a cada SKU del panel -- colisionarian
+    # en el mismo manifiesto/backend.jsonl. Ver GUIA_CICLO_VIDA_CORRIDA.md.
+    with pytest.raises(ValueError, match="run_id"):
+        seleccionar_por_panel(_panel(n=10), run_id="clasicos-batch", n_trials=1)
+
+
+@pytest.mark.slow
+def test_raiz_corrida_persiste_y_la_segunda_llamada_no_reejecuta(tmp_path):
+    # `test_sin_controlador_no_escribe` (tests/optimizacion/HPO/
+    # test_estudio_reanudacion.py) ya cubre "sin raiz_corrida no escribe
+    # disco" a nivel de `ejecutar_estudio`; aqui solo se prueba el cableo
+    # nuevo propio de `seleccionar_configuracion_clasica`.
+    y = _serie_estacional()
+    kwargs: dict = dict(
+        sku_id="SKU-1",
+        espacio=_ESPACIO_MINIMO,
+        n_trials=3,
+        horizonte=7,
+        paso=7,
+        seed=0,
+        raiz_corrida=tmp_path,
+        run_id="clasicos-SKU-1-test",
+    )
+
+    resultado = seleccionar_configuracion_clasica(y, **kwargs)
+    manifiesto = AlmacenManifiestosFs(tmp_path).cargar("clasicos-SKU-1-test")
+    assert manifiesto.estado is EstadoCorrida.COMPLETADA
+    assert resultado.seleccionada is not None
+
+    repetido = seleccionar_configuracion_clasica(y, **kwargs)
+    assert repetido.seleccionada is not None
+    assert repetido.seleccionada.order == resultado.seleccionada.order
+    assert repetido.seleccionada.valor == resultado.seleccionada.valor
 
 
 @pytest.mark.slow

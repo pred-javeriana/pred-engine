@@ -18,12 +18,15 @@ from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
     AdaptadorPersistenciaOptuna,
     PodadorASHAOptuna,
     crear_estudio_optuna,
+    inyectar_historico,
     persistir_estudio_hpo,
     reanudar_estudio,
+    semillas_desde_historico,
     trials_desde_study,
     volcar_jsonl,
 )
 from pred_engine.optimizacion.optimizadores.HPO.asha import DecisorASHA
+from pred_engine.optimizacion.optimizadores.HPO.contratos import InfoTrial
 from pred_engine.optimizacion.optimizadores.HPO.espacio import Entero, EspacioBusqueda
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 
@@ -213,6 +216,86 @@ def test_volcar_omite_trials_running(tmp_path: Path):
     persistir_estudio_hpo(study, ruta)
     lineas = [ln for ln in ruta.read_text(encoding="utf-8").splitlines() if ln]
     assert len(lineas) == 1
+
+
+def test_semillas_desde_historico_traduce_trials_completados_y_podados():
+    historico = [
+        InfoTrial(
+            numero=0,
+            estado="completado",
+            valor=1.0,
+            parametros={"p": 2},
+            atributos={"trial_id": "origen-0000"},
+        ),
+        InfoTrial(
+            numero=1,
+            estado="podado",
+            valor=5.0,
+            parametros={"p": 4},
+            atributos={"motivo": "asha"},
+        ),
+    ]
+    semillas = semillas_desde_historico(historico, espacio=_espacio())
+    assert len(semillas) == 2
+    assert {s.user_attrs["warm_start_origen"] for s in semillas} == {True}
+
+
+def test_semillas_desde_historico_descarta_parametro_desconocido():
+    historico = [
+        InfoTrial(
+            numero=0, estado="completado", valor=1.0, parametros={"q": 3}, atributos={}
+        )
+    ]
+    assert semillas_desde_historico(historico, espacio=_espacio()) == []
+
+
+def test_semillas_desde_historico_descarta_valor_fuera_de_rango():
+    historico = [
+        InfoTrial(
+            numero=0,
+            estado="completado",
+            valor=1.0,
+            parametros={"p": 999},
+            atributos={},
+        )
+    ]
+    assert semillas_desde_historico(historico, espacio=_espacio()) == []
+
+
+def test_semillas_desde_historico_ignora_estado_no_reconocido():
+    # Defensivo: `historico` viene de una corrida EXTERNA (posiblemente de
+    # otro formato/version en el futuro), no de este mismo backend en
+    # memoria -- a diferencia de `EstadoTrialBackend`, no hay garantia de
+    # tipos en esa frontera.
+    historico = [
+        InfoTrial(
+            numero=0,
+            estado="desconocido",  # type: ignore[arg-type]
+            valor=None,
+            parametros={"p": 1},
+            atributos={},
+        )
+    ]
+    assert semillas_desde_historico(historico, espacio=_espacio()) == []
+
+
+def test_inyectar_historico_agrega_trials_ya_finalizados():
+    historico = [
+        InfoTrial(
+            numero=0, estado="completado", valor=1.0, parametros={"p": 2}, atributos={}
+        ),
+        InfoTrial(
+            numero=1, estado="podado", valor=5.0, parametros={"p": 4}, atributos={}
+        ),
+    ]
+    semillas = semillas_desde_historico(historico, espacio=_espacio())
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+
+    n_inyectados = inyectar_historico(study, semillas)
+
+    assert n_inyectados == 2
+    estados = sorted(t.state.name for t in study.get_trials(deepcopy=False))
+    assert estados == ["COMPLETE", "PRUNED"]
 
 
 def test_adaptador_roundtrip_preserva_podado_y_fallido(tmp_path: Path):

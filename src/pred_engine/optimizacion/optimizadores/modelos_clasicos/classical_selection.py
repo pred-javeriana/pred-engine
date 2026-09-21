@@ -7,6 +7,7 @@ from collections.abc import Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -114,6 +115,8 @@ def seleccionar_configuracion_clasica(
     muestreador: optuna.samplers.BaseSampler | None = None,
     reglas: ReglasPoda | None = None,
     seed: int = 0,
+    raiz_corrida: str | Path | None = None,
+    run_id: str | None = None,
 ) -> ResultadoSeleccionClasica:
     cfg = espacio or EspacioClasico()
     serie = np.asarray(y, dtype=float)
@@ -154,6 +157,8 @@ def seleccionar_configuracion_clasica(
         seed=seed,
         familia="clasicos",
         sku_id=sku_id,
+        raiz_corrida=raiz_corrida,
+        run_id=run_id,
     )
 
     seleccionada = None
@@ -227,6 +232,13 @@ def seleccionar_por_panel(
         raise ValueError(
             "n_procesos debe ser >= 1 o None (modo secuencial); "
             f"se recibio {n_procesos}"
+        )
+    if "run_id" in kwargs:
+        raise ValueError(
+            "seleccionar_por_panel no acepta 'run_id' (colisionaria entre "
+            "SKUs, cada uno necesita el suyo); llama a "
+            "seleccionar_configuracion_clasica por SKU con un run_id propio "
+            "si necesitas persistencia/reanudacion en modo panel"
         )
 
     series = series_por_sku(panel)

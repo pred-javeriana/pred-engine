@@ -25,6 +25,7 @@ class Trial:
     metrica_objetivo: str
     familia: str
     sku_id: str | None = None
+    timestamp: str | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)

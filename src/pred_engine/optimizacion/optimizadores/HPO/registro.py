@@ -46,6 +46,7 @@ def instantanea_desde_estudio(
             metrica_objetivo=metrica_objetivo,
             familia=str(t.atributos.get("familia", familia)),
             sku_id=t.atributos.get("sku_id"),
+            timestamp=t.atributos.get("timestamp"),
         )
         for t in trials_backend
     ]
