@@ -9,8 +9,12 @@ nuevos motores) sin romper reanudacion ni reproducibilidad.
 | --- | --- |
 | `2.9-Control-Reanudacion/README.md` | Que se implemento y donde |
 | `2.9-Control-Reanudacion/API_SPECIFICATION.md` | Contratos y firmas |
+| `2.4-HPO/README.md` | TPE/ASHA: que se implemento, benchmarks |
+| `2.4-HPO/API_SPECIFICATION.md` | Contratos y firmas de HPO (warm start, `Ordinal`) |
 | `docs/adr/ADR-010-*.md` | Manifiesto vs backend Optuna |
 | `docs/adr/ADR-011-*.md` | Huella, atomico, frontera de trial |
+| `docs/adr/ADR-012-*.md` | TPE delegado a Optuna, no reimplementado |
+| `docs/adr/ADR-013-*.md` | ASHA secuencial, sin registro multi-worker |
 
 ---
 
@@ -202,12 +206,14 @@ uv run pytest tests/optimizacion/control_reanudacion -q -k import
 
 | Item | Estado |
 | --- | --- |
-| `classical_selection.py` → `raiz_corrida` / `run_id` | **No cableado aun** |
-| Sincronizacion de muestreador TPE al reanudar | Solo `RandomSampler` cubierto |
+| `classical_selection.py` → `raiz_corrida` / `run_id` | **Cableado** (Modulo 2.4, ver `2.4-HPO/README.md`) |
+| Sincronizacion de muestreador TPE al reanudar | Solo `RandomSampler` cubierto; con `TPESampler` ahora se advierte explicitamente (antes silencioso) — limitacion conocida, ver ADR-012 |
 | Stub `forecasting/control_reanudacion/` | Otro modulo; **no tocar** |
 
-El proximo paso natural del Modulo 2 es pasar `raiz_corrida` desde
-`classical_selection` (o la CLI) usando esta guia.
+`seleccionar_configuracion_clasica` ya acepta `raiz_corrida`/`run_id` (los
+reenvia a `ejecutar_estudio`). `seleccionar_por_panel` **rechaza** `run_id`
+explicito (colisionaria entre SKUs); para persistencia en modo panel, llamar
+`seleccionar_configuracion_clasica` por SKU con un `run_id` propio.
 
 ---
 
