@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 
 import numpy as np
 import pytest
@@ -12,6 +13,7 @@ from tests._dobles import (
     fabrica_rota,
 )
 
+from pred_engine.optimizacion.optimizadores.HPO.contratos import InfoTrial
 from pred_engine.optimizacion.optimizadores.HPO.errores import EstudioError
 from pred_engine.optimizacion.optimizadores.HPO.espacio import (
     Categorico,
@@ -195,6 +197,86 @@ def test_espacio_casi_totalmente_invalido_lanza_estudioerror():
         )
 
 
+def test_cada_trial_registra_timestamp_iso8601():
+    y = _serie_objetivo()
+    resultado = ejecutar_estudio(
+        y,
+        _espacio(),
+        fabrica_nivel_constante,
+        n_trials=3,
+        min_train=20,
+        estacionalidad=1,
+        seed=0,
+    )
+    assert len(resultado.trials) == 3
+    for trial in resultado.trials:
+        assert trial.timestamp is not None
+        datetime.fromisoformat(trial.timestamp)  # no lanza si es ISO-8601 valido
+
+
+def test_warm_start_inyecta_historico_sin_reevaluarlo():
+    # El historico "previo" simula trials ya evaluados en OTRA corrida
+    # (ej. un segmento anterior de la misma serie, SKU lumpy) -- deben
+    # aparecer en el resultado sin pasar por `fabrica_nivel_constante` de
+    # nuevo: si `fabrica_rota` se usara aca en su lugar, un trial
+    # reevaluado fallaria y esta prueba lo detectaria.
+    y = _serie_objetivo()
+    historico = [
+        InfoTrial(
+            numero=0,
+            estado="completado",
+            valor=1.23,
+            parametros={"nivel": 42.0},
+            atributos={},
+        ),
+        InfoTrial(
+            numero=1,
+            estado="completado",
+            valor=4.56,
+            parametros={"nivel": 7.0},
+            atributos={},
+        ),
+    ]
+    resultado = ejecutar_estudio(
+        y,
+        _espacio(),
+        fabrica_rota,  # si se reevaluaran, marcarian n_fallidos > 0
+        n_trials=3,
+        min_train=20,
+        estacionalidad=1,
+        seed=0,
+        historico_previo=historico,
+    )
+    assert len(resultado.trials) == 3 + 2
+    valores = {t.valor for t in resultado.trials}
+    assert {1.23, 4.56} <= valores
+    assert resultado.n_fallidos == 3  # solo los 3 trials NUEVOS (fabrica_rota)
+
+
+def test_warm_start_con_espacio_incompatible_no_falla_el_estudio():
+    y = _serie_objetivo()
+    historico = [
+        InfoTrial(
+            numero=0,
+            estado="completado",
+            valor=1.0,
+            parametros={"parametro_que_no_existe": 1},
+            atributos={},
+        )
+    ]
+    resultado = ejecutar_estudio(
+        y,
+        _espacio(),
+        fabrica_nivel_constante,
+        n_trials=2,
+        min_train=20,
+        estacionalidad=1,
+        seed=0,
+        historico_previo=historico,
+    )
+    assert len(resultado.trials) == 2  # el trial incompatible se descarto
+
+
 def test_poda_reduce_las_ventanas_evaluadas_respecto_al_modo_sin_poda():
     y = _serie_objetivo()
     reglas_con_poda = ReglasPoda(min_ventanas=4, factor_reduccion=2)
@@ -212,3 +294,45 @@ def test_poda_reduce_las_ventanas_evaluadas_respecto_al_modo_sin_poda():
     ventanas_evaluadas = sum(t.n_ventanas for t in resultado.trials)
     ventanas_sin_poda = len(resultado.ventanas) * len(resultado.trials)
     assert ventanas_evaluadas < ventanas_sin_poda
+
+
+def test_asha_reduce_el_costo_de_evaluacion_en_al_menos_30_por_ciento():
+    """TASK-HPO-5.0-C1. Se usa 'ventanas evaluadas' (no tiempo de reloj)
+    como proxy del costo computacional: cada ventana walk-forward evaluada
+    es un ajuste+prediccion real, proporcional al tiempo de computo, sin la
+    varianza de medir reloj en un CI compartido."""
+    y = _serie_objetivo(n=60)
+    reglas_con_poda = ReglasPoda(min_ventanas=4, factor_reduccion=2)
+    resultado = ejecutar_estudio(
+        y,
+        _espacio(),
+        fabrica_nivel_constante,
+        n_trials=30,
+        min_train=20,
+        estacionalidad=1,
+        seed=7,
+        reglas=reglas_con_poda,
+    )
+    ventanas_evaluadas = sum(t.n_ventanas for t in resultado.trials)
+    ventanas_sin_poda = len(resultado.ventanas) * len(resultado.trials)
+    reduccion = 1 - (ventanas_evaluadas / ventanas_sin_poda)
+    assert reduccion >= 0.30
+
+
+def test_todos_los_trials_podados_tienen_motivo_auditable():
+    """TASK-HPO-5.0-C1: el registro de auditoria debe justificar cada poda."""
+    y = _serie_objetivo(n=60)
+    reglas_con_poda = ReglasPoda(min_ventanas=4, factor_reduccion=2)
+    resultado = ejecutar_estudio(
+        y,
+        _espacio(),
+        fabrica_nivel_constante,
+        n_trials=30,
+        min_train=20,
+        estacionalidad=1,
+        seed=7,
+        reglas=reglas_con_poda,
+    )
+    podados = [t for t in resultado.trials if t.estado == "podado"]
+    assert len(podados) > 0
+    assert all(t.motivo for t in podados)

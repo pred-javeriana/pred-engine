@@ -71,7 +71,35 @@ class Categorico:
         return self.opciones[indice]
 
 
-Parametro = Entero | Flotante | Categorico
+@dataclass(frozen=True, slots=True)
+class Ordinal:
+    """Categorico con orden explicito, codificado como el indice entero de
+    `niveles` (0..len(niveles)-1).
+
+    TPE trata un entero como continuo ordenado -- justo la propiedad que un
+    ordinal necesita (ej. 'bajo' < 'medio' < 'alto') y que un `Categorico`
+    (universo intercambiable, sin nocion de cercania) no preserva. El nivel
+    semantico se recupera indexando `niveles` con el entero muestreado; ver
+    `nivel_de`.
+    """
+
+    nombre: str
+    niveles: tuple[Any, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.niveles) < 2:
+            raise EspacioInvalidoError(f"{self.nombre}: ordinal requiere >= 2 niveles")
+
+    def muestrear(self, rng: np.random.Generator) -> int:
+        return int(rng.integers(0, len(self.niveles)))
+
+
+def nivel_de(parametro: Ordinal, indice: int) -> Any:
+    """Decodifica el indice entero muestreado de vuelta al nivel semantico."""
+    return parametro.niveles[indice]
+
+
+Parametro = Entero | Flotante | Categorico | Ordinal
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +219,12 @@ def _parametro_canonico(parametro: Parametro) -> dict[str, Any]:
             "tipo": "categorico",
             "nombre": parametro.nombre,
             "opciones": list(parametro.opciones),
+        }
+    if isinstance(parametro, Ordinal):
+        return {
+            "tipo": "ordinal",
+            "nombre": parametro.nombre,
+            "niveles": list(parametro.niveles),
         }
     raise TypeError(f"tipo de parametro no soportado: {type(parametro)!r}")
 

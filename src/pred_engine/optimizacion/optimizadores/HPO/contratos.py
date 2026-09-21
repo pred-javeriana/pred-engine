@@ -23,7 +23,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from pred_engine.optimizacion.optimizadores.HPO.espacio import EspacioBusqueda
 
 EstadoTrialBackend = Literal["completado", "podado", "fallido"]
 
@@ -71,6 +74,18 @@ class EstudioHPO(Protocol):
     ) -> None: ...
 
     def trials_finalizados(self) -> Sequence[InfoTrial]: ...
+
+    def agregar_trials_historicos(
+        self, historico: Sequence[InfoTrial], *, espacio: EspacioBusqueda
+    ) -> int:
+        """Inyecta trials de un historico EXTERNO (otra corrida, otro
+        segmento de la misma serie) como si ya hubieran sido evaluados en
+        esta corrida -- warm start. Distinto de reanudar una corrida
+        interrumpida (misma corrida, mismo `run_id`): aqui el historico
+        viene de OTRA corrida y no participa en la huella de esta. Retorna
+        cuantos trials del historico se pudieron inyectar (los incompatibles
+        con `espacio` se descartan, no abortan la inyeccion completa)."""
+        ...
 
 
 class ProveedorMotivoPoda(Protocol):

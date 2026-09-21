@@ -22,6 +22,7 @@ from typing import Any, cast
 import optuna
 from optuna.trial import TrialState, create_trial
 
+from pred_engine.comun.logger import get_logger
 from pred_engine.optimizacion.optimizadores.HPO.asha import DecisionPoda, DecisorASHA
 from pred_engine.optimizacion.optimizadores.HPO.contratos import (
     EstadoTrialBackend,
@@ -34,6 +35,7 @@ from pred_engine.optimizacion.optimizadores.HPO.espacio import (
     Entero,
     EspacioBusqueda,
     Flotante,
+    Ordinal,
 )
 
 _ESTADO_A_OPTUNA: dict[EstadoTrialBackend, TrialState] = {
@@ -44,6 +46,8 @@ _ESTADO_A_OPTUNA: dict[EstadoTrialBackend, TrialState] = {
 _OPTUNA_A_ESTADO: dict[TrialState, EstadoTrialBackend] = {
     v: k for k, v in _ESTADO_A_OPTUNA.items()
 }
+
+_logger = get_logger(__name__)
 
 
 class PodadorASHAOptuna(optuna.pruners.BasePruner):
@@ -142,6 +146,65 @@ class _EstudioOptuna:
                 )
             )
         return salida
+
+    def agregar_trials_historicos(
+        self, historico: Sequence[InfoTrial], *, espacio: EspacioBusqueda
+    ) -> int:
+        semillas = semillas_desde_historico(historico, espacio=espacio)
+        return inyectar_historico(self._study, semillas)
+
+
+def semillas_desde_historico(
+    historico: Sequence[InfoTrial], *, espacio: EspacioBusqueda
+) -> list[optuna.trial.FrozenTrial]:
+    """Traduce un historico EXTERNO (`InfoTrial` de otra corrida) a
+    `FrozenTrial` de Optuna, listos para `inyectar_historico` -- warm start
+    (TASK-HPO-4.0-A2). Distinto de `reanudar_estudio`: ese reconstruye la
+    MISMA corrida interrumpida desde su propio `backend.jsonl`; esto importa
+    evidencia de OTRA corrida (ej. un segmento previo del mismo SKU) para que
+    TPE arranque informado en vez de con `n_arranque` trials aleatorios --
+    util quando la corrida actual tiene pocas ventanas informativas (SKU
+    lumpy/disperso).
+
+    Un trial del historico se descarta (no aborta el resto) si sus
+    parametros no calzan con `espacio`: el espacio de busqueda pudo cambiar
+    entre la corrida origen y la actual."""
+    nombres_validos = {p.nombre for p in espacio.parametros}
+    distribuciones = {p.nombre: distribucion_de(p) for p in espacio.parametros}
+
+    semillas: list[optuna.trial.FrozenTrial] = []
+    for info in historico:
+        if info.estado not in _ESTADO_A_OPTUNA:
+            continue
+        if not set(info.parametros).issubset(nombres_validos):
+            continue
+        estado = _ESTADO_A_OPTUNA[info.estado]
+        try:
+            semilla = create_trial(
+                state=estado,
+                value=info.valor if estado != TrialState.FAIL else None,
+                params=dict(info.parametros),
+                distributions={
+                    nombre: distribuciones[nombre] for nombre in info.parametros
+                },
+                user_attrs=dict(info.atributos) | {"warm_start_origen": True},
+            )
+        except ValueError:
+            # Parametro presente pero con un valor fuera del rango vigente
+            # del espacio actual (ej. `Entero` cuyo `alto` se redujo).
+            continue
+        semillas.append(semilla)
+    return semillas
+
+
+def inyectar_historico(
+    study: optuna.study.Study, semillas: Sequence[optuna.trial.FrozenTrial]
+) -> int:
+    """Agrega `semillas` (de `semillas_desde_historico`) a `study` como
+    trials ya evaluados. Retorna cuantas se inyectaron."""
+    for semilla in semillas:
+        study.add_trial(semilla)
+    return len(semillas)
 
 
 def persistir_estudio_hpo(estudio: EstudioHPO, ruta: str | Path) -> Path:
@@ -250,10 +313,30 @@ def _sincronizar_sampler_aleatorio(
     `add_trial` restaura trials finalizados pero no consume el estado del
     muestreador; sin este avance, el siguiente `ask()` repite la primera
     muestra de la secuencia.
+
+    Solo cubre `RandomSampler` (limitacion conocida, ver ADR-012). Con
+    `TPESampler` el RNG interno de su fase de arranque en frio SI se
+    reinicia al reanudar -- confirmado empiricamente: produce trials
+    duplicados de configuraciones ya evaluadas antes de la interrupcion. No
+    se replica aqui el mismo truco (auxiliar + `tell(..., FAIL)`) porque
+    para TPE el conteo de muestras del RNG por `ask()` no es necesariamente
+    constante (depende de cuantos trials 'buenos'/'malos' ve al decidir);
+    un replay que asuma que si lo es podria dar una falsa sensacion de
+    reproducibilidad sin garantizarla. Se advierte en su lugar para que la
+    perdida de presupuesto de trials sea visible, no silenciosa.
     """
     if n_trials_cargados <= 0:
         return
     if not isinstance(sampler, optuna.samplers.RandomSampler):
+        if isinstance(sampler, optuna.samplers.TPESampler):
+            _logger.warning(
+                "Reanudando con TPESampler: %d trials restaurados desde "
+                "checkpoint, pero el RNG de arranque en frio del sampler no "
+                "se resincroniza (limitacion conocida, ver ADR-012). Las "
+                "primeras propuestas de esta corrida pueden repetir "
+                "configuraciones ya evaluadas antes de la interrupcion.",
+                n_trials_cargados,
+            )
         return
 
     auxiliar = optuna.create_study(direction="minimize", sampler=sampler)
@@ -276,6 +359,8 @@ def _sincronizar_sampler_aleatorio(
                 )
             elif isinstance(parametro, Categorico):
                 trial.suggest_categorical(parametro.nombre, parametro.opciones)
+            elif isinstance(parametro, Ordinal):
+                trial.suggest_int(parametro.nombre, 0, len(parametro.niveles) - 1)
             else:
                 raise TypeError(f"tipo de parametro no soportado: {type(parametro)!r}")
         auxiliar.tell(trial, state=TrialState.FAIL)
@@ -293,7 +378,7 @@ def reanudar_estudio(
     if not ruta.exists():
         return study
 
-    distribuciones = {p.nombre: _distribucion_de(p) for p in espacio.parametros}
+    distribuciones = {p.nombre: distribucion_de(p) for p in espacio.parametros}
     n_trials_cargados = 0
     with ruta.open("r", encoding="utf-8") as archivo:
         for linea in archivo:
@@ -320,8 +405,8 @@ def reanudar_estudio(
     return study
 
 
-def _distribucion_de(
-    parametro: Entero | Flotante | Categorico,
+def distribucion_de(
+    parametro: Entero | Flotante | Categorico | Ordinal,
 ) -> optuna.distributions.BaseDistribution:
     if isinstance(parametro, Entero):
         return optuna.distributions.IntDistribution(
@@ -333,6 +418,8 @@ def _distribucion_de(
         )
     if isinstance(parametro, Categorico):
         return optuna.distributions.CategoricalDistribution(parametro.opciones)
+    if isinstance(parametro, Ordinal):
+        return optuna.distributions.IntDistribution(0, len(parametro.niveles) - 1)
     raise TypeError(f"tipo de parametro no soportado: {type(parametro)!r}")
 
 

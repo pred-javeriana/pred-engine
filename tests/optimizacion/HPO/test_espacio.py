@@ -12,6 +12,8 @@ from pred_engine.optimizacion.optimizadores.HPO.espacio import (
     Entero,
     EspacioBusqueda,
     Flotante,
+    Ordinal,
+    nivel_de,
 )
 
 
@@ -60,6 +62,33 @@ def test_categorico_cubre_todas_las_opciones():
 def test_categorico_opciones_vacias_es_invalido():
     with pytest.raises(EspacioInvalidoError):
         Categorico("x", ())
+
+
+def test_ordinal_muestrea_indices_dentro_de_rango():
+    rng = np.random.default_rng(0)
+    parametro = Ordinal("nivel", ("bajo", "medio", "alto"))
+    indices = {parametro.muestrear(rng) for _ in range(200)}
+    assert indices <= {0, 1, 2}
+    assert len(indices) > 1
+
+
+def test_ordinal_nivel_de_decodifica_el_indice():
+    parametro = Ordinal("nivel", ("bajo", "medio", "alto"))
+    assert nivel_de(parametro, 0) == "bajo"
+    assert nivel_de(parametro, 2) == "alto"
+
+
+def test_ordinal_requiere_al_menos_dos_niveles():
+    with pytest.raises(EspacioInvalidoError):
+        Ordinal("nivel", ("unico",))
+
+
+def test_ordinal_aparece_en_descripcion_canonica():
+    espacio = EspacioBusqueda(parametros=(Ordinal("nivel", ("bajo", "alto")),))
+    descripcion = espacio.descripcion_canonica()
+    assert descripcion["parametros"] == [
+        {"tipo": "ordinal", "nombre": "nivel", "niveles": ["bajo", "alto"]}
+    ]
 
 
 def test_restriccion_rechaza_configuracion_degenerada():

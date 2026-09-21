@@ -16,6 +16,7 @@ from pred_engine.optimizacion.optimizadores.HPO.espacio import EspacioBusqueda, 
 from pred_engine.optimizacion.optimizadores.HPO.estudio import ejecutar_estudio
 from pred_engine.optimizacion.optimizadores.HPO.muestreadores import (
     construir_muestreador_aleatorio,
+    construir_muestreador_tpe,
 )
 
 
@@ -128,3 +129,37 @@ def test_interrupcion_y_recuperacion_misma_frontera(tmp_path: Path) -> None:
         )
 
     assert _clave(reanudado) == _clave(continuo)
+
+
+def test_reanudacion_con_tpe_preserva_los_trials_ya_evaluados(tmp_path: Path) -> None:
+    """Limitacion conocida (ADR-012): a diferencia de RandomSampler, el RNG
+    de arranque en frio de `TPESampler` NO se resincroniza al reanudar (solo
+    se advierte por logging, ver `adaptador_optuna._sincronizar_sampler_aleatorio`).
+    Esta prueba caracteriza lo que SI esta garantizado -- la corrida
+    reanudada completa sin error y los trials evaluados ANTES de la
+    interrupcion se preservan identicos -- sin afirmar (a diferencia de la
+    prueba equivalente con RandomSampler arriba) que la corrida completa
+    coincida con una corrida continua: eso es precisamente lo que no se
+    garantiza con TPE hoy."""
+    kwargs_partida = _kwargs(tmp_path, "partida-tpe", n_trials=6)
+    kwargs_partida["muestreador"] = construir_muestreador_tpe(seed=0)
+    bomba = _FabricaBomba(n_explotar=3)
+    kwargs_partida["fabrica"] = bomba
+    with pytest.raises(KeyboardInterrupt):
+        ejecutar_estudio(**kwargs_partida)
+
+    manifiesto = AlmacenManifiestosFs(tmp_path).cargar("partida-tpe")
+    assert manifiesto.estado is EstadoCorrida.INTERRUMPIDA
+    trials_antes = manifiesto.n_trials_finalizados
+    assert trials_antes == 2
+
+    kwargs_reanudado = _kwargs(tmp_path, "partida-tpe", n_trials=6)
+    kwargs_reanudado["muestreador"] = construir_muestreador_tpe(seed=0)
+    reanudado = ejecutar_estudio(**kwargs_reanudado)
+
+    final = AlmacenManifiestosFs(tmp_path).cargar("partida-tpe")
+    assert final.estado is EstadoCorrida.COMPLETADA
+    # Se completan los 6 trials pedidos (no se pierde presupuesto), aunque
+    # algunos de los nuevos puedan repetir configuraciones ya evaluadas.
+    reales = [t for t in reanudado.trials if t.motivo != "configuracion_invalida"]
+    assert len(reales) == 6

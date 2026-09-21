@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,7 @@ from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
 from pred_engine.optimizacion.optimizadores.HPO.asha import DecisorASHA
 from pred_engine.optimizacion.optimizadores.HPO.contratos import (
     EstudioHPO,
+    InfoTrial,
     ProveedorMotivoPoda,
     TrialHPO,
 )
@@ -45,6 +48,7 @@ from pred_engine.optimizacion.optimizadores.HPO.espacio import (
     Entero,
     EspacioBusqueda,
     Flotante,
+    Ordinal,
     Parametro,
 )
 from pred_engine.optimizacion.optimizadores.HPO.muestreadores import (
@@ -114,6 +118,7 @@ def ejecutar_estudio(
     controlador: ControladorReanudacion | None = None,
     raiz_corrida: str | Path | None = None,
     run_id: str | None = None,
+    historico_previo: Sequence[InfoTrial] | None = None,
 ) -> ResultadoEstudio:
     serie = np.asarray(y, dtype=float)
     if serie.ndim != 1:
@@ -191,12 +196,24 @@ def ejecutar_estudio(
         )
         indice_trial = 0
 
+    if historico_previo and indice_trial == 0:
+        n_inyectados = study.agregar_trials_historicos(
+            historico_previo, espacio=espacio
+        )
+        _logger.info(
+            "Warm start: %d/%d trials del historico previo inyectados en %s",
+            n_inyectados,
+            len(historico_previo),
+            familia,
+        )
+
     intentos_invalidos = 0
     try:
         while indice_trial < n_trials:
             trial_id = f"{familia}-{sku_id or 'panel'}-{indice_trial:04d}"
             trial = study.ask()
             trial.set_user_attr("trial_id", trial_id)
+            trial.set_user_attr("timestamp", datetime.now(UTC).isoformat())
             trial.set_user_attr("familia", familia)
             if sku_id is not None:
                 trial.set_user_attr("sku_id", sku_id)
@@ -210,6 +227,7 @@ def ejecutar_estudio(
                 )
                 intentos_invalidos += 1
                 if sesion is not None:
+                    assert controlador_efectivo is not None
                     controlador_efectivo.checkpoint(
                         sesion, n_trials_finalizados=indice_trial
                     )
@@ -240,6 +258,7 @@ def ejecutar_estudio(
             _correr_trial(trial, ejecutor, study, podador, reglas_efectivas)
             indice_trial += 1
             if sesion is not None:
+                assert controlador_efectivo is not None
                 controlador_efectivo.checkpoint(
                     sesion, n_trials_finalizados=indice_trial
                 )
@@ -252,6 +271,7 @@ def ejecutar_estudio(
             familia=familia,
         )
         if sesion is not None:
+            assert controlador_efectivo is not None
             controlador_efectivo.completar(sesion, n_trials_finalizados=indice_trial)
         _logger.info(
             "Estudio %s completado: %d completados, %d podados, %d fallidos",
@@ -263,11 +283,13 @@ def ejecutar_estudio(
         return resultado
     except EstudioError:
         if sesion is not None:
+            assert controlador_efectivo is not None
             controlador_efectivo.fallar(sesion, n_trials_finalizados=indice_trial)
         raise
     except (Exception, KeyboardInterrupt):
         if sesion is not None:
             try:
+                assert controlador_efectivo is not None
                 controlador_efectivo.interrumpir(
                     sesion, n_trials_finalizados=indice_trial
                 )
@@ -304,6 +326,8 @@ def _sugerir_parametro(trial: TrialHPO, parametro: Parametro) -> Any:
         )
     if isinstance(parametro, Categorico):
         return trial.suggest_categorical(parametro.nombre, parametro.opciones)
+    if isinstance(parametro, Ordinal):
+        return trial.suggest_int(parametro.nombre, 0, len(parametro.niveles) - 1)
     raise TypeError(f"tipo de parametro no soportado: {type(parametro)!r}")
 
 
