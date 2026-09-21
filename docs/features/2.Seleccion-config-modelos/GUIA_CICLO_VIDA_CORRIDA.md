@@ -11,10 +11,13 @@ nuevos motores) sin romper reanudacion ni reproducibilidad.
 | `2.9-Control-Reanudacion/API_SPECIFICATION.md` | Contratos y firmas |
 | `2.4-HPO/README.md` | TPE/ASHA: que se implemento, benchmarks |
 | `2.4-HPO/API_SPECIFICATION.md` | Contratos y firmas de HPO (warm start, `Ordinal`) |
+| `2.5-MLSelectionStrategy/README.md` | Familia ML: LightGBM + HPO, benchmark, limitaciones |
+| `2.5-MLSelectionStrategy/API_SPECIFICATION.md` | Firmas de ML y del nucleo compartido `seleccion_hpo.py` |
 | `docs/adr/ADR-010-*.md` | Manifiesto vs backend Optuna |
 | `docs/adr/ADR-011-*.md` | Huella, atomico, frontera de trial |
 | `docs/adr/ADR-012-*.md` | TPE delegado a Optuna, no reimplementado |
 | `docs/adr/ADR-013-*.md` | ASHA secuencial, sin registro multi-worker |
+| `docs/adr/ADR-014-*.md` | LightGBM, features autoregresivos y pool `spawn` |
 
 ---
 
@@ -214,6 +217,16 @@ uv run pytest tests/optimizacion/control_reanudacion -q -k import
 reenvia a `ejecutar_estudio`). `seleccionar_por_panel` **rechaza** `run_id`
 explicito (colisionaria entre SKUs); para persistencia en modo panel, llamar
 `seleccionar_configuracion_clasica` por SKU con un `run_id` propio.
+
+**Familia ML (2.5):** `seleccionar_configuracion_ml` acepta `raiz_corrida` /
+`run_id` igual que clasicos. `MLSelectionStrategy(raiz_corrida=..., sesion=...)`
+deriva el `run_id` como `ml-{sku_id}-{sesion}`; `sesion` es obligatoria si hay
+`raiz_corrida`, para que el `run_id` sea estable entre interrupcion y
+reanudacion. El panel (`seleccionar_por_panel` / `seleccionar_por_panel_ml`)
+usa procesos `spawn` (`optimizadores/seleccion_hpo.py`): todo script con
+`n_procesos > 1` debe llevar `if __name__ == "__main__":`, tambien en Linux
+(con `fork` LightGBM se cuelga, ver ADR-014). Para anadir una familia nueva
+(p. ej. 2.6 DL), reutilizar `seleccion_hpo.py` en vez de copiar el bucle.
 
 ---
 
