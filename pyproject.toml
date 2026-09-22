@@ -17,6 +17,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Familia fundacional (Chronos-2, ADR-015). Opcional: arrastra torch y CI no
+# la instala; la version de chronos-forecasting coincide con CHRONOS2_ZERO_SHOT.
+foundation = [
+    "chronos-forecasting==2.3.2",
+    "torch>=2.2,<3",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -79,6 +85,8 @@ include = [
     "src/pred_engine/optimizacion/optimizadores/HPO",
     "src/pred_engine/optimizacion/optimizadores/seleccion_hpo.py",
     "src/pred_engine/optimizacion/optimizadores/modelos_machine_learning",
+    "src/pred_engine/comun/modelos/modelos_fundacionales",
+    "src/pred_engine/optimizacion/optimizadores/modelos_fundacionales",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"

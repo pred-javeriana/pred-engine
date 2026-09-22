@@ -15,6 +15,19 @@ Dependency manifest for `pred-engine` — updated on every dependency change
 | statsmodels | >=0.14 | SARIMAX (`comun.modelos.modelos_clasicos.sarima`) y descomposición STL (`aumentacion.mbb`) |
 | optuna | >=4.0 | Sampler TPE multivariado y `Study`/pruner del motor de HPO (`optimizacion.optimizadores.HPO`) — ver ADR-02-006 |
 
+## Optional extra `foundation`
+
+Instalar con `uv sync --extra foundation`. CI no lo instala: las pruebas del
+modelo real llevan `importorskip` y `@pytest.mark.slow`.
+
+| Package | Version constraint | Purpose |
+|---------|-------------------|---------|
+| chronos-forecasting | ==2.3.2 | `Chronos2Pipeline` zero-shot (`comun.modelos.modelos_fundacionales`) — ver ADR-015. Debe coincidir con `CHRONOS2_ZERO_SHOT.version_libreria` |
+| torch | >=2.2,<3 | Backend de inferencia de Chronos-2 (CPU, fp32, algoritmos deterministas) |
+
+Pesos: `amazon/chronos-2` (Apache-2.0) en la revision fijada por
+`CHRONOS2_ZERO_SHOT.revision`; se descargan una vez a la cache de Hugging Face.
+
 > Direct runtime dependencies are added here as each layer is implemented.
 > Vendor SDKs (google-genai, openai, anthropic) are intentionally not used;
 > each provider is a thin `httpx` adapter behind `LlmProvider`.

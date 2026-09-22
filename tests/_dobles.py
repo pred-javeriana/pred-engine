@@ -111,3 +111,40 @@ def fabrica_falla_primeras_n(n_fallos: int):
         return PronosticadorUltimoValor(seed=seed)
 
     return _fabrica
+
+
+class PipelineFalso:
+    """Doble de `PipelineFundacional`: cuantiles = ultimo valor + desplazamiento.
+
+    Registra la longitud de cada contexto recibido y permite verificar que el
+    modelo solo ve lo que se le paso a `fit`.
+    """
+
+    def __init__(
+        self,
+        cuantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
+        desplazamientos: tuple[float, ...] = (-5.0, 0.0, 1.0),
+    ) -> None:
+        self._cuantiles = cuantiles
+        self._desplazamientos = np.asarray(desplazamientos, dtype=float)
+        self.contextos: list[np.ndarray] = []
+
+    @property
+    def cuantiles(self) -> tuple[float, ...]:
+        return self._cuantiles
+
+    def pronosticar_cuantiles(self, contexto: np.ndarray, horizonte: int) -> np.ndarray:
+        self.contextos.append(np.array(contexto, copy=True))
+        ultimo = float(contexto[-1])
+        return np.tile((ultimo + self._desplazamientos)[:, None], (1, horizonte))
+
+
+class PipelineQueFalla:
+    """Doble que falla si se invoca (prueba que algo NO carga el modelo)."""
+
+    @property
+    def cuantiles(self) -> tuple[float, ...]:
+        raise AssertionError("no deberia consultarse el modelo")
+
+    def pronosticar_cuantiles(self, contexto: np.ndarray, horizonte: int) -> np.ndarray:
+        raise RuntimeError("inferencia rota")
