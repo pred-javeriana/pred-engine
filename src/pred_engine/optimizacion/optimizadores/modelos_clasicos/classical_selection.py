@@ -149,7 +149,7 @@ def seleccionar_configuracion_clasica(
         muestreador=muestreador,
         reglas=reglas,
         seed=seed,
-        familia="clasicos",
+        familia="classical",
         sku_id=sku_id,
         raiz_corrida=raiz_corrida,
         run_id=run_id,
