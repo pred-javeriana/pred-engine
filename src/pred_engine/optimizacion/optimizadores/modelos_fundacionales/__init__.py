@@ -1,5 +1,11 @@
-"""PRED analytical engine.
+"""Familia fundacional: entrega la configuracion base de Chronos-2, sin optimizar."""
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
-"""
+from pred_engine.optimizacion.optimizadores.modelos_fundacionales.estrategia import (
+    FAMILIA_FUNDACIONAL,
+    FoundationSelectionStrategy,
+)
+
+__all__ = [
+    "FAMILIA_FUNDACIONAL",
+    "FoundationSelectionStrategy",
+]
