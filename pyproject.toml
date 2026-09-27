@@ -85,6 +85,7 @@ include = [
     "src/pred_engine/optimizacion/optimizadores/HPO",
     "src/pred_engine/optimizacion/optimizadores/seleccion_hpo.py",
     "src/pred_engine/optimizacion/optimizadores/modelos_machine_learning",
+    "src/pred_engine/optimizacion/optimizadores/modelos_deep_learning",
     "src/pred_engine/comun/modelos/modelos_fundacionales",
     "src/pred_engine/optimizacion/optimizadores/modelos_fundacionales",
 ]

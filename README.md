@@ -128,6 +128,17 @@ uv run pred-engine verify --parquet data/processed/inventory_data.parquet
 ```
 
 See `docs/features/1.4-artefacto-salida/`.
+
+## Module 2 deep-learning selection
+
+`DLSelectionStrategy` provides a trainable NumPy multilayer predictor and a
+bounded architecture/training search through the shared TPE, ASHA and causal
+Walk-Forward engine. Register it explicitly as family `dl`; the initial router
+policy permits DL only for `smooth` and `erratic` SKUs.
+
+See [DL selection API and validation](docs/features/2.Seleccion-config-modelos/2.6-DLSelectionStrategy/README.md)
+for configuration, result evidence and shared recovery behavior.
+
 ## Phase 0 pre-ingestion simulation (data augmentation)
 
 `pred_engine.aumentacion` builds the synthetic stress panel that PRED is

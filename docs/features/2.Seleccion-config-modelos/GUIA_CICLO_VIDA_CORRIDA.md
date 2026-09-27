@@ -13,6 +13,7 @@ nuevos motores) sin romper reanudacion ni reproducibilidad.
 | `2.4-HPO/API_SPECIFICATION.md` | Contratos y firmas de HPO (warm start, `Ordinal`) |
 | `2.5-MLSelectionStrategy/README.md` | Familia ML: LightGBM + HPO, benchmark, limitaciones |
 | `2.5-MLSelectionStrategy/API_SPECIFICATION.md` | Firmas de ML y del nucleo compartido `seleccion_hpo.py` |
+| `2.6-DLSelectionStrategy/README.md` | Familia DL: MLP autoregresivo + HPO temporal acotado |
 | `docs/adr/ADR-010-*.md` | Manifiesto vs backend Optuna |
 | `docs/adr/ADR-011-*.md` | Huella, atomico, frontera de trial |
 | `docs/adr/ADR-012-*.md` | TPE delegado a Optuna, no reimplementado |
@@ -225,8 +226,13 @@ deriva el `run_id` como `ml-{sku_id}-{sesion}`; `sesion` es obligatoria si hay
 reanudacion. El panel (`seleccionar_por_panel` / `seleccionar_por_panel_ml`)
 usa procesos `spawn` (`optimizadores/seleccion_hpo.py`): todo script con
 `n_procesos > 1` debe llevar `if __name__ == "__main__":`, tambien en Linux
-(con `fork` LightGBM se cuelga, ver ADR-014). Para anadir una familia nueva
-(p. ej. 2.6 DL), reutilizar `seleccion_hpo.py` en vez de copiar el bucle.
+(con `fork` LightGBM se cuelga, ver ADR-014).
+
+**Familia DL (2.6):** `seleccionar_configuracion_dl` acepta `raiz_corrida` /
+`run_id` sobre el mismo motor HPO. `DLSelectionStrategy(raiz_corrida=..., sesion=...)`
+deriva el `run_id` como un hash SHA-256 de SKU y sesion (`dl-{hash}`); `sesion` es
+obligatoria cuando se define `raiz_corrida`. Reutiliza `seleccion_hpo.py` y
+`control_reanudacion/` sin controladores paralelos (ver `2.6-DLSelectionStrategy/README.md`).
 
 ---
 
