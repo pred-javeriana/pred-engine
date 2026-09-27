@@ -128,6 +128,7 @@ uv run pred-engine verify --parquet data/processed/inventory_data.parquet
 ```
 
 See `docs/features/1.4-artefacto-salida/`.
+
 ## Module 2 deep-learning selection
 
 `DLSelectionStrategy` provides a trainable NumPy multilayer predictor and a
