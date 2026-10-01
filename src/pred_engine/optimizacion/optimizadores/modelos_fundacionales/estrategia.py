@@ -47,6 +47,7 @@ class FoundationSelectionStrategy:
             family=FAMILIA_FUNDACIONAL,
             profile=profile,
             produced_by=type(self).__name__,
+            forecast_config={},
             payload={
                 "configuracion": CHRONOS2_ZERO_SHOT.descripcion_canonica(),
                 "optimizado": False,

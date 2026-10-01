@@ -2,14 +2,13 @@
 
 `pred-engine` is the pure-Python analytical library that powers the
 **PRED** platform (Plataforma de Evaluación y Recomendación de modelos de
-Demanda). It provides the complete forecasting pipeline: L1 ingestion and
-series characterisation, L2 model fitting behind a uniform `BaseForecaster`
-contract, L3 walk-forward evaluation with statistical comparison tests, and
-L4 retrospective validation that produces hold/partial/fail verdicts and
-audit-ready export bundles. The library has no UI and no persistence layer;
-all inputs and outputs are plain NumPy arrays or pandas DataFrames so that
-the `pred-platform` web application can consume them through a clean,
-version-stable interface.
+Demanda). It provides L1 ingestion and series characterisation, L2 model
+selection and fitting behind a uniform `BaseForecaster` contract, and causal
+L3 walk-forward evaluation. L3 statistical comparison and L4 retrospective
+validation (hold/partial/fail verdicts and audit bundles) are not implemented.
+The library has no UI or database; ingestion publishes Parquet under a
+caller-owned data root. Typed artifacts, NumPy arrays and pandas DataFrames
+can be consumed by applications without terminal automation.
 
 PRED is an academic software project developed at Pontificia Universidad
 Javeriana under a software-engineering capstone course. It targets a
@@ -45,6 +44,45 @@ uv run ruff format --check .  # format check (CI mode)
 uv run pre-commit install        # install hooks
 uv run pre-commit run --all-files  # run manually
 ```
+
+## Coordinated backend pipeline
+
+`pred_engine.pipeline.Pipeline` owns the four-stage transition path. Existing
+stage APIs remain independently callable. The default composition routes the
+core classical, ML and DL families using the existing topology matrix;
+foundation is opt-in and requires the `foundation` extra.
+
+```python
+from pred_engine.pipeline import EvaluationSettings, PipelineInput
+from pred_engine.pipeline_setup import build_pipeline
+
+pipeline = build_pipeline(EvaluationSettings(min_train=40), n_trials=4)
+result = pipeline.run(PipelineInput(csv_path="sales.csv", data_root="data"))
+assert result.blocked_stage == "L4"
+assert not result.complete
+# Actual L1, L2 and walk-forward L3 artifacts are available on result.
+```
+
+Canonical CSV inputs need no LLM. Pass an injectable `provider` for the existing
+semantic ingestion path, or `parquet_path` to consume a classified 1.4 artifact.
+L1's published contract automatically becomes per-SKU selection requests; L2's
+selected factory configurations automatically become causal L3 evaluations.
+L3 is diagnostic evidence on the selection history, not an independent
+retrospective verdict.
+
+```bash
+uv run python -m pred_engine.verify
+uv run pred-engine run --csv sales.csv --data-root data --trials 4
+```
+
+The offline proof uses real, bounded SARIMA selection and evaluation. Its exit
+`0` means the integration checks passed, while its report explicitly says
+`complete: false` and `blocked_stage: L4`. The diagnostic `run` command instead
+returns `7` for this unfinished-stage blocker (`1` on stage failure). Existing
+`pred-engine verify --parquet ...` still verifies only the L1 output contract.
+
+See [backend pipeline API and boundaries](docs/features/backend-pipeline/README.md)
+for independent stage execution, errors and the future L4 attachment point.
 
 ## L1 ingestion (raw storage)
 

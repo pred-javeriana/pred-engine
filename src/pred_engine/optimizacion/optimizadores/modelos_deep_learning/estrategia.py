@@ -101,6 +101,8 @@ class DLSelectionStrategy:
             family=FAMILIA_DL,
             profile=profile,
             produced_by=type(self).__name__,
+            forecast_config=dict(mejor.configuracion),
+            forecast_seed=self._seed,
             payload={
                 "hiperparametros": dict(mejor.configuracion),
                 "metrica_objetivo": estudio.metrica_objetivo,

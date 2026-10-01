@@ -22,13 +22,16 @@ jobs:
           version: "latest"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --frozen --extra dev
 
       - name: Lint (ruff)
-        run: uv run ruff check .
+        run: uv run --no-sync ruff check .
 
       - name: Format check (ruff)
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
+
+      - name: Type check (pyright)
+        run: uv run --no-sync pyright
 
       - name: Test with coverage gate
-        run: uv run pytest
+        run: uv run --no-sync pytest

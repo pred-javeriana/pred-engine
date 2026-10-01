@@ -143,6 +143,16 @@ class ClassicalSelectionStrategy:
             family=FAMILIA_CLASICA,
             profile=profile,
             produced_by=type(self).__name__,
+            forecast_config={
+                "p": seleccionada.order[0],
+                "d": seleccionada.order[1],
+                "q": seleccionada.order[2],
+                "P": seleccionada.seasonal_order[0],
+                "D": seleccionada.seasonal_order[1],
+                "Q": seleccionada.seasonal_order[2],
+                "m": seleccionada.seasonal_order[3],
+            },
+            forecast_seed=self._seed,
             payload={
                 # Listas y no tuplas: el payload viaja a JSON en el Modulo 3.
                 "order": list(seleccionada.order),

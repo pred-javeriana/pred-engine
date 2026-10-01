@@ -139,6 +139,11 @@ class MLSelectionStrategy:
             family=FAMILIA_ML,
             profile=profile,
             produced_by=type(self).__name__,
+            forecast_config={
+                **seleccionada.hiperparametros,
+                "m": max((self._espacio or EspacioML()).m, 1),
+            },
+            forecast_seed=self._seed,
             payload={
                 "hiperparametros": dict(seleccionada.hiperparametros),
                 "metrica_objetivo": seleccionada.metrica_objetivo,

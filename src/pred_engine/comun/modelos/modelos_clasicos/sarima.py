@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import warnings
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from statsmodels.tsa.statespace.sarimax import SARIMAXResultsWrapper
 
 from pred_engine.comun.modelos.modelos_clasicos.errores import AjusteModeloError
 from pred_engine.forecasting.base import BaseForecaster
@@ -26,7 +30,7 @@ class SarimaForecaster(BaseForecaster):
         self.seasonal_order = seasonal_order
         self.tendencia = tendencia
         self.max_iter = max_iter
-        self._resultado_ajuste = None
+        self._resultado_ajuste: SARIMAXResultsWrapper | None = None
 
     def fit(self, y: np.ndarray) -> SarimaForecaster:
         from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -44,7 +48,10 @@ class SarimaForecaster(BaseForecaster):
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                self._resultado_ajuste = modelo.fit(disp=False, maxiter=self.max_iter)
+                self._resultado_ajuste = cast(
+                    "SARIMAXResultsWrapper",
+                    modelo.fit(disp=False, maxiter=self.max_iter, return_params=False),
+                )
         except (np.linalg.LinAlgError, ValueError) as exc:
             raise AjusteModeloError(
                 f"SARIMA{self.order}x{self.seasonal_order} no convergio: {exc}"
