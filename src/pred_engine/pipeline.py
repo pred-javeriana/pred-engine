@@ -368,7 +368,7 @@ class Pipeline:
         return EvaluationArtifact(fitting, cfg, tuple(evaluated))
 
     def validate(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
-        """L4: no built-in implementation; an injected validator must cover every SKU."""
+        """L4: an injected validator must cover every SKU; none is built in."""
         if self.validator is None:
             raise StageUnavailableError(PRINCIPAL_STAGES[3].capability)
         result = self.validator(evaluation)

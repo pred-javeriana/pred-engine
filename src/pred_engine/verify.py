@@ -21,7 +21,7 @@ from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.ingesta.pipeline import run_classify_csv, run_verify_parquet
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
-from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (
+from pred_engine.optimizacion.optimizadores.modelos_clasicos import (
     EspacioClasico,
     fabrica_sarima,
 )

@@ -273,6 +273,88 @@ def test_invalid_l4_outputs_never_complete_a_run(tmp_path, output):
     assert raised.value.result.stages[3].state == "failed"
 
 
+def core_request_at(root: Path) -> PipelineInput:
+    source = root / "sales.csv"
+    n = 96
+    pd.DataFrame(
+        {
+            "sku_id": ["core-sku"] * n,
+            "timestamp": pd.date_range("2024-01-01", periods=n),
+            "demand_qty": [20 + 0.35 * i + (i % 5 - 2) for i in range(n)],
+            "lead_time_days": [3] * n,
+        }
+    ).to_csv(source, index=False)
+    return PipelineInput(csv_path=source, data_root=root / "data")
+
+
+def test_default_core_composition_fits_and_evaluates_all_families(tmp_path):
+    pipeline = build_pipeline(
+        EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae"),
+        n_trials=1,
+        seed=17,
+    )
+    result = pipeline.run(core_request_at(tmp_path))
+    assert [c.selection.family for c in result.fitting.candidates] == [
+        "classical",
+        "ml",
+        "dl",
+    ]
+    assert [
+        c.walk_forward.n_ventanas_evaluadas for c in result.evaluation.candidates
+    ] == [4, 4, 4]
+    assert [s.state for s in result.stages] == [
+        "completed",
+        "completed",
+        "completed",
+        "blocked",
+    ]
+    assert result.validation is None
+    assert result.complete is False
+    assert result.blocked_stage == "L4"
+    for candidate in result.evaluation.candidates:
+        assert np.isfinite(candidate.walk_forward.valor_agregado)
+        assert np.all(np.isfinite(candidate.fitted.model.predict(2)))
+        assert candidate.walk_forward.ventanas[0].y_real.tolist() == [32.0, 33.35]
+
+
+def test_real_cli_default_composition_reports_blocker(tmp_path, capsys):
+    request = core_request_at(tmp_path)
+    code = main(
+        [
+            "run",
+            "--csv",
+            str(request.csv_path),
+            "--data-root",
+            str(request.data_root),
+            "--trials",
+            "1",
+            "--min-train",
+            "40",
+            "--horizon",
+            "2",
+            "--step",
+            "14",
+            "--metric",
+            "mae",
+            "--seed",
+            "17",
+        ]
+    )
+    report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 7
+    assert report["complete"] is False
+    assert report["blocked_stage"] == "L4"
+    assert [s["state"] for s in report["stages"]] == [
+        "completed",
+        "completed",
+        "completed",
+        "blocked",
+    ]
+    panel = pd.read_parquet(tmp_path / "data/processed/sales.parquet")
+    assert panel.shape == (96, 5)
+    assert panel["demand_qty"].iloc[:3].tolist() == [18.0, 19.35, 20.7]
+
+
 def test_cli_reports_same_honest_blocker(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         "pred_engine.pipeline_setup.build_pipeline",

@@ -13,9 +13,7 @@ from pred_engine.comun.modelos.modelos_deep_learning import fabrica_dl
 from pred_engine.comun.modelos.modelos_fundacionales.chronos2 import fabrica_fundacional
 from pred_engine.comun.modelos.modelos_machine_learning.lgbm import fabrica_ml
 from pred_engine.comun.walkforward.protocolos import FabricaPronosticador
-from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (
-    fabrica_sarima,
-)
+from pred_engine.optimizacion.optimizadores.modelos_clasicos import fabrica_sarima
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.estrategia import (
     ClassicalSelectionStrategy,
     PresupuestoClasico,
