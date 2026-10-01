@@ -1,11 +1,13 @@
-"""CLI de operador para ingesta 1.2, topologia 1.3 y handoff 1.4."""
+"""Diagnosticos de operador para ingesta y el pipeline backend L1-L4."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
 from pred_engine.comun.llm import (
     DEFAULT_MODELS,
@@ -28,6 +30,9 @@ from pred_engine.ingesta.categorizacion import (
 from pred_engine.ingesta.lector import extract_csv
 from pred_engine.ingesta.salida import OutputHandoffError
 from pred_engine.ingesta.sonda import SemanticAlignmentError, probe_headers
+
+if TYPE_CHECKING:
+    from pred_engine.pipeline import Pipeline, PipelineInput
 
 _logger = get_logger(__name__)
 
@@ -174,6 +179,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Parquet publicado en processed/",
     )
+    run = sub.add_parser("run", help="Diagnosticar el pipeline backend L1-L4")
+    source = run.add_mutually_exclusive_group(required=True)
+    source.add_argument("--csv", type=Path)
+    source.add_argument("--parquet", type=Path, help="Artefacto clasificado 1.4")
+    run.add_argument("--data-root", type=Path, default=Path("data"))
+    run.add_argument("--provider", default=None, help="Sonda semantica opcional")
+    run.add_argument("--api-key", default=None)
+    run.add_argument("--model", default=None)
+    run.add_argument("--timeout", type=float, default=30.0)
+    run.add_argument(
+        "--families",
+        nargs="+",
+        default=["classical", "ml", "dl"],
+        choices=["classical", "ml", "dl", "foundation"],
+    )
+    run.add_argument("--trials", type=int, default=None)
+    run.add_argument("--min-train", type=int, default=40)
+    run.add_argument("--horizon", type=int, default=7)
+    run.add_argument("--step", type=int, default=7)
+    run.add_argument("--seasonality", type=int, default=7)
+    run.add_argument(
+        "--metric", choices=["mae", "rmse", "smape", "mase"], default="mase"
+    )
+    run.add_argument("--seed", type=int, default=0)
     return parser
 
 
@@ -377,6 +406,56 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def diagnose_pipeline(
+    pipeline: Pipeline,
+    request: PipelineInput,
+) -> tuple[int, dict[str, Any]]:
+    """Technical adapter only; the application service owns all stage transitions."""
+    from pred_engine.pipeline import PipelineExecutionError, summarize_run
+
+    try:
+        result = pipeline.run(request)
+    except PipelineExecutionError as exc:
+        summary = summarize_run(exc.result)
+        summary["failed_stage"] = exc.stage
+        return 1, summary
+    return (0 if result.complete else 7), summarize_run(result)
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    from pred_engine.optimizacion.router import PredictorFamily
+    from pred_engine.pipeline import EvaluationSettings, PipelineInput
+    from pred_engine.pipeline_setup import build_pipeline
+
+    try:
+        provider = _build_provider(args)[2] if args.provider is not None else None
+        pipeline = build_pipeline(
+            EvaluationSettings(
+                min_train=args.min_train,
+                horizon=args.horizon,
+                step=args.step,
+                seasonality=args.seasonality,
+                metric=args.metric,
+            ),
+            families=cast(tuple[PredictorFamily, ...], tuple(args.families)),
+            n_trials=args.trials,
+            seed=args.seed,
+        )
+        request = PipelineInput(
+            csv_path=args.csv,
+            parquet_path=args.parquet,
+            data_root=args.data_root,
+            provider=provider,
+            timeout=args.timeout,
+        )
+    except (ValueError, OSError, LlmProviderError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    code, summary = diagnose_pipeline(pipeline, request)
+    print(json.dumps(summary, ensure_ascii=False))
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_json_logger("pred_engine")
     args = build_parser().parse_args(argv)
@@ -395,6 +474,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_classify(args)
     if args.command == "verify":
         return _cmd_verify(args)
+    if args.command == "run":
+        return _cmd_run(args)
     return 1
 
 

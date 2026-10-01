@@ -79,6 +79,9 @@ class SelectionResult(BaseModel):
     produced_by: str = Field(min_length=1)
     policy_version: str = ""
     payload: Mapping[str, Any] = Field(default_factory=dict)
+    # Configuracion consumible por FabricaPronosticador, separada de la evidencia.
+    forecast_config: Mapping[str, Any] | None = None
+    forecast_seed: int = 0
 
     @field_validator("sku_id", "produced_by")
     @classmethod
