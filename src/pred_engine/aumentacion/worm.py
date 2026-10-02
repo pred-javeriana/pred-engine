@@ -71,5 +71,7 @@ def escribir_una_sola_vez(
         raise RuntimeError(
             f"el escritor no materializo el artefacto esperado en {destino}"
         )
+    # Solo lectura tambien a nivel de sistema de archivos, no solo por codigo.
+    destino.chmod(0o444)
     _logger.info("Artefacto depositado bajo politica WORM: %s", destino)
     return destino

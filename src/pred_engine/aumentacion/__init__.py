@@ -2,7 +2,7 @@
 
 Submodulos:
 
-* ``mbb`` - Moving Block Bootstrap sobre residuales STL.
+* ``mbb`` - Moving Block Bootstrap (residuales STL o serie diaria, ADR-016).
 * ``restricciones`` - compuerta de restricciones fisicas (0.3-A).
 * ``divergencia`` - divergencia parametrica (0.3-B1).
 * ``rechazo`` - bucle de rechazo y remuestreo (0.3-B2).
@@ -41,13 +41,18 @@ from pred_engine.aumentacion.exportador_csv import (
     exportar_artefacto_csv,
 )
 from pred_engine.aumentacion.fase0 import (
+    METODOS_AUMENTO,
     ConfiguracionCorrida,
+    MetodoAumento,
     ResultadoFase0,
+    cuadricula_diaria,
     ejecutar_fase_0,
 )
 from pred_engine.aumentacion.rechazo import (
     ResultadoRechazo,
     generar_series_aceptadas,
+    motor_mbb,
+    motor_mbb_directo,
 )
 from pred_engine.aumentacion.restricciones import (
     LimitesLeadTime,
@@ -64,6 +69,7 @@ from pred_engine.aumentacion.worm import (
 
 __all__ = [
     "CONTRACT_VERSION",
+    "METODOS_AUMENTO",
     "OUTPUT_COLUMNS",
     "OUTPUT_CONTRACT",
     "ArtefactoExportado",
@@ -71,6 +77,7 @@ __all__ = [
     "ConfiguracionCorrida",
     "DivergenceRejectionExhausted",
     "LimitesLeadTime",
+    "MetodoAumento",
     "PhysicalConstraintError",
     "ReporteConformidad",
     "ResultadoFase0",
@@ -79,6 +86,7 @@ __all__ = [
     "VeredictoDivergencia",
     "WormOverwriteError",
     "acotar_lead_time",
+    "cuadricula_diaria",
     "aplicar_restricciones_fisicas",
     "describir_contrato",
     "ejecutar_fase_0",
@@ -87,6 +95,8 @@ __all__ = [
     "exportar_artefacto_csv",
     "generar_series_aceptadas",
     "limites_lead_time_desde_semilla",
+    "motor_mbb",
+    "motor_mbb_directo",
     "persistir_bitacora",
     "rectificar_demanda_no_negativa",
     "resolver_ruta_artefacto",
