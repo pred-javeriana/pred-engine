@@ -107,7 +107,7 @@ def test_un_entero_es_aceptado_donde_se_espera_flotante() -> None:
     ("estacional", "valido"),
     [
         ({"m": 0}, True),
-        ({"m": 12, "P": 1, "D": 1, "Q": 1}, True),
+        ({"m": 12, "P": 1, "D": 1, "Q": 1, "tendencia": "n"}, True),
         ({"m": 1}, False),
         ({"m": 0, "P": 1}, False),
         ({"m": 0, "D": 1}, False),
@@ -121,6 +121,30 @@ def test_estacionalidad_sarima_coherente(estacional: dict, valido: bool) -> None
         with pytest.raises(ValidationError) as capturado:
             _ADAPTADOR.validate_python(entrada)
         assert capturado.value.errors()[0]["loc"][-1] == "m"
+
+
+@pytest.mark.parametrize(
+    ("diferencias", "tendencia", "valido"),
+    [
+        ({}, "c", True),
+        ({}, "n", True),
+        ({"d": 1}, "n", True),
+        ({"D": 1}, "n", True),
+        ({"d": 1}, "c", False),
+        ({"D": 1}, "c", False),
+        ({}, "t", False),
+    ],
+)
+def test_tendencia_sarima_coherente_con_la_diferenciacion(
+    diferencias: dict, tendencia: str, valido: bool
+) -> None:
+    entrada = con_configuracion("classical", tendencia=tendencia, **diferencias)
+    if valido:
+        _ADAPTADOR.validate_python(entrada)
+    else:
+        with pytest.raises(ValidationError) as capturado:
+            _ADAPTADOR.validate_python(entrada)
+        assert capturado.value.errors()[0]["loc"][-1] == "tendencia"
 
 
 @pytest.mark.parametrize(
