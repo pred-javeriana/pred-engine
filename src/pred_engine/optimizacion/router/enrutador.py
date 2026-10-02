@@ -5,6 +5,7 @@ from __future__ import annotations
 from pred_engine.comun.logger import get_logger
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
+    RoutingDecision,
     RoutingPolicy,
     SelectionRequest,
     SelectionResult,
@@ -35,6 +36,14 @@ class SelectionRouter:
         self._registry = registry
 
     def route(self, request: SelectionRequest) -> tuple[SelectionResult, ...]:
+        return tuple(self.execute(request, decision) for decision in self.plan(request))
+
+    def plan(self, request: SelectionRequest) -> tuple[RoutingDecision, ...]:
+        """Decisiones de la politica para la solicitud, sin ejecutar estrategias.
+
+        Separado de `execute` para que cada decision (SKU x familia) pueda
+        correr como unidad independiente, incluso en otro proceso.
+        """
         if not isinstance(request, SelectionRequest):
             raise SelectionContractError("request debe ser SelectionRequest")
 
@@ -49,23 +58,25 @@ class SelectionRouter:
             raise RouterConfigurationError(
                 f"la politica {self._policy.version!r} no produjo decisiones"
             )
+        return tuple(decisiones)
 
-        resultados: list[SelectionResult] = []
-        for decision in decisiones:
-            estrategia = self._registry.resolve(decision.family)
-            _logger.info(
-                "Enrutando sku_id=%s clase=%s familia=%s perfil=%s politica=%s",
-                request.sku_id,
-                request.sku_class,
-                decision.family,
-                decision.profile,
-                self._policy.version,
-            )
-            crudo = estrategia.select(request, decision.profile)
-            resultados.append(
-                self._anotar(request, decision.family, decision.profile, crudo)
-            )
-        return tuple(resultados)
+    def execute(
+        self, request: SelectionRequest, decision: RoutingDecision
+    ) -> SelectionResult:
+        """Delegacion de una decision a la estrategia registrada de su familia."""
+        if not isinstance(request, SelectionRequest):
+            raise SelectionContractError("request debe ser SelectionRequest")
+        estrategia = self._registry.resolve(decision.family)
+        _logger.info(
+            "Enrutando sku_id=%s clase=%s familia=%s perfil=%s politica=%s",
+            request.sku_id,
+            request.sku_class,
+            decision.family,
+            decision.profile,
+            self._policy.version,
+        )
+        crudo = estrategia.select(request, decision.profile)
+        return self._anotar(request, decision.family, decision.profile, crudo)
 
     def _anotar(
         self,

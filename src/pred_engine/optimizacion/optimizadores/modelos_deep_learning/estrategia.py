@@ -113,6 +113,8 @@ class DLSelectionStrategy:
                 "n_podados": estudio.n_podados,
                 "n_fallidos": estudio.n_fallidos,
                 "seed": estudio.seed,
-                "estudio": estudio,
+                # Referencia al estudio persistido (2.9); None sin raiz_corrida.
+                # El payload solo lleva datos serializables a JSON.
+                "estudio_hpo": run_id,
             },
         )

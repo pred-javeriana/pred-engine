@@ -1,5 +1,6 @@
 """Resultado comun y despacho real del router sin cambiar su politica inicial."""
 
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -79,7 +80,9 @@ def test_router_invoca_dl_real_con_resultado_comun(clase, perfil):
     assert payload["n_ventanas"] == 6
     assert payload["n_trials"] == 3
     assert payload["n_completados"] + payload["n_podados"] + payload["n_fallidos"] == 3
-    assert payload["hiperparametros"] == payload["estudio"].mejor.configuracion
+    assert payload["hiperparametros"] == resultado.forecast_config
+    assert payload["estudio_hpo"] is None
+    json.dumps(dict(payload))
 
 
 @pytest.mark.parametrize("clase", ["intermittent", "lumpy"])
@@ -140,4 +143,5 @@ def test_persistencia_exige_sesion_y_usa_identidad_estable_segura(tmp_path):
     directorios = list(tmp_path.iterdir())
     assert len(directorios) == 1
     assert directorios[0].name.startswith("dl-")
+    assert a.payload["estudio_hpo"] == directorios[0].name
     assert (directorios[0] / "manifiesto.json").is_file()
