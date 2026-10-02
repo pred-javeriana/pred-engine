@@ -93,8 +93,10 @@ expansivos usando las mismas ventanas para todos los candidatos.
 `DLSelectionStrategy` acepta los mismos parametros de espacio, presupuesto,
 validacion, metrica, reglas, semilla y persistencia. Su `payload` contiene
 `hiperparametros`, `metrica_objetivo`, `valor`, `n_ventanas`, `n_trials`,
-`n_completados`, `n_podados`, `n_fallidos`, `seed` y el `estudio` completo con
-estados/motivos por trial. El SKU, clase y perfil quedan en `SelectionResult`.
+`n_completados`, `n_podados`, `n_fallidos`, `seed` y `estudio_hpo`, la
+referencia al estudio persistido (o `None` sin persistencia); los
+estados y motivos por trial quedan en ese estudio. El payload solo lleva datos
+serializables a JSON. El SKU, clase y perfil quedan en `SelectionResult`.
 Una busqueda sin ganador completo genera `SelectionContractError`, no un
 resultado vacio. La funcion de bajo nivel conserva el estudio sin ganador para
 permitir inspeccionar los fallos.
