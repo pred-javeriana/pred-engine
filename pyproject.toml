@@ -94,6 +94,7 @@ include = [
     "src/pred_engine/pipeline.py",
     "src/pred_engine/run_artifacts.py",
     "src/pred_engine/cli.py",
+    "src/pred_engine/forecasting/adaptador_candidatos",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"

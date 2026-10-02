@@ -75,8 +75,7 @@ class BaseForecaster(ABC):
 class SeasonalNaiveStub(BaseForecaster):
     """Seasonal-naive model: last observed seasonal cycle repeated forward.
 
-    This stub exists solely to exercise the ``BaseForecaster`` contract in
-    the test suite.  It is *not* the production Seasonal Naive model.
+    Also the Module 3 baseline (``instanciar_linea_base``, m=7, ADR-03-006).
     """
 
     def __init__(self, season_length: int = 7, seed: int = 0) -> None:
