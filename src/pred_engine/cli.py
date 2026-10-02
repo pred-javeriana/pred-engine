@@ -502,6 +502,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     from pred_engine.pipeline_setup import build_pipeline
     from pred_engine.run_artifacts import (
+        code_fingerprint,
         library_versions,
         run_identifier,
         sha256_file,
@@ -535,6 +536,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         settings = {name: getattr(args, name) for name in _RUN_SETTINGS} | {
             "reserve_fraction": RESERVE_FRACTION,
             "pred_engine": library_versions().get("pred-engine", "desconocida"),
+            "code": code_fingerprint(),
         }
         run_id = args.run_id or run_identifier(inputs["source"]["sha256"], settings)
         runs_dir = args.runs_dir or Path(args.data_root) / "runs"

@@ -70,6 +70,20 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def code_fingerprint() -> str:
+    """Huella del codigo fuente de pred_engine instalado.
+
+    Forma parte de la identidad de la corrida: con otro codigo, los estudios
+    HPO persistidos no se reutilizan aunque la entrada y las opciones coincidan.
+    """
+    raiz = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for ruta in sorted(raiz.rglob("*.py")):
+        digest.update(ruta.relative_to(raiz).as_posix().encode("utf-8"))
+        digest.update(ruta.read_bytes())
+    return digest.hexdigest()[:16]
+
+
 def run_identifier(input_sha256: str, settings: Mapping[str, Any]) -> str:
     """Identidad estable: misma entrada y configuracion, misma corrida."""
     huella = json.dumps(
