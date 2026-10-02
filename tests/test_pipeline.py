@@ -701,3 +701,142 @@ def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
 def test_hpo_persistence_requires_root_and_session_together():
     with pytest.raises(ValueError, match="together"):
         build_pipeline(EvaluationSettings(40), hpo_root="runs")
+
+
+def _seed_run_args(tmp_path: Path) -> list[str]:
+    from tests.aumentacion.test_fase0 import _semilla_transaccional
+
+    return [
+        "run",
+        "--seed-csv",
+        str(_semilla_transaccional(tmp_path)),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--m0-metodo",
+        "mbb-directo",
+        "--m0-n-series",
+        "1",
+        "--m0-minimo-filas",
+        "0",
+        "--m0-columna",
+        "sku_id=Item_ID",
+        "--m0-columna",
+        "timestamp=Date",
+        "--m0-columna",
+        "demand_qty=Avg_Usage_Per_Day",
+        "--m0-columna",
+        "lead_time_days=Restock_Lead_Time",
+        "--families",
+        "classical",
+        "ml",
+        "--trials",
+        "2",
+        "--min-train",
+        "60",
+        "--step",
+        "28",
+        "--workers",
+        "2",
+    ]
+
+
+def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, capsys):
+    from pred_engine.optimizacion.manifiesto_candidatos import ManifiestoCandidatos
+
+    args = _seed_run_args(tmp_path)
+    code = main(args)
+    report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    assert code == (8 if report["failures"] else 7)
+    assert [s["state"] for s in report["stages"]] == [
+        "completed",
+        "completed",
+        "completed",
+        "blocked",
+    ]
+    run_dir = Path(report["run_dir"])
+    assert run_dir.parent == tmp_path / "data" / "runs"
+    run = json.loads((run_dir / "corrida.json").read_text())
+    assert run["inputs"]["m0"]["rows"] == run["inputs"]["m1"]["rows"]
+    assert run["inputs"]["m1"]["skus"] == 6
+    assert run["inputs"]["source"]["sha256"] == run["inputs"]["m0"]["sha256"]
+    assert run["summary"]["reserve"]["reserved_days"] == 48
+    assert run["parallelism"]["L2"]["procesos_distintos"] >= 2
+
+    manifest = ManifiestoCandidatos.model_validate_json(
+        (run_dir / "candidatos.json").read_text()
+    )
+    assert manifest.run_id == report["run_id"]
+    assert manifest.contexto.dias_reservados == 48
+    candidates = {(c.sku, c.familia) for c in manifest.candidatos}
+    assert len(candidates) == report["units"]["L2"]["completed"] > 0
+    forecasts = pd.read_parquet(run_dir / "pronosticos.parquet")
+    assert len(forecasts) == 48 * len(candidates)
+    assert (forecasts["pronostico"] >= 0).all()
+    assert forecasts["timestamp"].min() == pd.Timestamp(
+        run["summary"]["reserve"]["first_reserved"]
+    )
+    evaluation = pd.read_parquet(run_dir / "evaluacion.parquet")
+    assert len(evaluation) == report["units"]["L3"]["completed"]
+    units = [json.loads(line) for line in (run_dir / "unidades.jsonl").open()]
+    assert len(units) == report["units"]["L2"]["total"] + report["units"]["L3"]["total"]
+    hpo = {p: p.read_bytes() for p in (run_dir / "hpo").rglob("*") if p.is_file()}
+    assert hpo
+
+    # Same command, same identity: M0 is reused and no HPO study is re-run.
+    assert main(args) == code
+    again = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert again["run_id"] == report["run_id"]
+    rerun = json.loads((run_dir / "corrida.json").read_text())
+    assert rerun["inputs"]["m0"]["reused"] is True
+    assert {p: p.read_bytes() for p in hpo} == hpo
+    assert (run_dir / "candidatos.json").read_text() == manifest.model_dump_json(
+        indent=2
+    ) + "\n"
+
+
+def test_cli_reports_isolated_unit_failures_with_exit_code_8(
+    tmp_path, monkeypatch, capsys
+):
+    def failing_pipeline(*args, **kwargs):
+        pipeline = verification_pipeline()
+        pipeline.router = _RouterFailingForOneSku(pipeline.router)
+        return pipeline
+
+    monkeypatch.setattr("pred_engine.pipeline_setup.build_pipeline", failing_pipeline)
+    request = request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    pd.concat([source, source.assign(sku_id="broken")]).to_csv(
+        request.csv_path, index=False
+    )
+    code = main(
+        ["run", "--csv", str(request.csv_path), "--data-root", str(request.data_root)]
+    )
+    report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 8
+    assert report["blocked_stage"] == "L4"
+    assert [(f["sku_id"], f["stage"]) for f in report["failures"]] == [("broken", "L2")]
+    units = [
+        json.loads(line) for line in (Path(report["run_dir"]) / "unidades.jsonl").open()
+    ]
+    assert [(u["sku_id"], u["stage"], u["state"]) for u in units] == [
+        ("broken", "L2", "fallida"),
+        ("proof-sku", "L2", "completada"),
+        ("proof-sku", "L3", "completada"),
+    ]
+
+
+def test_cli_seed_errors_are_reported_without_traceback(tmp_path, capsys):
+    code = main(
+        [
+            "run",
+            "--seed-csv",
+            str(tmp_path / "missing.csv"),
+            "--data-root",
+            str(tmp_path / "data"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("error: ")
+    assert "Traceback" not in captured.err

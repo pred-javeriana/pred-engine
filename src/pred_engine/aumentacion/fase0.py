@@ -23,7 +23,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Any, Literal, cast, get_args
 
 import numpy as np
 import pandas as pd
@@ -178,18 +178,16 @@ def cuadricula_diaria(semilla: pd.DataFrame) -> pd.DataFrame:
             lead_time_days=("lead_time_days", "max"),
         )
         calendario = pd.date_range(diario.index.min(), diario.index.max(), freq="D")
-        diario = diario.reindex(calendario)
-        diario["demand_qty"] = diario["demand_qty"].fillna(0.0)
-        diario["lead_time_days"] = diario["lead_time_days"].ffill().bfill()
+        diario = cast(pd.DataFrame, diario.reindex(calendario))
+        demanda = cast(pd.Series, diario["demand_qty"]).fillna(0.0)
+        lead_time = cast(pd.Series, diario["lead_time_days"]).ffill().bfill()
         piezas.append(
             pd.DataFrame(
                 {
                     "sku_id": sku,
                     "timestamp": calendario,
-                    "demand_qty": diario["demand_qty"].to_numpy(dtype="float64"),
-                    "lead_time_days": diario["lead_time_days"].to_numpy(
-                        dtype="float64"
-                    ),
+                    "demand_qty": demanda.to_numpy(dtype="float64"),
+                    "lead_time_days": lead_time.to_numpy(dtype="float64"),
                 }
             )
         )
@@ -452,15 +450,16 @@ def parsear_columna(texto: str) -> tuple[str, str]:
     return canonica.strip(), origen.strip()
 
 
-def _construir_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="pred-engine-fase0",
-        description="Orquestador One-Shot de la Fase 0 de simulacion de pre-ingesta.",
-    )
-    parser.add_argument("semilla", type=Path, help="Ruta al CSV semilla (Kaggle).")
-    parser.add_argument("--data-root", type=Path, default=None)
+def agregar_opciones_fase0(
+    parser: argparse._ActionsContainer, prefijo: str = ""
+) -> None:
+    """Opciones de la corrida, compartidas por este CLI y ``pred-engine run``.
+
+    ``prefijo`` (p. ej. ``"m0-"``) evita choques de nombres en otro CLI; la
+    configuracion se lee con el mismo prefijo en `configuracion_desde_argumentos`.
+    """
     parser.add_argument(
-        "--metodo",
+        f"--{prefijo}metodo",
         choices=METODOS_AUMENTO,
         default="stl-mbb",
         help=(
@@ -469,36 +468,50 @@ def _construir_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--columna",
+        f"--{prefijo}columna",
         type=parsear_columna,
         action="append",
         default=[],
         metavar="CANONICA=ORIGEN",
         help="Mapea una columna de la semilla a la canonica (repetible)",
     )
-    parser.add_argument("--period", type=int, default=7)
-    parser.add_argument("--n-series", type=int, default=10)
+    parser.add_argument(f"--{prefijo}period", type=int, default=7)
+    parser.add_argument(f"--{prefijo}n-series", type=int, default=10)
     parser.add_argument(
-        "--block-size",
+        f"--{prefijo}block-size",
         type=int,
         default=None,
         help="Largo de bloque; por defecto 3 (stl-mbb) o 30 (mbb-directo)",
     )
     parser.add_argument(
-        "--ruido",
+        f"--{prefijo}ruido",
         type=float,
         default=0.03,
         help="mbb-directo: desviacion del ruido relativa a la media positiva",
     )
     parser.add_argument(
-        "--tolerancia", type=float, default=TOLERANCIA_DIVERGENCIA_POR_DEFECTO
+        f"--{prefijo}tolerancia", type=float, default=TOLERANCIA_DIVERGENCIA_POR_DEFECTO
     )
     parser.add_argument(
-        "--max-reintentos", type=int, default=MAX_REINTENTOS_POR_DEFECTO
+        f"--{prefijo}max-reintentos", type=int, default=MAX_REINTENTOS_POR_DEFECTO
     )
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--nombre", type=str, default=NOMBRE_ARTEFACTO_POR_DEFECTO)
-    parser.add_argument("--minimo-filas", type=int, default=MINIMO_FILAS_POR_DEFECTO)
+    parser.add_argument(f"--{prefijo}seed", type=int, default=42)
+    parser.add_argument(
+        f"--{prefijo}nombre", type=str, default=NOMBRE_ARTEFACTO_POR_DEFECTO
+    )
+    parser.add_argument(
+        f"--{prefijo}minimo-filas", type=int, default=MINIMO_FILAS_POR_DEFECTO
+    )
+
+
+def _construir_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="pred-engine-fase0",
+        description="Orquestador One-Shot de la Fase 0 de simulacion de pre-ingesta.",
+    )
+    parser.add_argument("semilla", type=Path, help="Ruta al CSV semilla (Kaggle).")
+    parser.add_argument("--data-root", type=Path, default=None)
+    agregar_opciones_fase0(parser)
     parser.add_argument(
         "--reutilizar",
         action="store_true",
@@ -507,19 +520,26 @@ def _construir_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def configuracion_desde_argumentos(args: argparse.Namespace) -> ConfiguracionCorrida:
+def configuracion_desde_argumentos(
+    args: argparse.Namespace, prefijo: str = ""
+) -> ConfiguracionCorrida:
+    destino = prefijo.replace("-", "_")
+
+    def valor(nombre: str) -> Any:
+        return getattr(args, destino + nombre)
+
     return ConfiguracionCorrida(
-        period=args.period,
-        n_series_por_sku=args.n_series,
-        block_size=args.block_size,
-        tolerancia_divergencia=args.tolerancia,
-        max_reintentos=args.max_reintentos,
-        semilla_aleatoria=args.seed,
-        nombre_artefacto=args.nombre,
-        minimo_filas=args.minimo_filas,
-        metodo=args.metodo,
-        ruido_relativo=args.ruido,
-        mapeo_columnas=tuple(args.columna),
+        period=valor("period"),
+        n_series_por_sku=valor("n_series"),
+        block_size=valor("block_size"),
+        tolerancia_divergencia=valor("tolerancia"),
+        max_reintentos=valor("max_reintentos"),
+        semilla_aleatoria=valor("seed"),
+        nombre_artefacto=valor("nombre"),
+        minimo_filas=valor("minimo_filas"),
+        metodo=valor("metodo"),
+        ruido_relativo=valor("ruido"),
+        mapeo_columnas=tuple(valor("columna")),
     )
 
 

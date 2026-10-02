@@ -6,9 +6,16 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from pred_engine.aumentacion.fase0 import (
+    ERRORES_FASE0,
+    agregar_opciones_fase0,
+    configuracion_desde_argumentos,
+    ejecutar_fase_0,
+)
 from pred_engine.comun.llm import (
     DEFAULT_MODELS,
     LlmProviderError,
@@ -32,7 +39,7 @@ from pred_engine.ingesta.salida import OutputHandoffError
 from pred_engine.ingesta.sonda import SemanticAlignmentError, probe_headers
 
 if TYPE_CHECKING:
-    from pred_engine.pipeline import Pipeline, PipelineInput
+    from pred_engine.pipeline import Pipeline, PipelineInput, PipelineResult
 
 _logger = get_logger(__name__)
 
@@ -179,10 +186,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Parquet publicado en processed/",
     )
-    run = sub.add_parser("run", help="Diagnosticar el pipeline backend L1-L4")
+    run = sub.add_parser(
+        "run",
+        help="Ejecutar M0 (opcional) y el pipeline backend L1-L4",
+        description=(
+            "Corre L1-L3 y persiste la corrida en {runs-dir}/{run_id}. Con "
+            "--seed-csv primero genera el panel sintetico de la Fase 0 (opciones "
+            "--m0-*) y lo usa como entrada de L1. Codigos de salida: 7 = L4 "
+            "ausente sin fallos; 8 = L4 ausente con unidades fallidas aisladas; "
+            "1 = una etapa sin resultados."
+        ),
+    )
     source = run.add_mutually_exclusive_group(required=True)
     source.add_argument("--csv", type=Path)
     source.add_argument("--parquet", type=Path, help="Artefacto clasificado 1.4")
+    source.add_argument(
+        "--seed-csv", type=Path, help="Semilla de la Fase 0 (M0 -> M1 -> M2)"
+    )
     run.add_argument("--data-root", type=Path, default=Path("data"))
     run.add_argument("--provider", default=None, help="Sonda semantica opcional")
     run.add_argument("--api-key", default=None)
@@ -203,6 +223,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--metric", choices=["mae", "rmse", "smape", "mase"], default="mase"
     )
     run.add_argument("--seed", type=int, default=0)
+    run.add_argument(
+        "--workers",
+        type=int,
+        default=max(1, (os.cpu_count() or 2) - 1),
+        help="Procesos para las unidades SKU x familia (por defecto, nucleos - 1)",
+    )
+    run.add_argument(
+        "--runs-dir",
+        type=Path,
+        default=None,
+        help="Directorio de corridas (por defecto {data-root}/runs)",
+    )
+    run.add_argument(
+        "--run-id",
+        default=None,
+        help="Identidad de la corrida; por defecto se deriva de entrada y opciones",
+    )
+    m0 = run.add_argument_group("Fase 0 (solo con --seed-csv)")
+    agregar_opciones_fase0(m0, prefijo="m0-")
     return parser
 
 
@@ -406,28 +445,100 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _exit_code(result: PipelineResult) -> int:
+    if result.complete:
+        return 0
+    return 8 if result.failures else 7
+
+
 def diagnose_pipeline(
     pipeline: Pipeline,
     request: PipelineInput,
 ) -> tuple[int, dict[str, Any]]:
     """Technical adapter only; the application service owns all stage transitions."""
-    from pred_engine.pipeline import PipelineExecutionError, summarize_run
+    from pred_engine.pipeline import summarize_run
+
+    code, result, failed_stage = _run_pipeline(pipeline, request)
+    summary = summarize_run(result)
+    if failed_stage is not None:
+        summary["failed_stage"] = failed_stage
+    return code, summary
+
+
+def _run_pipeline(
+    pipeline: Pipeline, request: PipelineInput
+) -> tuple[int, PipelineResult, str | None]:
+    from pred_engine.pipeline import PipelineExecutionError
 
     try:
         result = pipeline.run(request)
     except PipelineExecutionError as exc:
-        summary = summarize_run(exc.result)
-        summary["failed_stage"] = exc.stage
-        return 1, summary
-    return (0 if result.complete else 7), summarize_run(result)
+        return 1, exc.result, exc.stage
+    return _exit_code(result), result, None
+
+
+_RUN_SETTINGS = (
+    "families",
+    "trials",
+    "min_train",
+    "horizon",
+    "step",
+    "seasonality",
+    "metric",
+    "seed",
+    "provider",
+    "model",
+)
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    from pred_engine.comun.ejecucion_paralela import resumen_paralelismo
     from pred_engine.optimizacion.router import PredictorFamily
-    from pred_engine.pipeline import EvaluationSettings, PipelineInput
+    from pred_engine.pipeline import (
+        RESERVE_FRACTION,
+        EvaluationSettings,
+        PipelineInput,
+        summarize_run,
+    )
     from pred_engine.pipeline_setup import build_pipeline
+    from pred_engine.run_artifacts import (
+        library_versions,
+        run_identifier,
+        sha256_file,
+        write_run,
+    )
 
+    csv_path = args.csv
+    inputs: dict[str, Any] = {}
     try:
+        if args.seed_csv is not None:
+            fase0 = ejecutar_fase_0(
+                args.seed_csv,
+                configuracion_desde_argumentos(args, prefijo="m0-"),
+                data_root=args.data_root,
+                reutilizar=True,
+            )
+            csv_path = fase0.artefacto.path
+            inputs["m0"] = {
+                "seed_csv": str(Path(args.seed_csv).expanduser().resolve()),
+                "artifact": str(fase0.artefacto.path),
+                "rows": fase0.artefacto.row_count,
+                "sha256": fase0.artefacto.sha256,
+                "run_log": str(fase0.bitacora_path),
+                "reused": fase0.reutilizada,
+            }
+        source = Path(csv_path if csv_path is not None else args.parquet)
+        inputs["source"] = {
+            "path": str(source.resolve()),
+            "sha256": sha256_file(source),
+        }
+        settings = {name: getattr(args, name) for name in _RUN_SETTINGS} | {
+            "reserve_fraction": RESERVE_FRACTION,
+            "pred_engine": library_versions().get("pred-engine", "desconocida"),
+        }
+        run_id = args.run_id or run_identifier(inputs["source"]["sha256"], settings)
+        runs_dir = args.runs_dir or Path(args.data_root) / "runs"
+        run_dir = Path(runs_dir) / run_id
         provider = _build_provider(args)[2] if args.provider is not None else None
         pipeline = build_pipeline(
             EvaluationSettings(
@@ -440,18 +551,52 @@ def _cmd_run(args: argparse.Namespace) -> int:
             families=cast(tuple[PredictorFamily, ...], tuple(args.families)),
             n_trials=args.trials,
             seed=args.seed,
+            workers=args.workers,
+            hpo_root=run_dir / "hpo",
+            session=run_id,
         )
         request = PipelineInput(
-            csv_path=args.csv,
+            csv_path=csv_path,
             parquet_path=args.parquet,
             data_root=args.data_root,
             provider=provider,
             timeout=args.timeout,
         )
-    except (ValueError, OSError, LlmProviderError) as exc:
-        print(str(exc), file=sys.stderr)
+    except ERRORES_FASE0 + (OSError, LlmProviderError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
-    code, summary = diagnose_pipeline(pipeline, request)
+    started = time.time()
+    code, result, failed_stage = _run_pipeline(pipeline, request)
+    metadata = {
+        "inputs": inputs,
+        "settings": settings | {"workers": args.workers},
+        "wall_seconds": round(time.time() - started, 3),
+    }
+    if result.ingestion is not None:
+        metadata["inputs"]["m1"] = {
+            "parquet": str(result.ingestion.parquet_path),
+            "rows": len(result.ingestion.panel),
+            "skus": len(set(result.ingestion.panel["sku_id"].tolist())),
+            "sha256": sha256_file(result.ingestion.parquet_path),
+        }
+    try:
+        files = write_run(result, run_dir, run_id=run_id, metadata=metadata)
+    except (OSError, ValueError) as exc:
+        print(
+            f"error: no se pudo persistir la corrida {run_id}: {exc}", file=sys.stderr
+        )
+        return 1
+    summary = summarize_run(result)
+    if failed_stage is not None:
+        summary["failed_stage"] = failed_stage
+    summary["run_id"] = run_id
+    summary["run_dir"] = str(run_dir)
+    summary["files"] = sorted(path.name for path in files.values())
+    summary["wall_seconds"] = metadata["wall_seconds"]
+    summary["parallelism"] = {
+        stage: resumen_paralelismo([u.record for u in result.units if u.stage == stage])
+        for stage in ("L2", "L3")
+    }
     print(json.dumps(summary, ensure_ascii=False))
     return code
 
