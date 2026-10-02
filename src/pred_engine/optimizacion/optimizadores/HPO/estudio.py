@@ -54,7 +54,11 @@ from pred_engine.optimizacion.optimizadores.HPO.espacio import (
 from pred_engine.optimizacion.optimizadores.HPO.muestreadores import (
     construir_muestreador_tpe,
 )
-from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degenerada
+from pred_engine.optimizacion.optimizadores.HPO.poda import (
+    PREFIJO_PODA_SEMANTICA,
+    ReglasPoda,
+    es_degenerada,
+)
 from pred_engine.optimizacion.optimizadores.HPO.registro import (
     instantanea_desde_estudio,
 )
@@ -354,9 +358,9 @@ def _correr_trial(
             if es_mala:
                 motivo_completo = (
                     f"ventana={estado.n_evaluadas} valor={estado.valor_parcial:.6g} "
-                    f"poda_semantica:{motivo_semantico}"
+                    f"{PREFIJO_PODA_SEMANTICA}:{motivo_semantico}"
                 )
-                ejecutor.cerrar(f"poda_semantica:{motivo_semantico}")
+                ejecutor.cerrar(f"{PREFIJO_PODA_SEMANTICA}:{motivo_semantico}")
                 _cerrar_podado_o_fallido(
                     trial,
                     study,

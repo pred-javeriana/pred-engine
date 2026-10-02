@@ -37,6 +37,7 @@ from pred_engine.optimizacion.optimizadores.HPO.espacio import (
     Flotante,
     Ordinal,
 )
+from pred_engine.optimizacion.optimizadores.HPO.poda import PREFIJO_PODA_SEMANTICA
 
 _ESTADO_A_OPTUNA: dict[EstadoTrialBackend, TrialState] = {
     "completado": TrialState.COMPLETE,
@@ -84,10 +85,14 @@ class PodadorASHAOptuna(optuna.pruners.BasePruner):
             return False
         escalon = max(escalon_candidatos)
 
+        # Un trial descartado por poda semantica no es competidor: su valor
+        # parcial viene de un pronostico degenerado (p. ej. todo cero en demanda
+        # intermitente) y, si contara, podaria a las configuraciones validas.
         competidores = {
             t.number: t.intermediate_values[escalon]
             for t in study.get_trials(deepcopy=False)
             if escalon in t.intermediate_values
+            and PREFIJO_PODA_SEMANTICA not in str(t.user_attrs.get("motivo", ""))
         }
 
         decision: DecisionPoda = self._decisor.decidir(
