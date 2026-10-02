@@ -20,6 +20,7 @@ from pred_engine.optimizacion.router.errores import (
     UnknownSkuClassError,
     UnregisteredFamilyError,
 )
+from pred_engine.optimizacion.router.manifiesto import construir_manifiesto
 from pred_engine.optimizacion.router.politica import (
     FAMILIES_BY_SKU_CLASS,
     INITIAL_POLICY_VERSION,
@@ -50,4 +51,5 @@ __all__ = [
     "TopologicalProfile",
     "UnknownSkuClassError",
     "UnregisteredFamilyError",
+    "construir_manifiesto",
 ]
