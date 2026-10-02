@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from pred_engine.pipeline import (
     SkuVerdict,
     StageUnavailableError,
     ValidationArtifact,
+    summarize_run,
 )
 from pred_engine.pipeline_setup import (
     ConfiguredTopologyPolicy,
@@ -110,8 +112,8 @@ def test_existing_parquet_can_enter_without_repeating_csv_ingestion(tmp_path):
     resumed = pipeline.run(PipelineInput(parquet_path=original.ingestion.parquet_path))
     assert resumed.blocked_stage == "L4"
     np.testing.assert_array_equal(
-        resumed.fitting.candidates[0].model.predict(2),
-        original.fitting.candidates[0].model.predict(2),
+        resumed.fitting.candidates[0].forecast,
+        original.fitting.candidates[0].forecast,
     )
     assert resumed.evaluation.candidates[0].walk_forward.valor_agregado == (
         original.evaluation.candidates[0].walk_forward.valor_agregado
@@ -207,10 +209,15 @@ def test_legacy_custom_strategy_must_supply_fitting_configuration(tmp_path):
     assert raised.value.result.ingestion.panel["demand_qty"].iloc[0] == 18.0
 
 
-def test_l3_causal_window_error_preserves_fitting(tmp_path):
+def test_l3_causal_window_error_preserves_fitting(tmp_path, monkeypatch):
+    def broken_walk_forward(*args, **kwargs):
+        raise ValueError("ventana causal imposible")
+
+    monkeypatch.setattr(
+        "pred_engine.pipeline.evaluar_walk_forward", broken_walk_forward
+    )
     pipeline = verification_pipeline()
-    pipeline.settings = EvaluationSettings(min_train=100, metric="mae")
-    with pytest.raises(PipelineExecutionError) as raised:
+    with pytest.raises(PipelineExecutionError, match="ventana causal") as raised:
         pipeline.run(request_at(tmp_path))
     assert raised.value.stage == "L3"
     assert raised.value.result.fitting.candidates[0].selection.family == "classical"
@@ -275,7 +282,7 @@ def test_invalid_l4_outputs_never_complete_a_run(tmp_path, output):
 
 def core_request_at(root: Path) -> PipelineInput:
     source = root / "sales.csv"
-    n = 96
+    n = 120
     pd.DataFrame(
         {
             "sku_id": ["core-sku"] * n,
@@ -313,7 +320,8 @@ def test_default_core_composition_fits_and_evaluates_all_families(tmp_path):
     assert result.blocked_stage == "L4"
     for candidate in result.evaluation.candidates:
         assert np.isfinite(candidate.walk_forward.valor_agregado)
-        assert np.all(np.isfinite(candidate.fitted.model.predict(2)))
+        assert candidate.fitted.forecast.shape == (24,)
+        assert np.all(np.isfinite(candidate.fitted.forecast))
         assert candidate.walk_forward.ventanas[0].y_real.tolist() == [32.0, 33.35]
 
 
@@ -351,7 +359,7 @@ def test_real_cli_default_composition_reports_blocker(tmp_path, capsys):
         "blocked",
     ]
     panel = pd.read_parquet(tmp_path / "data/processed/sales.parquet")
-    assert panel.shape == (96, 5)
+    assert panel.shape == (120, 5)
     assert panel["demand_qty"].iloc[:3].tolist() == [18.0, 19.35, 20.7]
 
 
@@ -473,10 +481,10 @@ def test_real_other_core_families_connect_to_fitting_and_walkforward(tmp_path, f
     assert result.blocked_stage == "L4"
     factory = model_factories()[family]
     native = factory(candidate.selection.forecast_config, seed=9).fit(candidate.series)
-    np.testing.assert_array_equal(candidate.model.predict(2), native.predict(2))
+    np.testing.assert_array_equal(candidate.forecast, native.predict(7))
     if family == "ml":
         # Seasonal features must survive the L2 boundary, not revert to m=1.
-        assert candidate.model.estacionalidad == 3
+        assert native.estacionalidad == 3
         assert candidate.selection.forecast_config["m"] == 3
 
 
@@ -500,9 +508,10 @@ def test_optional_foundation_inference_failure_is_not_hidden(tmp_path, monkeypat
         PipelineExecutionError, match="foundation extra unavailable"
     ) as raised:
         pipeline.run(request_at(tmp_path))
-    assert raised.value.stage == "L3"
-    assert raised.value.result.fitting.candidates[0].selection.forecast_config == {}
-    assert raised.value.result.stages[3].state == "pending"
+    # The forecast from t* is produced in L2, so the missing extra surfaces there.
+    assert raised.value.stage == "L2"
+    assert raised.value.result.ingestion.panel["demand_qty"].iloc[0] == 18.0
+    assert [s.state for s in raised.value.result.stages[2:]] == ["pending", "pending"]
     assert raised.value.result.complete is False
 
 
@@ -526,3 +535,169 @@ def test_foundation_selection_exposes_frozen_factory_config_without_loading_weig
     model.fit(np.array([1.0, 2.0]))
     assert model.configuracion.model_id == "amazon/chronos-2"
     assert selection.payload["optimizado"] is False
+
+
+def test_reserve_holds_back_the_final_20_percent_of_the_calendar(tmp_path):
+    result = verification_pipeline().run(request_at(tmp_path))
+    reserve = result.fitting.reserve
+    assert reserve.fraction == 0.2
+    assert reserve.reserved_days == 7
+    assert reserve.t_star == pd.Timestamp("2024-01-28")
+    assert reserve.reserved_dates[0] == pd.Timestamp("2024-01-29")
+    assert reserve.reserved_dates[-1] == pd.Timestamp("2024-02-04")
+    candidate = result.fitting.candidates[0]
+    assert len(candidate.series) == 28
+    assert candidate.forecast.shape == (7,)
+    assert summarize_run(result)["reserve"] == {
+        "fraction": 0.2,
+        "t_star": "2024-01-28",
+        "first_reserved": "2024-01-29",
+        "last_observed": "2024-02-04",
+        "reserved_days": 7,
+    }
+
+
+def test_altering_reserved_observations_does_not_change_m2(tmp_path):
+    pipeline = verification_pipeline()
+    ingestion = pipeline.ingest(request_at(tmp_path))
+    panel = ingestion.panel.copy()
+    reserved = panel["timestamp"] > pd.Timestamp("2024-01-28")
+    panel.loc[reserved, "demand_qty"] = panel.loc[reserved, "demand_qty"] * 50
+    altered = replace(ingestion, panel=panel)
+
+    original_fit, altered_fit = pipeline.fit(ingestion), pipeline.fit(altered)
+    assert altered_fit.candidates[0].selection == original_fit.candidates[0].selection
+    np.testing.assert_array_equal(
+        altered_fit.candidates[0].forecast, original_fit.candidates[0].forecast
+    )
+    original_eval = pipeline.evaluate(original_fit).candidates[0].walk_forward
+    altered_eval = pipeline.evaluate(altered_fit).candidates[0].walk_forward
+    assert altered_eval.valor_agregado == original_eval.valor_agregado
+
+
+class _RouterFailingForOneSku:
+    """Real router, except that one SKU's selection raises inside its unit."""
+
+    def __init__(self, router):
+        self.router = router
+
+    def plan(self, request):
+        return self.router.plan(request)
+
+    def execute(self, request, decision):
+        if request.sku_id == "broken":
+            raise RuntimeError("HPO interrumpido para este SKU")
+        return self.router.execute(request, decision)
+
+
+def test_failed_unit_is_isolated_and_short_sku_is_excluded_with_cause(tmp_path):
+    request = request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    broken = source.assign(sku_id="broken")
+    short = source.assign(sku_id="short").iloc[:10]
+    pd.concat([source, broken, short]).to_csv(request.csv_path, index=False)
+    pipeline = verification_pipeline()
+    pipeline.router = _RouterFailingForOneSku(pipeline.router)
+
+    result = pipeline.run(request)
+
+    assert [s.state for s in result.stages] == [
+        "completed",
+        "completed",
+        "completed",
+        "blocked",
+    ]
+    assert [c.selection.sku_id for c in result.fitting.candidates] == ["proof-sku"]
+    assert [(u.sku_id, u.failed) for u in result.fitting.units] == [
+        ("broken", True),
+        ("proof-sku", False),
+    ]
+    assert result.stages[1].message == (
+        "1 de 2 unidades fallaron (aisladas); 1 SKU excluidos con causa"
+    )
+    summary = summarize_run(result)
+    assert summary["failures"] == [
+        {
+            "stage": "L2",
+            "sku_id": "broken",
+            "family": "classical",
+            "error": "RuntimeError: HPO interrumpido para este SKU",
+        }
+    ]
+    assert summary["exclusions"] == [
+        {
+            "sku_id": "short",
+            "cause": "la serie termina antes de t*: no tiene observaciones reservadas",
+        }
+    ]
+    assert summary["units"] == {
+        "L2": {"total": 2, "completed": 1, "failed": 1},
+        "L3": {"total": 1, "completed": 1, "failed": 0},
+    }
+
+
+def test_parallel_workers_reproduce_sequential_results_in_other_processes(tmp_path):
+    request = core_request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    second = source.assign(sku_id="core-b", demand_qty=source["demand_qty"] * 1.5)
+    pd.concat([source, second]).to_csv(request.csv_path, index=False)
+    settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
+
+    def run(workers):
+        pipeline = build_pipeline(
+            settings, families=("classical", "ml"), n_trials=1, seed=3, workers=workers
+        )
+        return pipeline.run(request)
+
+    sequential, parallel = run(1), run(2)
+    pairs = zip(
+        sequential.evaluation.candidates, parallel.evaluation.candidates, strict=True
+    )
+    for one, other in pairs:
+        assert one.fitted.selection == other.fitted.selection
+        np.testing.assert_array_equal(one.fitted.forecast, other.fitted.forecast)
+        assert one.walk_forward.valor_agregado == other.walk_forward.valor_agregado
+    assert {u.record.pid for u in sequential.units} == {os.getpid()}
+    parallel_pids = {u.record.pid for u in parallel.units}
+    assert os.getpid() not in parallel_pids
+    assert len(parallel_pids) >= 2
+    assert summarize_run(parallel) == summarize_run(sequential)
+
+
+def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
+    request = core_request_at(tmp_path)
+    settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
+    hpo = tmp_path / "hpo"
+
+    def run():
+        return build_pipeline(
+            settings,
+            families=("classical",),
+            n_trials=2,
+            seed=3,
+            hpo_root=hpo,
+            session="s1",
+        ).run(request)
+
+    first = run()
+    manifests = sorted(hpo.glob("*/manifiesto.json"))
+    assert [m.parent.name for m in manifests] == ["classical-core-sku-s1"]
+    assert json.loads(manifests[0].read_text())["estado"] == "completada"
+    assert first.fitting.candidates[0].selection.payload["estudio_hpo"] == (
+        "classical-core-sku-s1"
+    )
+    snapshot = {path: path.read_bytes() for path in hpo.rglob("*") if path.is_file()}
+
+    second = run()
+    assert second.fitting.candidates[0].selection == (
+        first.fitting.candidates[0].selection
+    )
+    np.testing.assert_array_equal(
+        second.fitting.candidates[0].forecast, first.fitting.candidates[0].forecast
+    )
+    assert {p: p.read_bytes() for p in hpo.rglob("*") if p.is_file()} == snapshot
+
+
+def test_hpo_persistence_requires_root_and_session_together():
+    with pytest.raises(ValueError, match="together"):
+        build_pipeline(EvaluationSettings(40), hpo_root="runs")
