@@ -18,9 +18,15 @@
   namespaces are empty. No built-in verdict or audit-bundle implementation
   exists. The pipeline stops at L4 with no L4 output.
 
-Phase 0 augmentation is an input producer, not a fifth principal stage. Existing
-recovery controllers remain usable through injected selection strategies; the
-integration does not introduce a second persistence or recovery subsystem.
+Phase 0 augmentation is an input producer, not a fifth principal stage.
+
+> **Ejecución M0 → M1 → M2 (ADR-017).** L2 y L3 trabajan solo con la historia
+> anterior al corte t* de la reserva del 20 % (ADR-03-003) y corren cada SKU ×
+> familia como unidad aislada, en paralelo con `workers > 1`. `pred-engine run`
+> persiste cada corrida en `{data_root}/runs/{run_id}/` y reutiliza el control
+> de reanudación de 2.9 para los estudios HPO. Ver
+> [EJECUCION_M0_M2.md](EJECUCION_M0_M2.md) para comandos, artefactos y
+> reanudación.
 
 ## Application boundary
 
@@ -49,7 +55,9 @@ HPO windows; it never silently reduces model capacity to accommodate short data.
 existing initial matrix without changing that matrix. For example, it does not
 route DL for lumpy or intermittent SKUs. A subset with no permitted family for
 an encountered SKU fails at L2 rather than skipping that SKU. Foundation can be
-included explicitly; failures to load its optional model propagate from L3.
+included explicitly. Si su dependencia opcional o sus pesos no están
+disponibles, cada unidad fundacional falla en L2 (al pronosticar desde t*) y
+queda registrada como falla aislada.
 
 Inputs select exactly one source:
 
@@ -59,17 +67,22 @@ Inputs select exactly one source:
   artifact, without repeating raw extraction or characterisation.
 
 L1 always reads the published 1.4 Parquet contract before downstream use. L2
-sorts each SKU's daily grid, validates finite demand, constructs typed
-`SelectionRequest`s and invokes the injected router. Every native strategy now
+calcula el corte t* (`ReserveCut`), recorta cada SKU a su historia admisible,
+excluye con causa registrada los SKU con huecos de calendario, demanda no
+finita, historia insuficiente o sin observaciones reservadas, construye
+`SelectionRequest`s tipados y ejecuta cada decisión del router como unidad
+independiente (`SelectionRouter.plan` y `execute`). Every native strategy now
 exposes `SelectionResult.forecast_config` in its model factory's format, plus
 `forecast_seed`. Evidence remains in the original `payload`; no caller must
 parse that evidence or reconstruct seasonal feature settings. Old custom
 strategies remain usable with the router alone; a strategy used in coordinated
 fitting must supply this new configuration boundary.
 
-L2 returns fitted model instances and their selected configurations. L3 creates
-fresh models for each causal window; it never evaluates using the full-history
-fitted instance. It preserves the existing walk-forward algorithm, metrics and
+L2 devuelve, por candidato, la configuración seleccionada, la historia
+admisible y el pronóstico de los días reservados desde t* (`FittedCandidate.forecast`).
+El modelo ajustado no se conserva: se reconstruye con la fábrica, la
+configuración y la semilla. L3 creates fresh models for each causal window; it
+never evaluates using the full-history fitted instance. It preserves the existing walk-forward algorithm, metrics and
 seed derivation. Configuration search and L3 evaluation use the same history:
 `EvaluationArtifact.selection_scope` is `same_history`. These metrics are not an
 unbiased holdout or a retrospective verdict. Statistical comparison remains
@@ -103,8 +116,11 @@ This manual sequence is for isolating stages, not required by `run`. The existin
 `run_ingest`, `run_classify_csv`, router strategy `.select`, native `.fit` and
 `evaluar_walk_forward` APIs also remain available.
 
-Stage failures raise `PipelineExecutionError` with `.stage`, `.result` and the
-original exception as `__cause__`. The partial result preserves completed-stage
+Una unidad SKU × familia que falla en L2 o L3 no detiene su etapa: queda en
+`FittingArtifact.units` o `EvaluationArtifact.units` con su error, y
+`PipelineResult.failures` las reúne. Una etapa falla solo cuando ninguna unidad
+produce resultado. Stage failures raise `PipelineExecutionError` with `.stage`,
+`.result` and the original exception as `__cause__`. The partial result preserves completed-stage
 outputs, marks the failing stage and leaves subsequent stages pending. A
 missing L4 is instead an expected blocked result. Neither case fabricates a
 successful continuation.
@@ -161,7 +177,10 @@ pred-engine run --parquet data/processed/sales.parquet --families classical
 ```
 
 It prints a JSON-safe stage summary and returns `7` on an unfinished-stage
-blocker, `1` on failure, or `0` only when all configured operations finish.
+blocker, `8` cuando además hubo unidades fallidas aisladas, `1` on failure, or
+`0` only when all configured operations finish. La corrida queda persistida en
+`{data_root}/runs/{run_id}/`; `--seed-csv` antepone la Fase 0 y `--workers`
+fija la cantidad de procesos.
 Existing `ingest`, `classify`, `probe`, `models` and `verify --parquet` behavior is
 unchanged. This command is not the eventual human-facing UI.
 

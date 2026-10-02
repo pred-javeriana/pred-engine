@@ -37,15 +37,23 @@ Divergencia relativa `|x_cand - x_seed| / |x_seed|` de media y varianza globales
 `aceptada` sii ambas `<= tolerancia`. El veredicto incluye los seis estadisticos
 calculados. `TOLERANCIA_DIVERGENCIA_POR_DEFECTO = 0.05`.
 
-### `rechazo.generar_series_aceptadas(serie_semilla, *, period, n_series=1, block_size=3, tolerancia=0.05, max_reintentos=20, semilla_aleatoria=42, generador=None) -> ResultadoRechazo`
+### `rechazo.generar_series_aceptadas(serie_semilla, *, period, n_series=1, block_size=3, tolerancia=0.05, max_reintentos=20, semilla_aleatoria=42, generador=None, postproceso=None) -> ResultadoRechazo`
 
 Por cada serie: genera candidatas hasta que una pase la divergencia o se agoten
 los reintentos (`DivergenceRejectionExhausted`). `generador` es inyectable
 (`Callable[[np.random.Generator], np.ndarray]`); por defecto STL +
-`mbb.moving_block_bootstrap` sobre los residuales. Determinista para una
-`semilla_aleatoria` dada.
-`ResultadoRechazo(series: list[np.ndarray], semilla_aleatoria, intentos, rechazos,
-veredictos)`; propiedad `tasa_rechazo = rechazos / intentos`.
+`mbb.moving_block_bootstrap` sobre los residuales. `postproceso` se aplica a
+cada candidata **antes** de evaluar la divergencia (la Fase 0 aplica alli las
+leyes fisicas). Determinista para una `semilla_aleatoria` dada.
+`ResultadoRechazo(series, semilla_aleatoria, intentos, rechazos, veredictos,
+crudas)`; propiedad `tasa_rechazo = rechazos / intentos`.
+
+### `rechazo.motor_mbb_directo(serie_semilla, *, block_size=30, ruido_relativo=0.03) -> GeneradorCandidata`
+
+Motor de 0.2: MBB de la serie diaria completa (los bloques conservan las
+rachas de cero), ruido gaussiano de `ruido_relativo` x media positiva solo en
+los dias con demanda y piso de 1 unidad en esos dias. `rechazo.motor_mbb`
+construye el motor STL + MBB de residuales de ADR-01-007.
 
 ## 0.4 Contrato de datos y persistencia
 
@@ -87,31 +95,49 @@ WORM → hashea. `ArtefactoExportado(path: Path, sha256: str, row_count: int)`.
 
 ### `fase0.ConfiguracionCorrida`
 
-`period=7, n_series_por_sku=10, block_size=3, tolerancia_divergencia=0.05,
-max_reintentos=20, semilla_aleatoria=42, nombre_artefacto=...,
-minimo_filas=50_000, incluir_semilla_en_panel=True`.
+`period=7, n_series_por_sku=10, block_size=None, tolerancia_divergencia=0.05,
+max_reintentos=200, semilla_aleatoria=42, nombre_artefacto=...,
+minimo_filas=50_000, incluir_semilla_en_panel=True, metodo="stl-mbb",
+ruido_relativo=0.03, mapeo_columnas=()`. `block_size=None` usa el bloque del
+metodo (`BLOQUE_POR_METODO`: 3 para `stl-mbb`, 30 para `mbb-directo`);
+`bloque_efectivo` lo resuelve. Los parametros invalidos lanzan `ValueError`.
 
-### `fase0.ejecutar_fase_0(ruta_semilla, config=None, *, data_root=None) -> ResultadoFase0`
+### `fase0.cuadricula_diaria(semilla) -> pd.DataFrame`
 
-Cadena One-Shot: carga semilla (exige las 4 columnas canonicas) → por SKU con
-`len >= 2*period` genera `n_series_por_sku` replicas via `generar_series_aceptadas`
-→ concatena → `aplicar_restricciones_fisicas` → `validar_conformidad_o_fallar` →
-`exportar_artefacto_csv` → `persistir_bitacora`.
-`ResultadoFase0(artefacto: ArtefactoExportado, bitacora: BitacoraCorrida,
-bitacora_path: Path)`. No importa componentes del Modulo 1.
+Calendario diario continuo por SKU: suma la demanda del mismo dia, rellena con
+0 los dias sin registro y propaga el lead time vigente.
+
+### `fase0.ejecutar_fase_0(ruta_semilla, config=None, *, data_root=None, reutilizar=False) -> ResultadoFase0`
+
+Cadena One-Shot: carga la semilla (con `mapeo_columnas`) → calendario diario →
+por SKU con historia suficiente genera `n_series_por_sku` replicas con el
+metodo elegido y una semilla aleatoria propia por SKU → leyes fisicas antes de
+la compuerta → concatena → `validar_conformidad_o_fallar` →
+`exportar_artefacto_csv` (modo 0444) → `persistir_bitacora`. Con
+`reutilizar=True`, si el artefacto ya existe y la bitacora mas reciente tiene la
+misma huella de corrida y el mismo hash, devuelve ese resultado
+(`ResultadoFase0.reutilizada=True`) en lugar de fallar por WORM.
+`ResultadoFase0(artefacto, bitacora, bitacora_path, reutilizada)`. No importa
+componentes del Modulo 1.
 
 ### `fase0.main(argv=None) -> int`
 
-CLI: `python -m pred_engine.aumentacion.fase0 <semilla.csv> [--data-root ...]
-[--period N] [--n-series N] [--block-size N] [--tolerancia F] [--max-reintentos N]
-[--seed N] [--nombre ...] [--minimo-filas N]`.
+CLI `pred-engine-fase0 <semilla.csv> [--data-root ...] [--metodo stl-mbb|mbb-directo]
+[--columna CANONICA=ORIGEN ...] [--period N] [--n-series N] [--block-size N]
+[--ruido F] [--tolerancia F] [--max-reintentos N] [--seed N] [--nombre ...]
+[--minimo-filas N] [--reutilizar]`. `agregar_opciones_fase0(parser, prefijo)`
+registra las mismas opciones en otro CLI (`pred-engine run` usa `--m0-*`).
+Errores esperables (`ERRORES_FASE0`): una linea `error: ...` y codigo 1.
 
 ### `bitacora.BitacoraCorrida` / `persistir_bitacora(bitacora, *, data_root=None) -> Path`
 
 Dataclass serializable con los parametros reconstruibles de la corrida
 (`semilla_aleatoria`, `tasa_rechazo`, `intentos_bootstrap`,
 `n_demanda_rectificada`, `n_lead_time_acotado`, `row_count`, `artefacto_sha256`,
-`iniciada_en`, `finalizada_en`). `persistir_bitacora` escribe JSON en
+`iniciada_en`, `finalizada_en`, `metodo`, `block_size`, `ruido_relativo`,
+`max_reintentos`, `mapeo_columnas`, `semilla_sha256`, `huella_corrida`,
+`configuracion`). `leer_bitacoras(data_root=...)` devuelve las bitacoras de
+`logs/` de la mas reciente a la mas antigua. `persistir_bitacora` escribe JSON en
 `{data_root}/logs/fase0_<ts>_seed<N>.json` — fuera del directorio crudo.
 
 ## Errores (`pred_engine.aumentacion.errores`)
