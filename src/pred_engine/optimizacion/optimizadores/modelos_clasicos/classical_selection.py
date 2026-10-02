@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import optuna
@@ -85,6 +85,17 @@ def construir_espacio(espacio: EspacioClasico | None = None) -> EspacioBusqueda:
     )
 
 
+def tendencia_sarima(d: int, D: int) -> Literal["c", "n"]:
+    """Constante (media) solo en modelos sin diferenciar, como auto.arima.
+
+    Sin constante, un ARMA no diferenciado pronostica hacia cero: en demanda
+    intermitente, despues de una racha de ceros, el pronostico recortado a cero
+    es nulo y la poda semantica descarta el trial. Con diferenciacion la
+    constante seria una deriva, que no se incluye (ver ADR-018).
+    """
+    return "c" if d == 0 and D == 0 else "n"
+
+
 def fabrica_sarima(configuracion: Mapping[str, Any], *, seed: int) -> SarimaForecaster:
 
     order = (configuracion["p"], configuracion["d"], configuracion["q"])
@@ -94,7 +105,12 @@ def fabrica_sarima(configuracion: Mapping[str, Any], *, seed: int) -> SarimaFore
         configuracion.get("Q", 0),
         configuracion.get("m", 0),
     )
-    return SarimaForecaster(order=order, seasonal_order=seasonal_order, seed=seed)
+    tendencia = configuracion.get(
+        "tendencia", tendencia_sarima(order[1], seasonal_order[1])
+    )
+    return SarimaForecaster(
+        order=order, seasonal_order=seasonal_order, tendencia=tendencia, seed=seed
+    )
 
 
 def min_train_recomendado(espacio: EspacioClasico | None = None) -> int:

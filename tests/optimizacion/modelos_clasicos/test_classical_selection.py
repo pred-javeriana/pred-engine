@@ -240,3 +240,66 @@ def test_paralelo_entre_skus_da_el_mismo_resultado_que_secuencial():
         assert p.seasonal_order == s.seasonal_order
         assert p.valor == s.valor
         assert p.n_ventanas == s.n_ventanas
+
+
+def _intermitente(n: int = 150) -> np.ndarray:
+    rng = np.random.default_rng(5)
+    serie = np.where(rng.random(n) < 0.12, rng.integers(5, 40, n), 0).astype(float)
+    serie[-14:] = 0.0  # la historia termina en una racha de ceros
+    serie[:5] = [12.0, 0.0, 0.0, 30.0, 0.0]
+    return serie
+
+
+def test_sarima_sin_diferenciar_incluye_constante_y_no_pronostica_nulo():
+    from pred_engine.optimizacion.optimizadores.HPO.poda import es_degenerada
+
+    serie = _intermitente()
+    base = {"p": 1, "d": 0, "q": 1, "P": 0, "D": 0, "Q": 0, "m": 0}
+
+    modelo = fabrica_sarima(base, seed=0).fit(serie)
+    pronostico = modelo.predict(7)
+
+    assert modelo.tendencia == "c"
+    assert es_degenerada(pronostico, y_train=serie) == (False, None)
+    assert pronostico.mean() > 0.25 * serie.mean()
+    assert fabrica_sarima({**base, "d": 1}, seed=0).tendencia == "n"
+    assert fabrica_sarima({**base, "tendencia": "n"}, seed=0).tendencia == "n"
+
+
+def test_estrategia_clasica_publica_la_tendencia_en_la_configuracion():
+    from pred_engine.comun.modelos import ClassifiedObservation
+    from pred_engine.optimizacion.optimizadores.modelos_clasicos.estrategia import (
+        ClassicalSelectionStrategy,
+        PresupuestoClasico,
+    )
+    from pred_engine.optimizacion.router import TOPOLOGICAL_PROFILES, SelectionRequest
+
+    serie = _intermitente()
+    fechas = pd.date_range("2024-01-01", periods=len(serie), freq="D")
+    solicitud = SelectionRequest(
+        sku_id="I1",
+        sku_class="intermittent",
+        series=tuple(
+            ClassifiedObservation(
+                sku_id="I1",
+                sku_class="intermittent",
+                timestamp=fecha,
+                demand_qty=float(valor),
+                lead_time_days=3,
+            )
+            for fecha, valor in zip(fechas, serie, strict=True)
+        ),
+    )
+    estrategia = ClassicalSelectionStrategy(
+        espacio=EspacioClasico(
+            p_max=1, d_max=0, q_max=1, P_max=0, D_max=0, Q_max=0, m=1
+        ),
+        presupuestos={p: PresupuestoClasico(n_trials=3) for p in TOPOLOGICAL_PROFILES},
+        min_train=40,
+    )
+
+    resultado = estrategia.select(solicitud, "sparse_stable")
+
+    assert resultado.forecast_config is not None
+    assert resultado.forecast_config["tendencia"] == "c"
+    assert resultado.forecast_config["d"] == 0
