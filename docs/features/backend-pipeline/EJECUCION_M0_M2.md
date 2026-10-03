@@ -103,6 +103,12 @@ El RSS de varios procesos cuenta dos veces las páginas compartidas; la fila
 RSS y de procesos del pool, y el costo propio de la hebra (`sampler_cpu_s` y
 `sampler_ms_per_sample`).
 
+El muestreo está activo por defecto porque su costo no se nota en la corrida.
+Con 20 SKU y 8 procesos, dos pares de corridas con y sin muestreo tardaron lo
+mismo (108 s frente a 108-111 s, dentro del ruido). La hebra usó 1,1 s de CPU
+en esas corridas, unos 16 ms por muestra; casi todo ese tiempo es la búsqueda
+de los procesos hijos.
+
 Para ver una corrida terminada:
 
 ```bash
