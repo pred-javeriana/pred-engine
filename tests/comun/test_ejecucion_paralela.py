@@ -66,3 +66,18 @@ def test_resumen_cuenta_solapes_y_no_tramos_contiguos():
 def test_rechaza_cantidad_de_procesos_invalida(procesos):
     with pytest.raises(ValueError, match="procesos"):
         ejecutar_unidades(math.sqrt, [1.0], procesos=procesos)
+
+
+def _ocupar(segundos: float) -> None:
+    fin = time.perf_counter() + segundos
+    while time.perf_counter() < fin:
+        pass
+
+
+@pytest.mark.parametrize("procesos", [1, 2])
+def test_cada_unidad_registra_su_tiempo_de_cpu(procesos):
+    resultados = ejecutar_unidades(_ocupar, [0.3, 0.3], procesos=procesos)
+    for resultado in resultados:
+        registro = resultado.registro
+        assert registro.cpu_s is not None
+        assert 0.2 < registro.cpu_s <= registro.duracion_s + 0.1

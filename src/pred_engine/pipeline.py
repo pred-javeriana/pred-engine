@@ -11,6 +11,7 @@ validador real.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -232,6 +233,9 @@ class StageExecution:
     state: StageState = "pending"
     output: PipelineArtifact | None = None
     message: str = ""
+    # Reloj de pared (epoch, segundos) de la etapa; None si no llego a correr.
+    started_at: float | None = None
+    finished_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -631,16 +635,26 @@ class Pipeline:
                     message=current.definition.capability,
                 )
                 return PipelineResult(tuple(executions))
+            current = replace(current, started_at=time.time())
             try:
                 value = operation(value)
             except Exception as exc:
-                executions[index] = replace(current, state="failed", message=str(exc))
+                executions[index] = replace(
+                    current,
+                    state="failed",
+                    message=str(exc),
+                    finished_at=time.time(),
+                )
                 raise PipelineExecutionError(
                     current.definition.id,
                     PipelineResult(tuple(executions)),
                     str(exc),
                 ) from exc
             executions[index] = replace(
-                current, state="completed", output=value, message=_stage_message(value)
+                current,
+                state="completed",
+                output=value,
+                message=_stage_message(value),
+                finished_at=time.time(),
             )
         return PipelineResult(tuple(executions))

@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -240,8 +241,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Identidad de la corrida; por defecto se deriva de entrada y opciones",
     )
+    run.add_argument(
+        "--telemetry-interval",
+        type=float,
+        default=1.0,
+        help=(
+            "Segundos entre muestras de CPU y memoria por proceso en "
+            "recursos.jsonl; 0 desactiva el muestreo"
+        ),
+    )
     m0 = run.add_argument_group("Fase 0 (solo con --seed-csv)")
     agregar_opciones_fase0(m0, prefijo="m0-")
+
+    telemetry = sub.add_parser(
+        "telemetry",
+        help="Graficar CPU, memoria y la traza de modelos de una corrida terminada",
+        description=(
+            "Lee unidades.jsonl, recursos.jsonl y corrida.json de una corrida y "
+            "escribe un SVG con etapas, CPU, memoria (total y por proceso) y una "
+            "fila por proceso con cada unidad SKU x familia coloreada por modelo."
+        ),
+    )
+    telemetry.add_argument("run_dir", type=Path, help="Directorio de la corrida")
+    telemetry.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Ruta del SVG (por defecto {run_dir}/telemetria.svg)",
+    )
     return parser
 
 
@@ -508,7 +535,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         sha256_file,
         write_run,
     )
+    from pred_engine.run_telemetry import ResourceSampler
 
+    if args.telemetry_interval < 0:
+        print("error: --telemetry-interval debe ser >= 0", file=sys.stderr)
+        return 1
     csv_path = args.csv
     inputs: dict[str, Any] = {}
     try:
@@ -564,15 +595,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
             provider=provider,
             timeout=args.timeout,
         )
+        sampler = (
+            ResourceSampler(run_dir / "recursos.jsonl", args.telemetry_interval)
+            if args.telemetry_interval > 0
+            else None
+        )
     except ERRORES_FASE0 + (OSError, LlmProviderError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     started = time.time()
-    code, result, failed_stage = _run_pipeline(pipeline, request)
+    with sampler or nullcontext():
+        code, result, failed_stage = _run_pipeline(pipeline, request)
     metadata = {
         "inputs": inputs,
         "settings": settings | {"workers": args.workers},
         "wall_seconds": round(time.time() - started, 3),
+        "telemetry": sampler.summary() if sampler is not None else None,
     }
     if result.ingestion is not None:
         metadata["inputs"]["m1"] = {
@@ -582,7 +620,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "sha256": sha256_file(result.ingestion.parquet_path),
         }
     try:
-        files = write_run(result, run_dir, run_id=run_id, metadata=metadata)
+        files = write_run(
+            result,
+            run_dir,
+            run_id=run_id,
+            metadata=metadata,
+            resources=sampler.path if sampler is not None else None,
+        )
     except (OSError, ValueError) as exc:
         print(
             f"error: no se pudo persistir la corrida {run_id}: {exc}", file=sys.stderr
@@ -601,6 +645,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     }
     print(json.dumps(summary, ensure_ascii=False))
     return code
+
+
+def _cmd_telemetry(args: argparse.Namespace) -> int:
+    from pred_engine.run_chart import render_run_chart
+
+    try:
+        path = render_run_chart(args.run_dir, args.output)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(path)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -623,6 +679,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_verify(args)
     if args.command == "run":
         return _cmd_run(args)
+    if args.command == "telemetry":
+        return _cmd_telemetry(args)
     return 1
 
 

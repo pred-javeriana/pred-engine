@@ -140,15 +140,20 @@ def write_run(
     *,
     run_id: str,
     metadata: Mapping[str, Any],
+    resources: Path | None = None,
 ) -> dict[str, Path]:
     """Escribe los artefactos disponibles de ``result`` y devuelve sus rutas.
 
     Una corrida que fallo en L2 deja solo ``corrida.json`` y ``unidades.jsonl``;
     repetirla con el mismo ``run_id`` reescribe estos archivos de forma atomica.
+    ``resources`` es la serie de recursos que ya escribio ``ResourceSampler``
+    durante la corrida; aqui solo se registra entre los archivos.
     """
     destino = Path(directory)
     destino.mkdir(parents=True, exist_ok=True)
     archivos: dict[str, Path] = {}
+    if resources is not None:
+        archivos["recursos"] = resources
 
     unidades = destino / "unidades.jsonl"
     lineas = [
@@ -157,11 +162,15 @@ def write_run(
                 "stage": unit.stage,
                 "sku_id": unit.sku_id,
                 "family": unit.family,
+                "model": MODELO_POR_FAMILIA[unit.family],
                 "state": unit.record.estado,
                 "pid": unit.record.pid,
                 "started_at": _instante(unit.record.inicio),
                 "finished_at": _instante(unit.record.fin),
                 "seconds": round(unit.record.duracion_s, 3),
+                "cpu_s": None
+                if unit.record.cpu_s is None
+                else round(unit.record.cpu_s, 3),
                 "error": unit.record.error,
             },
             ensure_ascii=False,
@@ -259,6 +268,15 @@ def write_run(
             "written_at": datetime.now(UTC).isoformat(),
             **metadata,
             "summary": summarize_run(result),
+            "stage_times": {
+                stage.definition.id: {
+                    "started_at": _instante(stage.started_at),
+                    "finished_at": _instante(stage.finished_at),
+                    "seconds": round(stage.finished_at - stage.started_at, 3),
+                }
+                for stage in result.stages
+                if stage.started_at is not None and stage.finished_at is not None
+            },
             "versions": library_versions(),
             "candidates": procedencia,
             "parallelism": {
