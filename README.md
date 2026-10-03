@@ -166,7 +166,8 @@ See `docs/features/1.2-alineacion-semantica-validacion/`.
 ## L1.3 SKU topology (Syntetos-Boylan)
 
 After the daily panel exists, `pred_engine.ingesta.categorizacion` computes
-ADI and CV² per SKU and injects a single `sku_class` label
+ADI and CV² per SKU over its history up to the reserve cut t* (ADR-019) and
+injects a single `sku_class` label
 (`smooth` | `intermittent` | `erratic` | `lumpy`) on every row of that SKU.
 Thresholds are 1.32 and 0.49. Original demand columns are not rewritten.
 

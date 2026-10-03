@@ -47,17 +47,18 @@ que su valor parcial fije el umbral de ASHA contradecía esa misma regla.
 ## Consequences
 
 - Corrida real con el presupuesto por defecto (semilla Kaggle, 110 SKU,
-  22 procesos): 110 de 110 SKU obtienen candidato clásico y 102 de 102 obtienen
-  candidato ML; en 80 de los 110 candidatos clásicos el HPO elige `d = D = 0`
-  con constante. Ningún pronóstico desde t* es negativo ni no finito.
+  22 procesos, antes de ADR-019 y ADR-020): 110 de 110 SKU obtienen candidato
+  clásico y 102 de 102 obtienen candidato ML; en 80 de los 110 candidatos
+  clásicos el HPO elige `d = D = 0` con constante. Ningún pronóstico desde t*
+  es negativo ni no finito.
 - Con presupuestos chicos (por ejemplo, `--trials 5`) todavía hay SKU sin
   trial completo: todos los SKU comparten la semilla del muestreador y los
   primeros trials pueden ser todos diferenciados. Esas unidades quedan como
   fallas aisladas (código de salida 8).
-- Un candidato clásico (`104::syn000`, SARIMA(2,0,2)(2,0,0)7) tuvo 3 ventanas
+- Un candidato clásico (`104::syn000`, SARIMA(2,0,2)(2,0,0)7) tuvo ventanas
   walk-forward explosivas (~1e61) que la media recortada del 10 % ocultó en el
-  valor agregado. La regla semántica no detecta pronósticos finitos pero
-  explosivos; agregar esa regla queda como decisión pendiente.
+  valor agregado. ADR-020 identifica la causa, la estimación sin restricción,
+  y la corrige.
 
 ## Related
 
