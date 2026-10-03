@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -741,7 +742,11 @@ def _seed_run_args(tmp_path: Path) -> list[str]:
 
 
 def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, capsys):
-    from pred_engine.optimizacion.manifiesto_candidatos import ManifiestoCandidatos
+    from pred_engine.comun.modelos.manifiesto_candidatos import ContextoParticion
+    from pred_engine.forecasting.adaptador_candidatos import (
+        instanciar,
+        validar_manifiesto,
+    )
 
     args = _seed_run_args(tmp_path)
     code = main(args)
@@ -763,13 +768,29 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     assert run["summary"]["reserve"]["reserved_days"] == 48
     assert run["parallelism"]["L2"]["procesos_distintos"] >= 2
 
-    manifest = ManifiestoCandidatos.model_validate_json(
-        (run_dir / "candidatos.json").read_text()
+    # M3 accepts every candidate against the partition it derives on its own.
+    panel = pd.read_parquet(run["inputs"]["m1"]["parquet"])
+    manifest = (run_dir / "candidatos.json").read_text()
+    handoff = validar_manifiesto(
+        manifest,
+        esperado=ContextoParticion(
+            ingesta_ref_m1=run["inputs"]["m1"]["sha256"],
+            t_corte_reserva=date.fromisoformat(run["summary"]["reserve"]["t_star"]),
+            fraccion_reserva=0.2,
+        ),
+        skus_panel=set(panel["sku_id"]),
     )
-    assert manifest.run_id == report["run_id"]
-    assert manifest.contexto.dias_reservados == 48
-    candidates = {(c.sku, c.familia) for c in manifest.candidatos}
+    assert handoff.run_id_m2 == report["run_id"]
+    assert handoff.fallos == ()
+    candidates = {(c.sku, c.familia) for c in handoff.candidatos}
     assert len(candidates) == report["units"]["L2"]["completed"] > 0
+    for candidate in handoff.candidatos:
+        instanciar(candidate)
+    assert [c["candidato_id"] for c in run["candidates"]] == [
+        c.candidato_id for c in handoff.candidatos
+    ]
+    assert all(c["estudio_hpo"] for c in run["candidates"])
+    assert run["versions"]["pred-engine"] == run["settings"]["pred_engine"]
     forecasts = pd.read_parquet(run_dir / "pronosticos.parquet")
     assert len(forecasts) == 48 * len(candidates)
     assert (forecasts["pronostico"] >= 0).all()
@@ -790,9 +811,12 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     rerun = json.loads((run_dir / "corrida.json").read_text())
     assert rerun["inputs"]["m0"]["reused"] is True
     assert {p: p.read_bytes() for p in hpo} == hpo
-    assert (run_dir / "candidatos.json").read_text() == manifest.model_dump_json(
-        indent=2
-    ) + "\n"
+    first, rebuilt = (
+        json.loads(manifest),
+        json.loads((run_dir / "candidatos.json").read_text()),
+    )
+    assert rebuilt["candidatos"] == first["candidatos"]
+    assert rebuilt["contexto"] == first["contexto"]
 
 
 def test_cli_reports_isolated_unit_failures_with_exit_code_8(

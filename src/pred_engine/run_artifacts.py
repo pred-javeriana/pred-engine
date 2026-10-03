@@ -1,10 +1,11 @@
 """Persistencia de una corrida L1-L3 en su propio directorio.
 
 El directorio de la corrida reune lo que M3 y la tesis consumen sin volver a
-ejecutar nada: el manifiesto tipado de candidatos (ADR-03-004), los pronosticos
-desde t*, la evidencia walk-forward, la traza de cada unidad (proceso, inicio y
-fin) y un resumen ``corrida.json``. Los estudios de HPO persisten aparte, bajo
-``hpo/``, con su propio control de reanudacion (2.9).
+ejecutar nada: el manifiesto de candidatos que valida el adaptador de M3
+(ADR-03-004), los pronosticos desde t*, la evidencia walk-forward, la traza de
+cada unidad (proceso, inicio y fin) y un resumen ``corrida.json`` con la
+procedencia de cada candidato (estudio HPO y versiones). Los estudios de HPO
+persisten aparte, bajo ``hpo/``, con su propio control de reanudacion (2.9).
 """
 
 from __future__ import annotations
@@ -22,14 +23,15 @@ from typing import Any
 import pandas as pd
 
 from pred_engine.comun.ejecucion_paralela import resumen_paralelismo
+from pred_engine.comun.modelos.manifiesto_candidatos import (
+    MODELO_POR_FAMILIA,
+    ContextoParticion,
+)
 from pred_engine.optimizacion.control_reanudacion.almacenamiento import (
     escribir_atomico,
 )
-from pred_engine.optimizacion.manifiesto_candidatos import (
-    ContextoCorte,
-    construir_manifiesto,
-)
-from pred_engine.pipeline import PipelineResult, ReserveCut, summarize_run
+from pred_engine.optimizacion.router import SelectionResult, construir_manifiesto
+from pred_engine.pipeline import FittingArtifact, PipelineResult, summarize_run
 
 RUN_SCHEMA = "pred-engine.corrida/1"
 _PAQUETES = (
@@ -43,12 +45,15 @@ _PAQUETES = (
     "chronos-forecasting",
     "torch",
 )
-_MODELO_POR_FAMILIA = {
-    "classical": "sarima",
-    "ml": "lightgbm",
-    "dl": "mlp",
-    "foundation": "chronos-2",
-}
+_EVIDENCIA_HPO = (
+    "metrica_objetivo",
+    "valor",
+    "n_ventanas",
+    "n_trials",
+    "n_completados",
+    "n_podados",
+    "n_fallidos",
+)
 
 
 def library_versions() -> dict[str, str]:
@@ -92,14 +97,27 @@ def run_identifier(input_sha256: str, settings: Mapping[str, Any]) -> str:
     return "r-" + hashlib.sha256(huella.encode("utf-8")).hexdigest()[:16]
 
 
-def _contexto(reserve: ReserveCut) -> ContextoCorte:
-    return ContextoCorte(
-        t_estrella=reserve.t_star.date(),
-        primer_dia_reservado=reserve.first_reserved.date(),
-        ultimo_dia_observado=reserve.last_observed.date(),
-        dias_reservados=reserve.reserved_days,
-        fraccion_reservada=reserve.fraction,
+def _contexto(fitting: FittingArtifact) -> ContextoParticion:
+    """Particion de 3.1 con la que M2 optimizo; M3 la exige identica."""
+    return ContextoParticion(
+        ingesta_ref_m1=sha256_file(fitting.ingestion.parquet_path),
+        t_corte_reserva=fitting.reserve.t_star.date(),
+        fraccion_reserva=fitting.reserve.fraction,
     )
+
+
+def _procedencia(candidato_id: str, seleccion: SelectionResult) -> dict[str, Any]:
+    """Lo que el manifiesto no lleva: politica, perfil y evidencia del HPO."""
+    payload = seleccion.payload
+    return {
+        "candidato_id": candidato_id,
+        "sku_id": seleccion.sku_id,
+        "familia": seleccion.family,
+        "perfil": seleccion.profile,
+        "politica": seleccion.policy_version,
+        "estudio_hpo": payload.get("estudio_hpo"),
+        "evidencia_hpo": {c: payload[c] for c in _EVIDENCIA_HPO if c in payload},
+    }
 
 
 def _instante(epoch: float) -> str:
@@ -154,17 +172,23 @@ def write_run(
     archivos["unidades"] = unidades
 
     fitting, evaluation = result.fitting, result.evaluation
+    procedencia: list[dict[str, Any]] = []
     if fitting is not None:
+        selecciones = [c.selection for c in fitting.candidates]
         manifiesto = construir_manifiesto(
-            [c.selection for c in fitting.candidates],
-            run_id=run_id,
-            contexto=_contexto(fitting.reserve),
-            versiones=library_versions(),
+            selecciones,
+            run_id_m2=run_id,
+            contexto=_contexto(fitting),
+            emitido_en=datetime.now(UTC),
         )
         archivos["candidatos"] = destino / "candidatos.json"
-        escribir_atomico(
-            archivos["candidatos"], manifiesto.model_dump_json(indent=2) + "\n"
-        )
+        escribir_atomico(archivos["candidatos"], manifiesto + "\n")
+        procedencia = [
+            _procedencia(crudo["candidato_id"], seleccion)
+            for crudo, seleccion in zip(
+                json.loads(manifiesto)["candidatos"], selecciones, strict=True
+            )
+        ]
         fechas = fitting.reserve.reserved_dates
         archivos["pronosticos"] = destino / "pronosticos.parquet"
         _escribir_parquet(
@@ -174,7 +198,7 @@ def write_run(
                         "sku_id": c.selection.sku_id,
                         "sku_class": c.selection.sku_class,
                         "familia": c.selection.family,
-                        "modelo": _MODELO_POR_FAMILIA[c.selection.family],
+                        "modelo": MODELO_POR_FAMILIA[c.selection.family],
                         "timestamp": fecha,
                         "pronostico": float(valor),
                     }
@@ -198,7 +222,7 @@ def write_run(
                     "sku_id": seleccion.sku_id,
                     "sku_class": seleccion.sku_class,
                     "familia": seleccion.family,
-                    "modelo": _MODELO_POR_FAMILIA[seleccion.family],
+                    "modelo": MODELO_POR_FAMILIA[seleccion.family],
                     "metrica": evidencia.metrica_objetivo,
                     "valor_agregado": float(evidencia.valor_agregado),
                     "n_ventanas": evidencia.n_ventanas_evaluadas,
@@ -235,6 +259,8 @@ def write_run(
             "written_at": datetime.now(UTC).isoformat(),
             **metadata,
             "summary": summarize_run(result),
+            "versions": library_versions(),
+            "candidates": procedencia,
             "parallelism": {
                 "L2": resumen_paralelismo(
                     [u.record for u in (fitting.units if fitting else ())]

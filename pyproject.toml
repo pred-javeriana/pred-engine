@@ -88,7 +88,6 @@ include = [
     "src/pred_engine/optimizacion/optimizadores/modelos_deep_learning",
     "src/pred_engine/comun/modelos/modelos_fundacionales",
     "src/pred_engine/optimizacion/optimizadores/modelos_fundacionales",
-    "src/pred_engine/optimizacion/manifiesto_candidatos.py",
     "src/pred_engine/comun/ejecucion_paralela.py",
     "src/pred_engine/aumentacion/fase0.py",
     "src/pred_engine/pipeline.py",
