@@ -829,7 +829,8 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     assert run["telemetry"]["samples"] > 0 and run["telemetry"]["error"] is None
     samples = [json.loads(line) for line in (run_dir / "recursos.jsonl").open()]
     worker_pids = {s["pid"] for s in samples if s["role"] == "worker"}
-    assert {u["pid"] for u in units} <= worker_pids
+    # A pool that lives less than one interval may fall between two samples.
+    assert worker_pids & {u["pid"] for u in units}
     hpo = {p: p.read_bytes() for p in (run_dir / "hpo").rglob("*") if p.is_file()}
     assert hpo
 

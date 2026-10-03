@@ -99,7 +99,8 @@ tiene `at`, `role`, `pid`, `cpu_cores` y `mem_mb`:
 | `main`, `worker`, `child` | Núcleos que usó el proceso desde la muestra anterior (1,0 = un núcleo) | Memoria residente (RSS) |
 
 El RSS de varios procesos cuenta dos veces las páginas compartidas; la fila
-`system` no. `corrida.json` resume el muestreo en `telemetry`: picos de CPU, de
+`system` no. Un proceso que vive menos que el intervalo puede no aparecer en
+ninguna muestra; su unidad sigue en `unidades.jsonl`. `corrida.json` resume el muestreo en `telemetry`: picos de CPU, de
 RSS y de procesos del pool, y el costo propio de la hebra (`sampler_cpu_s` y
 `sampler_ms_per_sample`).
 
