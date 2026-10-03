@@ -173,6 +173,23 @@ def test_l2_factory_error_preserves_real_ingestion(tmp_path):
     ]
 
 
+class _NullForecaster:
+    def fit(self, y):
+        return self
+
+    def predict(self, horizon):
+        return np.zeros(horizon)
+
+
+def test_degenerate_final_forecast_fails_its_unit_under_rule_3(tmp_path):
+    pipeline = verification_pipeline()
+    pipeline.factories["classical"] = lambda config, *, seed: _NullForecaster()
+    with pytest.raises(PipelineExecutionError, match="prediccion_nula") as raised:
+        pipeline.run(request_at(tmp_path))
+    assert raised.value.stage == "L2"
+    assert "desde t*" in str(raised.value)
+
+
 def test_l2_rejects_missing_daily_observation(tmp_path):
     pipeline = verification_pipeline()
     ingestion = pipeline.ingest(request_at(tmp_path))

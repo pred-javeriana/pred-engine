@@ -14,8 +14,9 @@ componente 5 (`optimizacion.optimizadores.HPO.asha.DecisorASHA`).
 
 `tolerar_fallos=True` por defecto (a diferencia de `evaluar_walk_forward`,
 que por defecto es `False`): este es el motor de BUSQUEDA que usa el HPO, y
-una ventana que no converge es señal (para ASHA/poda semantica), no un
-motivo para abortar el trial completo. Ver el docstring de
+una ventana que no converge se entrega como resultado, no como excepcion.
+Quien decide es el estudio: cierra ese trial como fallido, porque todos los
+trials se comparan en las mismas ventanas (ADR-020). Ver el docstring de
 `walk_forward.py` para el contraste completo.
 """
 

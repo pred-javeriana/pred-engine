@@ -6,16 +6,18 @@ import pandas as pd
 
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos import CANONICAL_FIELDS
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.salida.errores import HandoffPreconditionError
 
 _logger = get_logger(__name__)
 
 
 def require_positive_demand(panel: pd.DataFrame) -> None:
-    """Exige al menos una demanda estrictamente positiva por SKU.
+    """Exige al menos una demanda estrictamente positiva por SKU hasta t*.
 
-    No muta el panel. No calcula ADI ni CV²: solo cuenta d>0 para no
-    iniciar la clasificacion sobre series matematicamente indefinidas.
+    No muta el panel. No calcula ADI ni CV²: solo cuenta d>0 en la historia
+    que usa el clasificador (sin los dias reservados, ADR-019) para no iniciar
+    la clasificacion sobre series matematicamente indefinidas.
     """
     if panel.empty:
         _logger.error("Handoff 1.4: panel diario vacio")
@@ -27,7 +29,13 @@ def require_positive_demand(panel: pd.DataFrame) -> None:
     if extras_canonico:
         raise HandoffPreconditionError(f"faltan columnas canonicas {extras_canonico}")
 
-    positivos = panel.loc[panel["demand_qty"] > 0.0, "sku_id"].astype("string")
+    try:
+        corte = ReserveCut.of(panel)
+    except ValueError as exc:
+        raise HandoffPreconditionError(str(exc)) from exc
+    dias = pd.to_datetime(panel["timestamp"]).dt.normalize()
+    admisible = panel.loc[dias <= corte.t_star]
+    positivos = admisible.loc[admisible["demand_qty"] > 0.0, "sku_id"].astype("string")
     todos = panel["sku_id"].astype("string")
     sin_demanda = sorted(set(todos.dropna()) - set(positivos.dropna()))
     if sin_demanda:
@@ -37,7 +45,8 @@ def require_positive_demand(panel: pd.DataFrame) -> None:
             len(sin_demanda),
         )
         raise HandoffPreconditionError(
-            "SKU sin demanda estrictamente positiva: " + ", ".join(sin_demanda)
+            f"SKU sin demanda estrictamente positiva hasta t*={corte.t_star.date()}: "
+            + ", ".join(sin_demanda)
         )
     _logger.info(
         "Precondicion de demanda positiva superada (skus=%s filas=%s)",

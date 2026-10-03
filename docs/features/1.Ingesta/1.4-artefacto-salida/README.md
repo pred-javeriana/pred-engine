@@ -11,7 +11,7 @@
 4. **Publicador Parquet** hacia `{PRED_DATA_ROOT}/processed/`. Sin CSV.
    Reutiliza `export_parquet` (1.1) para la guarda de `raw/`.
 5. **Gate de demanda positiva** antes de clasificar, para no invocar ADI
-   sobre series indefinidas.
+   sobre series indefinidas (revisa la historia hasta t*, ADR-019).
 6. **CLI** `pred-engine verify` y cableado de 1.4 en `classify` / `ingest`.
 
 ## Como

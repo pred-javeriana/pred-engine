@@ -27,7 +27,9 @@ def test_salida_no_duplica_nucleo_sbc() -> None:
 def test_sku_sin_demanda_positiva_no_persiste(tmp_path: Path) -> None:
     csv = tmp_path / "ceros.csv"
     csv.write_text(
-        "sku_id,timestamp,demand_qty,lead_time_days\n105,2024-10-01,0,17\n",
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,0,17\n"
+        "105,2024-10-02,0,17\n",
         encoding="utf-8",
     )
     raiz = tmp_path / "data"

@@ -20,13 +20,13 @@
 
 Phase 0 augmentation is an input producer, not a fifth principal stage.
 
-> **Ejecución M0 → M1 → M2 (ADR-017).** L2 y L3 trabajan solo con la historia
-> anterior al corte t* de la reserva del 20 % (ADR-03-003) y corren cada SKU ×
-> familia como unidad aislada, en paralelo con `workers > 1`. `pred-engine run`
-> persiste cada corrida en `{data_root}/runs/{run_id}/` y reutiliza el control
-> de reanudación de 2.9 para los estudios HPO. Ver
-> [EJECUCION_M0_M2.md](EJECUCION_M0_M2.md) para comandos, artefactos y
-> reanudación.
+> **Ejecución M0 → M1 → M2 (ADR-017, ADR-019).** M1 clasifica con la historia
+> hasta t* (ADR-019) y L2/L3 trabajan solo con esa misma historia anterior al
+> corte de la reserva del 20 % (ADR-03-003) y corren cada SKU × familia como
+> unidad aislada, en paralelo con `workers > 1`. `pred-engine run` persiste cada
+> corrida en `{data_root}/runs/{run_id}/` y reutiliza el control de reanudación
+> de 2.9 para los estudios HPO. Ver [EJECUCION_M0_M2.md](EJECUCION_M0_M2.md)
+> para comandos, artefactos y reanudación.
 
 ## Application boundary
 
@@ -80,7 +80,8 @@ fitting must supply this new configuration boundary.
 
 L2 devuelve, por candidato, la configuración seleccionada, la historia
 admisible y el pronóstico de los días reservados desde t* (`FittedCandidate.forecast`).
-El modelo ajustado no se conserva: se reconstruye con la fábrica, la
+Un pronóstico degenerado hace fallar su unidad con la causa bajo la regla #3
+(ADR-020). El modelo ajustado no se conserva: se reconstruye con la fábrica, la
 configuración y la semilla. L3 creates fresh models for each causal window; it
 never evaluates using the full-history fitted instance. It preserves the existing walk-forward algorithm, metrics and
 seed derivation. Configuration search and L3 evaluation use the same history:

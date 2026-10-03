@@ -349,9 +349,22 @@ def _correr_trial(
             _cerrar_por_agotamiento(trial, study, resultado)
             return
 
+        if estado.ultima.fallo is not None:
+            # ADR-020: todos los trials se comparan en las mismas ventanas, y L3
+            # y M3 reajustan en esos origenes; una configuracion que no ajusta
+            # en una ventana no es elegible y su trial se cierra como fallido.
+            ejecutor.cerrar("ajuste_fallido")
+            trial.set_user_attr("n_ventanas", estado.n_evaluadas)
+            trial.set_user_attr(
+                "motivo",
+                f"ventana={estado.n_evaluadas} ajuste_fallido: {estado.ultima.fallo}",
+            )
+            study.tell(trial, None, estado="fallido")
+            return
+
         trial.report(estado.valor_parcial, step=estado.n_evaluadas)
 
-        if estado.ultima.fallo is None and reglas.habilitar_poda_semantica:
+        if reglas.habilitar_poda_semantica:
             es_mala, motivo_semantico = es_degenerada(
                 estado.ultima.y_pred, y_train=estado.ultima.y_train
             )
