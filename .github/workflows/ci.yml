@@ -3,35 +3,134 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: Lint + Test
+  lock:
+    name: uv.lock al dia con pyproject.toml
     runs-on: ubuntu-latest
-
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          python-version: "3.12"
+          version: "0.11.x"
+      - name: uv lock --check
+        run: uv lock --check
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
+  lint:
+    name: Lint (ruff check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/preparar
+      - name: ruff check
+        run: uv run --no-sync ruff check --output-format=github .
 
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
+  format:
+    name: Formato (ruff format)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/preparar
+      - name: ruff format --diff
+        run: uv run --no-sync ruff format --diff .
 
-      - name: Lint (ruff)
-        run: uv run --no-sync ruff check .
-
-      - name: Format check (ruff)
-        run: uv run --no-sync ruff format --check .
-
-      - name: Type check (pyright)
+  types:
+    name: Tipos (pyright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/preparar
+      - name: pyright
         run: uv run --no-sync pyright
+        env:
+          PYRIGHT_PYTHON_IGNORE_WARNINGS: "1"
 
-      - name: Test with coverage gate
-        run: uv run --no-sync pytest
+  tests:
+    name: Pruebas y cobertura minima
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/preparar
+      - name: pytest -m "not slow" (cobertura >= 80 %)
+        run: uv run --no-sync pytest -m "not slow"
+
+  slow-tests:
+    name: Pruebas lentas (benchmarks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/preparar
+      - name: pytest -m slow
+        run: uv run --no-sync pytest -m slow --no-cov
+
+  self-check:
+    name: Prueba integrada (python -m pred_engine.verify)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/preparar
+      - name: python -m pred_engine.verify
+        run: uv run --no-sync python -m pred_engine.verify
+
+  run:
+    name: Corrida M0-M2 de punta a punta (pred-engine run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUN_DIR: data/runs/ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/preparar
+
+      - name: pred-engine run con tests/fixtures/semilla_inventario.csv
+        run: |
+          code=0
+          uv run --no-sync pred-engine run \
+            --seed-csv tests/fixtures/semilla_inventario.csv \
+            --data-root data --run-id ci --workers 2 \
+            --m0-metodo mbb-directo --m0-n-series 1 --m0-minimo-filas 0 \
+            --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
+            --m0-columna demand_qty=Avg_Usage_Per_Day \
+            --m0-columna lead_time_days=Restock_Lead_Time \
+            > "$RUNNER_TEMP/corrida.log" || code=$?
+          tail -n 1 "$RUNNER_TEMP/corrida.log"
+          if [ "$code" != 7 ] && [ "$code" != 8 ]; then
+            tail -n 40 "$RUNNER_TEMP/corrida.log"
+            echo "::error title=pred-engine run::codigo de salida $code; se espera 7 (L4 ausente) u 8 (L4 ausente con unidades fallidas aisladas)"
+            exit 1
+          fi
+
+      - name: pred-engine telemetry
+        run: uv run --no-sync pred-engine telemetry "$RUN_DIR"
+
+      - name: Verificar artefactos de la corrida
+        run: uv run --no-sync python .github/scripts/verificar_corrida.py "$RUN_DIR"
+
+      - name: Publicar artefactos de la corrida
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: corrida-ci
+          path: |
+            ${{ env.RUN_DIR }}/*.json
+            ${{ env.RUN_DIR }}/*.jsonl
+            ${{ env.RUN_DIR }}/*.parquet
+            ${{ env.RUN_DIR }}/*.svg
+          retention-days: 7
+          if-no-files-found: ignore
