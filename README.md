@@ -27,15 +27,18 @@ uv sync --extra dev
 ## Running tests
 
 ```bash
-uv run pytest            # runs the suite with an 80% coverage gate
+uv run pytest                  # runs the suite with an 80% coverage gate
+uv run pytest -m "not slow"    # fast suite with coverage gate (CI mode)
+uv run pytest -m slow --no-cov # slow tests (benchmarks / model fitting)
 ```
 
-## Linting and formatting
+## Linting, formatting and type checking
 
 ```bash
-uv run ruff check .      # lint
-uv run ruff format .     # format
-uv run ruff format --check .  # format check (CI mode)
+uv run ruff check .           # lint
+uv run ruff format .          # format
+uv run ruff format --diff .   # format check (CI mode)
+uv run pyright                # type check
 ```
 
 ## Pre-commit hooks
