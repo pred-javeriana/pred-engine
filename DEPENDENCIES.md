@@ -41,7 +41,7 @@ Pesos: `amazon/chronos-2` (Apache-2.0) en la revision fijada por
 | pytest-cov | >=5.0 | Coverage measurement; enforces the 80% gate on every CI run |
 | ruff | >=0.5 | Linter and formatter (replaces flake8 + isort + black) |
 | pre-commit | >=3.7 | Git hook runner; enforces ruff checks before every commit |
-| pyright | >=1.1 | Comprobacion estatica acotada al contrato 1.3 |
+| pyright | >=1.1 | Comprobacion estatica de tipos en CI y desarrollo (`pyproject.toml`) |
 
 ## Lock file
 
