@@ -71,9 +71,10 @@ procesos y respeta la decisión de ADR-03-004 de no serializar modelos.
 
 ## Consequences
 
-- Evidencia real (semilla Kaggle, 110 SKU, 22 procesos): 212 unidades de L2 y
-  hasta 144 de L3 corren con concurrencia máxima 22 y una aceleración medida de
-  16,6 a 18,5 veces respecto del tiempo de cómputo sumado.
+- Evidencia real (semilla Kaggle, 110 SKU, 22 procesos, antes de ADR-019 y
+  ADR-020; la corrida corregida con 208 unidades está en EJECUCION_M0_M2.md):
+  212 unidades de L2 y hasta 144 de L3 corren con concurrencia máxima 22 y una
+  aceleración medida de 16,6 a 18,5 veces respecto del tiempo de cómputo sumado.
 - `sku_class` llegaba de M1, que clasificaba el panel completo, incluida la
   reserva. ADR-019 resuelve la fuga: M1 clasifica con la historia hasta t*.
 - L3 sigue midiendo sobre la misma historia que usó el HPO

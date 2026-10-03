@@ -33,8 +33,9 @@ y anade `sku_class: SkuClass`. Una fila del artefacto final.
 
 ### `require_positive_demand(panel) -> None`
 
-Fail-closed. Cada `sku_id` debe tener al menos un `demand_qty > 0`.
-Se ejecuta **antes** de `classify_daily_panel`. No calcula ADI/CV².
+Fail-closed. Cada `sku_id` debe tener al menos un `demand_qty > 0` en su
+historia hasta t* (ADR-019). Se ejecuta **antes** de `classify_daily_panel`.
+No calcula ADI/CV².
 
 ### `require_panel_preserved(daily_panel, classified) -> None`
 

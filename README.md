@@ -97,10 +97,10 @@ uv run pred-engine run --seed-csv inventory_data.csv --data-root data \
   --m0-columna lead_time_days=Restock_Lead_Time
 ```
 
-L2 y L3 solo usan la historia anterior a la reserva cronológica del 20 %
-(ADR-03-003). Cada SKU × familia es una unidad aislada y `--workers` (por
-defecto, núcleos - 1) fija los procesos. La corrida queda en
-`data/runs/{run_id}/` con el manifiesto tipado de candidatos para M3
+M1 clasifica y L2/L3 optimizan solo con la historia anterior a la reserva
+cronológica del 20 % (ADR-03-003, ADR-019). Cada SKU × familia es una unidad
+aislada y `--workers` (por defecto, núcleos - 1) fija los procesos. La corrida
+queda en `data/runs/{run_id}/` con el manifiesto tipado de candidatos para M3
 (`candidatos.json`), los pronósticos desde t*, la evidencia walk-forward y la
 traza de cada unidad. Repetir el comando retoma los estudios HPO terminados sin
 reentrenar. El código de salida es `7` (L4 ausente) u `8` (L4 ausente con

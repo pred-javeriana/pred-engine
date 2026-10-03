@@ -66,8 +66,9 @@ Copia con exactamente `CANONICAL_FIELDS`. No `rename`. Extras se omiten.
 
 ### `classify_panel(frame) -> TopologyArtifact`
 
-Group-by `sku_id`. Una etiqueta por SKU, broadcast a todas las filas.
-No muta el marco de entrada.
+Group-by `sku_id`. Clasifica cada SKU con su historia hasta t* (ADR-019) y
+rellena `sku_class` por broadcast a todas las filas. El panel de salida conserva
+todas las filas. No muta el marco de entrada.
 
 ### `TopologyArtifact`
 

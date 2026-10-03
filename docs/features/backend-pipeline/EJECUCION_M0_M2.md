@@ -2,7 +2,8 @@
 
 Guía de operación de la ruta completa: la Fase 0 genera el panel sintético
 (M0), L1 lo ingiere y clasifica (M1) y L2-L3 seleccionan, ajustan y pronostican
-cada SKU (M2). Las decisiones de diseño están en ADR-016, ADR-017 y ADR-018.
+cada SKU (M2). Las decisiones de diseño están en ADR-016, ADR-017, ADR-018,
+ADR-019 y ADR-020.
 
 ## Comando
 
