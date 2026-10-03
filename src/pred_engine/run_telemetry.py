@@ -41,6 +41,17 @@ def _instante(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat()
 
 
+def _tiempos_maquina() -> tuple[float, float]:
+    """Segundos de CPU ocupados y totales de la maquina, sumados sobre nucleos.
+
+    Se calcula aqui y no con ``psutil.cpu_percent``, cuya referencia es propia
+    de cada hebra: la ultima muestra la toma la hebra principal.
+    """
+    tiempos = psutil.cpu_times()
+    total = sum(tiempos)
+    return total - tiempos.idle - getattr(tiempos, "iowait", 0.0), total
+
+
 def _rol(proceso: psutil.Process) -> str:
     try:
         linea = " ".join(proceso.cmdline())
@@ -65,6 +76,7 @@ class ResourceSampler:
         self._procesos: dict[int, psutil.Process] = {}
         self._roles: dict[int, str] = {}
         self._previo: dict[int, tuple[float, float]] = {}
+        self._maquina = (0.0, 0.0)
         self._alto = threading.Event()
         self._hebra: threading.Thread | None = None
         self._archivo: IO[str] | None = None
@@ -101,7 +113,7 @@ class ResourceSampler:
                 }
             ]
         )
-        psutil.cpu_percent(interval=None)
+        self._maquina = _tiempos_maquina()
         tiempos = self._raiz.cpu_times()
         self._procesos[self._raiz.pid] = self._raiz
         self._roles[self._raiz.pid] = "main"
@@ -149,7 +161,15 @@ class ResourceSampler:
         self._procesos = vivos
         ahora = time.time()
         memoria = psutil.virtual_memory()
-        ocupados = psutil.cpu_percent(interval=None) / 100 * (psutil.cpu_count() or 1)
+        ocupado_antes, total_antes = self._maquina
+        self._maquina = ocupado, total = _tiempos_maquina()
+        ocupados = (
+            (ocupado - ocupado_antes)
+            / (total - total_antes)
+            * (psutil.cpu_count() or 1)
+            if total > total_antes
+            else 0.0
+        )
         filas: list[dict[str, Any]] = [
             {
                 "at": _instante(ahora),

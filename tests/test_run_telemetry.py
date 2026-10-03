@@ -38,7 +38,8 @@ def test_registra_cpu_y_memoria_del_proceso_principal_y_de_cada_worker(tmp_path)
     assert set(filas[0]) == {"at", "role", "pid", "cpu_cores", "mem_mb"}
     assert all(set(f) == set(filas[0]) for f in filas)
     assert {f["pid"] for f in filas if f["role"] == "main"} == {os.getpid()}
-    assert any(f["role"] == "system" for f in filas)
+    # La maquina ve al menos los dos nucleos ocupados por el pool.
+    assert max(f["cpu_cores"] for f in filas if f["role"] == "system") > 1.5
 
     workers = [f for f in filas if f["role"] == "worker"]
     pids = {r.registro.pid for r in resultados}
