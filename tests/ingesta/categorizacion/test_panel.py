@@ -10,6 +10,7 @@ import pytest
 from pred_engine.comun.modelos import PANEL_FIELDS
 from pred_engine.ingesta.categorizacion import (
     TopologyContractError,
+    TopologyMathError,
     classify_daily_panel,
     classify_panel,
 )
@@ -93,3 +94,46 @@ def test_classify_daily_panel_es_el_clasificador_real() -> None:
     b = classify_daily_panel(origen)
     assert a.frame.equals(b.frame)
     assert [m.sku_class for m in a.metrics] == [m.sku_class for m in b.metrics]
+
+
+def _sku(sku: str, demanda: list[float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sku_id": [sku] * len(demanda),
+            "timestamp": pd.date_range(
+                datetime(2024, 10, 1), periods=len(demanda), freq="D"
+            ),
+            "demand_qty": demanda,
+            "lead_time_days": [3] * len(demanda),
+        }
+    )
+
+
+def test_la_clase_se_calcula_sin_los_dias_reservados() -> None:
+    # 10 dias: los 2 ultimos son la reserva. Antes de t* el SKU es intermitente
+    # (ADI=4, CV2=0); con la reserva el CV2 lo volveria lumpy.
+    panel = _sku("R", [5.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 500.0, 1.0])
+    artefacto = classify_panel(panel)
+
+    assert set(artefacto.frame["sku_class"]) == {"intermittent"}
+    (metrica,) = artefacto.metrics
+    assert (metrica.n_periods, metrica.n_positive) == (8, 2)
+    assert len(artefacto.frame) == 10
+
+    otra_reserva = panel.copy()
+    otra_reserva.loc[8:, "demand_qty"] *= 50
+    assert classify_panel(otra_reserva).metrics == artefacto.metrics
+
+
+def test_un_panel_sin_historia_admisible_se_rechaza() -> None:
+    with pytest.raises(TopologyContractError, match="historia admisible"):
+        classify_panel(_sku("U", [5.0]))
+
+
+def test_un_sku_sin_demanda_antes_de_t_estrella_se_rechaza() -> None:
+    panel = pd.concat(
+        [_sku("A", [5.0, 0.0, 5.0, 0.0, 5.0]), _sku("B", [0.0, 0.0, 0.0, 0.0, 7.0])],
+        ignore_index=True,
+    )
+    with pytest.raises(TopologyMathError, match="SKU B"):
+        classify_panel(panel)

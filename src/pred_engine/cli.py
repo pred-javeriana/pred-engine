@@ -493,9 +493,9 @@ _RUN_SETTINGS = (
 
 def _cmd_run(args: argparse.Namespace) -> int:
     from pred_engine.comun.ejecucion_paralela import resumen_paralelismo
+    from pred_engine.comun.reserva import RESERVE_FRACTION
     from pred_engine.optimizacion.router import PredictorFamily
     from pred_engine.pipeline import (
-        RESERVE_FRACTION,
         EvaluationSettings,
         PipelineInput,
         summarize_run,

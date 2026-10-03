@@ -1,4 +1,10 @@
-"""Inyeccion de sku_class a nivel de SKU sobre el panel diario."""
+"""Inyeccion de sku_class a nivel de SKU sobre el panel diario.
+
+La clase se calcula solo con la historia anterior al corte t* de la reserva
+(ADR-03-003, ADR-019): la demanda de los dias reservados para M3 no influye en
+la clase ni, por lo tanto, en la ruta de familias de M2. El panel publicado
+conserva todas las filas.
+"""
 
 from __future__ import annotations
 
@@ -13,10 +19,14 @@ from pred_engine.comun.modelos import (
     PANEL_FIELDS,
     TopologyMetrics,
 )
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion.adi import compute_adi
 from pred_engine.ingesta.categorizacion.cv2 import compute_cv2
 from pred_engine.ingesta.categorizacion.enrutador import route_syntetos_boylan
-from pred_engine.ingesta.categorizacion.errores import TopologyContractError
+from pred_engine.ingesta.categorizacion.errores import (
+    TopologyContractError,
+    TopologyMathError,
+)
 
 _logger = get_logger(__name__)
 
@@ -30,20 +40,38 @@ class TopologyArtifact:
 
 
 def classify_panel(frame: pd.DataFrame) -> TopologyArtifact:
-    """Agrupa por sku_id, clasifica una vez y rellena sku_class por broadcast."""
+    """Clasifica cada SKU con su historia hasta t* y rellena sku_class por broadcast."""
     if frame.empty:
         raise TopologyContractError("no hay filas para clasificar")
     faltan = [c for c in CANONICAL_FIELDS if c not in frame.columns]
     if faltan:
         raise TopologyContractError(f"faltan columnas {faltan}")
+    try:
+        corte = ReserveCut.of(frame)
+    except ValueError as exc:
+        raise TopologyContractError(str(exc)) from exc
+    dias = pd.to_datetime(frame["timestamp"]).dt.normalize()
+    admisible = frame.loc[dias <= corte.t_star]
+    _logger.info(
+        "Clasificacion sobre la historia admisible t*=%s dias_reservados=%s",
+        corte.t_star.date(),
+        corte.reserved_days,
+    )
 
     metricas: list[TopologyMetrics] = []
     clases: dict[str, str] = {}
 
-    for sku, grupo in frame.groupby("sku_id", sort=True):
+    for sku in sorted(frame["sku_id"].astype("string").unique()):
+        grupo = admisible.loc[admisible["sku_id"].astype("string") == sku]
         demanda = grupo["demand_qty"].to_numpy(dtype="float64", copy=True)
-        adi = compute_adi(demanda)
-        cv2 = compute_cv2(demanda)
+        try:
+            adi = compute_adi(demanda)
+            cv2 = compute_cv2(demanda)
+        except TopologyMathError as exc:
+            raise TopologyMathError(
+                f"SKU {sku}: sin demanda positiva hasta t*={corte.t_star.date()}; "
+                f"no se clasifica con los dias reservados ({exc})"
+            ) from exc
         n_periodos = int(np.isfinite(demanda).sum())
         n_positivos = int(np.sum(demanda > 0.0))
         clase = route_syntetos_boylan(adi, cv2)

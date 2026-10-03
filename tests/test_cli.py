@@ -77,7 +77,9 @@ def test_cli_ingest_con_proveedor_inyectado(
 ) -> None:
     csv = tmp_path / "mini.csv"
     csv.write_text(
-        "sku_id,timestamp,demand_qty,lead_time_days\n105,2024-10-01,108,17\n",
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,108,17\n"
+        "105,2024-10-04,50,17\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
