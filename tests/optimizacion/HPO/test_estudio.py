@@ -107,13 +107,15 @@ def test_mejor_es_none_cuando_todo_falla():
     assert resultado.n_fallidos == 5
 
 
-def test_fallo_en_las_primeras_ventanas_no_mata_el_trial_si_luego_converge():
+def test_un_ajuste_fallido_en_una_ventana_cierra_el_trial_como_fallido():
+    # ADR-020: todos los trials se comparan en las mismas ventanas; uno que no
+    # ajusta en alguna no es elegible aunque converja en las siguientes.
     y = _serie_objetivo(n=60)
     resultado = ejecutar_estudio(
         y,
         _espacio(),
-        fabrica_falla_primeras_n(3),
-        n_trials=1,
+        fabrica_falla_primeras_n(1),
+        n_trials=2,
         min_train=20,
         horizonte=1,
         paso=1,
@@ -121,11 +123,15 @@ def test_fallo_en_las_primeras_ventanas_no_mata_el_trial_si_luego_converge():
         seed=0,
         familia="prueba",
     )
-    trial = resultado.trials[0]
-    assert trial.estado == "completado"
-    assert trial.valor is not None
-    assert math.isfinite(trial.valor)
-    assert resultado.n_fallidos == 0
+    primero, segundo = resultado.trials
+    assert primero.estado == "fallido"
+    assert primero.valor is None
+    assert primero.n_ventanas == 1
+    assert primero.motivo is not None and "ajuste_fallido" in primero.motivo
+    assert segundo.estado == "completado"
+    assert segundo.valor is not None and math.isfinite(segundo.valor)
+    assert resultado.mejor is not None
+    assert resultado.mejor.id == segundo.id
 
 
 def test_fallo_en_todas_las_ventanas_hasta_la_poda_se_marca_fallido_no_podado():

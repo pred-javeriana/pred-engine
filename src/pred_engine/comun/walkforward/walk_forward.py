@@ -9,8 +9,9 @@ greedy de `walk_forward_greedy.py`, que es el motor de BUSQUEDA que usa el
 HPO), asi que un fallo de ajuste debe propagarse en vez de disolverse en un
 `inf` -- quien pide un reporte final quiere saber si el modelo no ajusto,
 no un numero que lo esconda. Contrastar con el modo greedy
-(`tolerar_fallos=True` por defecto): ahi una ventana que no converge es
-señal que ASHA puede usar para podar, no debe abortar el trial completo.
+(`tolerar_fallos=True` por defecto): ahi una ventana que no converge se
+entrega como resultado y decide el estudio HPO, que cierra el trial como
+fallido (ADR-020).
 Ambos modos comparten `generar_ventanas`/`ejecutar_ventana` bit a bit (ver
 docs/adr/ADR-003); la unica diferencia de comportamiento entre ellos es
 esta, y esta deliberadamente documentada porque la prueba de equivalencia
