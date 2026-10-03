@@ -208,3 +208,20 @@ def test_paquete_router_no_importa_hpo_ni_walkforward() -> None:
         unidos = " ".join(nombres)
         for palabra in prohibidos:
             assert palabra not in unidos, f"{path.name} importa {palabra}"
+
+
+def test_plan_decide_sin_ejecutar_y_execute_corre_una_sola_decision() -> None:
+    registro, fakes = populated_registry()
+    router = SelectionRouter(PoliticaFija(), registro)
+    solicitud = make_request("smooth")
+
+    decisiones = router.plan(solicitud)
+    assert [d.family for d in decisiones] == ["classical", "ml"]
+    assert not any(fake.calls for fake in fakes.values())
+
+    resultado = router.execute(solicitud, decisiones[1])
+    assert resultado.family == "ml"
+    assert resultado.policy_version == "fija-1"
+    assert not fakes["classical"].calls
+    assert len(fakes["ml"].calls) == 1
+    assert router.route(solicitud)[1] == resultado

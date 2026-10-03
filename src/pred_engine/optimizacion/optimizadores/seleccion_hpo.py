@@ -9,11 +9,8 @@ ganador) queda en cada modulo; aqui NO hay logica de TPE/ASHA -- eso vive en
 
 from __future__ import annotations
 
-import multiprocessing
-import os
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +18,11 @@ import numpy as np
 import pandas as pd
 
 from pred_engine.comun.dataclasses.hpo import ResultadoEstudio
+from pred_engine.comun.ejecucion_paralela import (
+    CONTEXTO_MP,
+    blas_de_una_hebra,
+    fijar_una_hebra_blas,
+)
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.walkforward.protocolos import FabricaPronosticador
 from pred_engine.optimizacion.optimizadores.HPO.contratos import InfoTrial
@@ -127,7 +129,7 @@ def seleccionar_panel[R](
     `derivar_semilla` es un hash de coordenadas estables, no un contador.
 
     `seleccionar_una` debe ser un invocable de nivel de modulo (se serializa con
-    `pickle`). Los hijos se crean con `spawn` (ver `_CONTEXTO_MP`) y reimportan
+    `pickle`). Los hijos se crean con `spawn` (ver `CONTEXTO_MP`) y reimportan
     el modulo, asi que el script que llame con `n_procesos > 1` DEBE protegerse
     con `if __name__ == "__main__":`.
     """
@@ -165,53 +167,6 @@ def _trabajo_sku[R](
     return sku_id, seleccionar_una(serie, sku_id=sku_id, **kwargs)
 
 
-_VARS_HILOS_BLAS = (
-    "OMP_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-    "VECLIB_MAXIMUM_THREADS",
-)
-
-
-# `spawn` y no `fork`: LightGBM (OpenMP/libgomp) se cuelga en el hijo si el padre
-# ya entreno un modelo antes de bifurcarse (el runtime de OpenMP no sobrevive a
-# `fork`). `spawn` arranca un interprete limpio por proceso, igual en todos los
-# sistemas operativos, a costa de reimportar el paquete al iniciar el pool.
-_CONTEXTO_MP = multiprocessing.get_context("spawn")
-
-
-def _fijar_una_hebra_blas() -> None:
-    for variable in _VARS_HILOS_BLAS:
-        os.environ[variable] = "1"
-
-
-@contextmanager
-def _blas_de_una_hebra() -> Iterator[None]:
-    """Evita la sobresuscripcion de hilos mientras vive el pool.
-
-    NumPy/SciPy lanzan sus propios hilos de BLAS dentro de cada ajuste. Con N
-    procesos x M hilos de BLAS el planificador del sistema operativo pasa mas
-    tiempo cambiando de contexto que calculando, y el modo paralelo puede
-    resultar MAS LENTO que el secuencial.
-
-    Se fija en el proceso padre y no solo en el `initializer` porque con
-    `spawn` el hijo hereda `os.environ` al arrancar, y las bibliotecas de
-    BLAS leen estas variables UNA VEZ, al importarse. El entorno del padre se
-    restaura al salir.
-    """
-    previos = {variable: os.environ.get(variable) for variable in _VARS_HILOS_BLAS}
-    _fijar_una_hebra_blas()
-    try:
-        yield
-    finally:
-        for variable, valor in previos.items():
-            if valor is None:
-                os.environ.pop(variable, None)
-            else:
-                os.environ[variable] = valor
-
-
 def _seleccionar_en_paralelo[R](
     series: list[tuple[str, np.ndarray]],
     seleccionar_una: Callable[..., R],
@@ -224,11 +179,11 @@ def _seleccionar_en_paralelo[R](
 
     _logger.info("Seleccion en paralelo | skus=%d | procesos=%d", len(series), procesos)
     with (
-        _blas_de_una_hebra(),
+        blas_de_una_hebra(),
         ProcessPoolExecutor(
             max_workers=procesos,
-            mp_context=_CONTEXTO_MP,
-            initializer=_fijar_una_hebra_blas,
+            mp_context=CONTEXTO_MP,
+            initializer=fijar_una_hebra_blas,
         ) as ejecutor,
     ):
         futuros = {

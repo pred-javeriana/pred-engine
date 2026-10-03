@@ -7,6 +7,7 @@ validator into Pipeline. The initial topology matrix is never changed here.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
 from pred_engine.comun.modelos import SkuClass
 from pred_engine.comun.modelos.modelos_deep_learning import fabrica_dl
@@ -77,22 +78,33 @@ def build_pipeline(
     n_trials: int | None = None,
     seed: int = 0,
     validator: RetrospectiveValidator | None = None,
+    workers: int = 1,
+    hpo_root: str | Path | None = None,
+    session: str | None = None,
 ) -> Pipeline:
     """Compose core families; foundation is opt-in and requires the foundation extra.
 
     With n_trials=None the original strategy budgets are preserved. Evaluation
-    settings also define HPO windows. For custom search spaces or recovery,
-    construct a SelectionRouter with existing strategies and pass it to Pipeline.
+    settings also define HPO windows. For custom search spaces, construct a
+    SelectionRouter with existing strategies and pass it to Pipeline.
+
+    Con ``hpo_root`` y ``session`` cada estudio de HPO persiste su manifiesto y
+    sus trials (2.9): repetir la corrida con la misma sesion retoma los estudios
+    interrumpidos y reconstruye los completados sin reentrenar.
     """
     policy = ConfiguredTopologyPolicy(families)
     if n_trials is not None and (type(n_trials) is not int or n_trials < 1):
         raise ValueError("n_trials must be a positive integer")
+    if (hpo_root is None) != (session is None):
+        raise ValueError("hpo_root and session must be given together")
     shared = {
         "min_train": evaluation.min_train,
         "horizonte": evaluation.horizon,
         "paso": evaluation.step,
         "metrica_objetivo": evaluation.metric,
         "seed": seed,
+        "raiz_corrida": hpo_root,
+        "sesion": session,
     }
     registry = StrategyRegistry()
     for family in families:
@@ -138,4 +150,5 @@ def build_pipeline(
         evaluation,
         factories=model_factories(),
         validator=validator,
+        workers=workers,
     )

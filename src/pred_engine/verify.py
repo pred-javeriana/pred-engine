@@ -88,12 +88,13 @@ def verification_pipeline() -> Pipeline:
 
 
 def representative_csv(path: Path) -> Path:
+    """35 dias: 28 de historia admisible y 7 reservados para M3 (ADR-03-003)."""
     pd.DataFrame(
         {
-            "sku_id": ["proof-sku"] * 28,
-            "timestamp": pd.date_range("2024-01-01", periods=28),
-            "demand_qty": [20 + 0.35 * i + (i % 5 - 2) for i in range(28)],
-            "lead_time_days": [3] * 28,
+            "sku_id": ["proof-sku"] * 35,
+            "timestamp": pd.date_range("2024-01-01", periods=35),
+            "demand_qty": [20 + 0.35 * i + (i % 5 - 2) for i in range(35)],
+            "lead_time_days": [3] * 35,
         }
     ).to_csv(path, index=False)
     return path
@@ -133,6 +134,10 @@ def verify_pipeline(root: Path) -> dict[str, object]:
         raise RuntimeError("Missing evidence")
     _require(len(fitting.candidates) == 1, "The representative SKU must be fitted")
     _require(
+        fitting.reserve.reserved_days == 7 and len(fitting.candidates[0].series) == 28,
+        "L2 must only see the history before the 20% chronological reserve",
+    )
+    _require(
         evaluation.candidates[0].walk_forward.n_ventanas_evaluadas == 4,
         "Expected all four causal windows",
     )
@@ -140,9 +145,11 @@ def verify_pipeline(root: Path) -> dict[str, object]:
     # Baseline entry points remain usable without orchestration.
     _, baseline_path = run_classify_csv(csv, data_root=root / "baseline")
     pd.testing.assert_frame_equal(ingestion.panel, run_verify_parquet(baseline_path))
+    admissible = ingestion.panel.loc[
+        ingestion.panel["timestamp"] <= fitting.reserve.t_star
+    ]
     observations = tuple(
-        ClassifiedObservation(**row)
-        for row in ingestion.panel.to_dict(orient="records")
+        ClassifiedObservation(**row) for row in admissible.to_dict(orient="records")
     )
     native_selection = pipeline.router.route(
         SelectionRequest(
@@ -161,7 +168,7 @@ def verify_pipeline(root: Path) -> dict[str, object]:
     if config is None:
         raise RuntimeError("Missing configuration")
     native_model = fabrica_sarima(config, seed=17).fit(candidate.series)
-    np.testing.assert_array_equal(candidate.model.predict(2), native_model.predict(2))
+    np.testing.assert_array_equal(candidate.forecast, native_model.predict(7))
     native_evaluation = evaluar_walk_forward(
         candidate.series,
         fabrica_sarima,
@@ -190,8 +197,7 @@ def verify_pipeline(root: Path) -> dict[str, object]:
     pd.testing.assert_frame_equal(independent_ingestion.panel, ingestion.panel)
     independent_fit = pipeline.fit(independent_ingestion)
     np.testing.assert_array_equal(
-        independent_fit.candidates[0].model.predict(2),
-        candidate.model.predict(2),
+        independent_fit.candidates[0].forecast, candidate.forecast
     )
     independent_evaluation = pipeline.evaluate(independent_fit)
     _require(

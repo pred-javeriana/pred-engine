@@ -23,6 +23,7 @@ from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
     EspacioClasico,
     seleccionar_configuracion_clasica,
+    tendencia_sarima,
 )
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
@@ -151,6 +152,9 @@ class ClassicalSelectionStrategy:
                 "D": seleccionada.seasonal_order[1],
                 "Q": seleccionada.seasonal_order[2],
                 "m": seleccionada.seasonal_order[3],
+                "tendencia": tendencia_sarima(
+                    seleccionada.order[1], seleccionada.seasonal_order[1]
+                ),
             },
             forecast_seed=self._seed,
             payload={
@@ -165,6 +169,8 @@ class ClassicalSelectionStrategy:
                 "n_podados": resultado.estudio.n_podados,
                 "n_fallidos": resultado.estudio.n_fallidos,
                 "seed": resultado.estudio.seed,
+                # Referencia al estudio persistido (2.9); None sin raiz_corrida.
+                "estudio_hpo": run_id,
             },
         )
 

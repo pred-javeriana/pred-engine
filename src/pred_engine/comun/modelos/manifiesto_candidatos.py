@@ -64,7 +64,11 @@ class ContextoParticion(BaseModel):
 
 
 class ConfigSarima(BaseModel):
-    """Claves que lee `fabrica_sarima`; `m=0` significa sin estacionalidad."""
+    """Claves que lee `fabrica_sarima`; `m=0` significa sin estacionalidad.
+
+    `tendencia` es `"c"` (constante) o `"n"` (sin termino). M2 incluye la
+    constante solo si `d = D = 0` (ADR-018); con diferenciacion seria una deriva.
+    """
 
     model_config = _ESTRICTO
 
@@ -75,6 +79,7 @@ class ConfigSarima(BaseModel):
     D: int = Field(ge=0)
     Q: int = Field(ge=0)
     m: int = Field(ge=0)
+    tendencia: Literal["c", "n"]
 
     @field_validator("m")
     @classmethod
@@ -83,6 +88,13 @@ class ConfigSarima(BaseModel):
             raise ValueError("m debe ser 0 (sin estacionalidad) o >= 2")
         if valor == 0 and any(info.data.get(campo) for campo in ("P", "D", "Q")):
             raise ValueError("con m=0 la parte estacional (P, D, Q) debe ser 0")
+        return valor
+
+    @field_validator("tendencia")
+    @classmethod
+    def constante_sin_diferenciacion(cls, valor: str, info: ValidationInfo) -> str:
+        if valor == "c" and (info.data.get("d") or info.data.get("D")):
+            raise ValueError("con d o D > 0 la tendencia debe ser 'n' (ADR-018)")
         return valor
 
 

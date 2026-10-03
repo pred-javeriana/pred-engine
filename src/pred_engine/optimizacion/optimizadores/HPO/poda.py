@@ -7,6 +7,10 @@ from typing import Literal
 
 import numpy as np
 
+# Prefijo del motivo de un trial descartado por la regla #3; ASHA lo usa para no
+# comparar contra el valor parcial de una configuracion degenerada.
+PREFIJO_PODA_SEMANTICA = "poda_semantica"
+
 
 @dataclass(frozen=True, slots=True)
 class ReglasPoda:

@@ -179,6 +179,7 @@ def test_run_id_estable_persiste_y_una_segunda_llamada_no_reejecuta(tmp_path):
     estrategia = _estrategia(raiz_corrida=tmp_path, sesion="ses1")
     primera = estrategia.select(_solicitud(), "dense_stable")
     assert (tmp_path / "ml-S1-ses1" / "manifiesto.json").is_file()
+    assert primera.payload["estudio_hpo"] == "ml-S1-ses1"
     segunda = estrategia.select(_solicitud(), "dense_stable")
     assert segunda.payload["hiperparametros"] == primera.payload["hiperparametros"]
     assert segunda.payload["valor"] == primera.payload["valor"]

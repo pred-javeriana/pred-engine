@@ -91,7 +91,8 @@ Un estudio por SKU, ordenado alfabeticamente. `run_id` en kwargs -> `ValueError`
      con la causa encadenada.
   5. Sin ningun trial completado -> `SelectionContractError`.
 - `SelectionResult.payload`: `hiperparametros`, `metrica_objetivo`, `valor`,
-  `n_ventanas`, `n_trials`, `n_completados`, `n_podados`, `n_fallidos`, `seed`.
+  `n_ventanas`, `n_trials`, `n_completados`, `n_podados`, `n_fallidos`, `seed`,
+  `estudio_hpo` (referencia al estudio persistido, o `None` sin `raiz_corrida`).
   `produced_by = "MLSelectionStrategy"`; el router anota `policy_version`.
 
 ### `PresupuestoHPO(n_trials, reglas=ReglasPoda())` y `PRESUPUESTO_POR_PERFIL`

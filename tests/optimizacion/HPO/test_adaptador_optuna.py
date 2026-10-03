@@ -323,3 +323,26 @@ def test_adaptador_roundtrip_preserva_podado_y_fallido(tmp_path: Path):
     restaurado, _podador = adaptador.restaurar(ref)
     estados = [t.estado for t in restaurado.trials_finalizados()]
     assert estados == ["completado", "podado", "fallido"]
+
+
+def test_un_trial_con_poda_semantica_no_fija_el_umbral_de_asha():
+    # En demanda intermitente, pronosticar todo cero da un MASE parcial muy bajo
+    # antes de que la regla #3 lo descarte; ese valor no debe podar a los demas.
+    decisor = _decisor(min_ventanas=4, n_ventanas_totales=12, factor_reduccion=3)
+    study, _ = crear_estudio_optuna(
+        muestreador=optuna.samplers.RandomSampler(seed=0), decisor_asha=decisor
+    )
+    escalon = decisor.escalones()[0]
+    degenerado = study.ask()
+    degenerado.report(0.1, escalon)
+    degenerado.set_user_attr(
+        "motivo", "ventana=5 valor=0.1 poda_semantica:prediccion_nula"
+    )
+    study.tell(degenerado, None, estado="podado")
+    valido = study.ask()
+    valido.report(1.0, escalon)
+    assert valido.should_prune() is False
+
+    peor = study.ask()
+    peor.report(5.0, escalon)
+    assert peor.should_prune() is True

@@ -27,7 +27,16 @@ EMITIDO_EN = datetime(2024, 3, 1, 12, 0, tzinfo=UTC)
 
 # Configuraciones completas y pequenas (ajustan en milisegundos).
 CONFIGURACIONES: dict[str, dict[str, Any]] = {
-    "classical": {"p": 1, "d": 0, "q": 0, "P": 0, "D": 0, "Q": 0, "m": 7},
+    "classical": {
+        "p": 1,
+        "d": 0,
+        "q": 0,
+        "P": 0,
+        "D": 0,
+        "Q": 0,
+        "m": 7,
+        "tendencia": "c",
+    },
     "ml": {
         "lags": 3,
         "m": 7,

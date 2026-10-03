@@ -33,15 +33,29 @@ el handoff hacia el Modulo 1.
 ## Como
 
 ```bash
-uv run python -m pred_engine.aumentacion.fase0 semilla_kaggle.csv \
-  --data-root data \
-  --period 7 --n-series 40 --seed 42
+uv run pred-engine-fase0 inventory_data.csv \
+  --data-root data --metodo mbb-directo \
+  --columna sku_id=Item_ID --columna timestamp=Date \
+  --columna demand_qty=Avg_Usage_Per_Day --columna lead_time_days=Restock_Lead_Time
 ```
 
-La semilla debe traer ya las 4 columnas canonicas. Cada corrida con la misma
-semilla produce un artefacto con el mismo hash. El CSV se deposita en
-`data/raw/panel_sintetico_fase0.csv` (inmutable: un segundo intento falla con
-`WormOverwriteError`).
+- `--metodo` elige el aumento (ADR-016): `stl-mbb` (por defecto, ADR-01-007)
+  o `mbb-directo` (0.2, conserva las rachas de cero; es el que usa la semilla
+  Kaggle intermitente).
+- `--columna CANONICA=ORIGEN` mapea columnas de una semilla no canonica.
+- La semilla se lleva a calendario diario por SKU antes de remuestrear: las
+  fechas sin registro son dias con demanda 0.
+- Las leyes fisicas se aplican a cada candidata antes de la compuerta de
+  paridad del 5 %; el presupuesto por serie es `--max-reintentos` (200).
+- Cada corrida con la misma semilla y configuracion produce un artefacto con el
+  mismo hash. El CSV se deposita en `data/raw/panel_sintetico_fase0.csv` en
+  modo 0444. Un segundo intento falla con `WormOverwriteError`, salvo con
+  `--reutilizar` y la misma corrida (misma huella), que reutiliza el artefacto.
+- Los errores esperables (semilla ausente, columnas faltantes, compuerta
+  agotada, WORM) se informan en una linea `error: ...` con codigo 1.
+
+`pred-engine run --seed-csv` ejecuta esta misma Fase 0 (opciones `--m0-*`)
+y continua con L1-L3; ver `docs/features/backend-pipeline/EJECUCION_M0_M2.md`.
 
 ## Donde
 
@@ -58,8 +72,8 @@ semilla produce un artefacto con el mismo hash. El CSV se deposita en
 ## Fuera de alcance
 
 - Clasificacion topologica ADI/CV² → responsabilidad del Modulo 1.
-- Lectura de semillas con cabeceras caoticas → la Fase 0 asume columnas
-  canonicas; la alineacion semantica es 1.2.
+- Lectura de semillas con cabeceras caoticas → la Fase 0 solo admite un mapeo
+  explicito (`--columna`); la alineacion semantica automatica es 1.2.
 - El `aumentar()` de `mbb.py` fija `np.random.default_rng(42)` internamente; el
   bucle de rechazo compone directamente `decompose_series` +
   `moving_block_bootstrap(rng=...)` + `compose_series` para controlar la semilla.

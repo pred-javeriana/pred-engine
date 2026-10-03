@@ -84,6 +84,29 @@ returns `7` for this unfinished-stage blocker (`1` on stage failure). Existing
 See [backend pipeline API and boundaries](docs/features/backend-pipeline/README.md)
 for independent stage execution, errors and the future L4 attachment point.
 
+### Corrida M0 → M1 → M2 desde la semilla
+
+Un solo comando genera el panel sintético de la Fase 0, lo ingiere y clasifica
+(L1) y ejecuta la selección y el pronóstico de M2 (L2-L3) en paralelo:
+
+```bash
+uv run pred-engine run --seed-csv inventory_data.csv --data-root data \
+  --m0-metodo mbb-directo \
+  --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
+  --m0-columna demand_qty=Avg_Usage_Per_Day \
+  --m0-columna lead_time_days=Restock_Lead_Time
+```
+
+L2 y L3 solo usan la historia anterior a la reserva cronológica del 20 %
+(ADR-03-003). Cada SKU × familia es una unidad aislada y `--workers` (por
+defecto, núcleos - 1) fija los procesos. La corrida queda en
+`data/runs/{run_id}/` con el manifiesto tipado de candidatos para M3
+(`candidatos.json`), los pronósticos desde t*, la evidencia walk-forward y la
+traza de cada unidad. Repetir el comando retoma los estudios HPO terminados sin
+reentrenar. El código de salida es `7` (L4 ausente) u `8` (L4 ausente con
+unidades fallidas aisladas). Ver
+[EJECUCION_M0_M2.md](docs/features/backend-pipeline/EJECUCION_M0_M2.md).
+
 ## L1 ingestion (raw storage)
 
 Passive extraction lives in `pred_engine.ingesta`. Callers inject a
@@ -179,20 +202,22 @@ for configuration, result evidence and shared recovery behavior.
 
 ## Phase 0 pre-ingestion simulation (data augmentation)
 
-`pred_engine.aumentacion` builds the synthetic stress panel that PRED is
-validated against. Starting from an STL + Moving Block Bootstrap of a Kaggle
-seed (`aumentacion.mbb`), it enforces logistics conservation laws (non-negative
-integer demand, seed-derived lead-time bounds), runs basic rejection sampling so
-each synthetic series stays within 5% of the seed's mean and variance, validates
-a strict 4-column data contract, and writes a single immutable CSV to
-`{data_root}/raw/` under a Write-Once-Read-Many guard. The orchestrator is
-One-Shot and does not import the PRED framework (module 1).
+`pred_engine.aumentacion` construye el panel sintético con el que se valida
+PRED. La semilla se lleva a un calendario diario por SKU y se aumenta con el
+método elegido en `--metodo` (ADR-016): `stl-mbb` (STL + MBB de residuales,
+ADR-01-007, por defecto) o `mbb-directo` (MBB de la serie diaria, que conserva
+la intermitencia de la semilla Kaggle). Cada candidata pasa por las leyes
+físicas (demanda entera no negativa, lead time acotado por la semilla) y luego
+por la compuerta de paridad del 5 % en media y varianza. El artefacto cumple un
+contrato de 4 columnas y se escribe una sola vez en `{data_root}/raw/` (WORM,
+modo 0444). El orquestador no importa el framework PRED (módulo 1).
 
 ```bash
-uv run python -m pred_engine.aumentacion.fase0 seed_kaggle.csv \
-  --data-root data --period 7 --n-series 40 --seed 42
+uv run pred-engine-fase0 inventory_data.csv --data-root data \
+  --metodo mbb-directo --columna sku_id=Item_ID --columna timestamp=Date \
+  --columna demand_qty=Avg_Usage_Per_Day --columna lead_time_days=Restock_Lead_Time
 ```
 
-Runs with the same `--seed` produce a byte-identical artefact; a structured JSON
-run log lands in `{data_root}/logs/`. See
+La misma semilla y configuración producen un artefacto idéntico byte a byte;
+la bitácora JSON de cada corrida queda en `{data_root}/logs/`. Ver
 `docs/features/0.3-0.4-simulacion-fase0/`.
