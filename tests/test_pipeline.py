@@ -818,6 +818,19 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     assert len(evaluation) == report["units"]["L3"]["completed"]
     units = [json.loads(line) for line in (run_dir / "unidades.jsonl").open()]
     assert len(units) == report["units"]["L2"]["total"] + report["units"]["L3"]["total"]
+    assert {u["model"] for u in units} <= {"sarima", "lightgbm"}
+    assert all(u["cpu_s"] > 0 for u in units if u["state"] == "completada")
+    assert set(run["stage_times"]) == {"L1", "L2", "L3"}
+    assert run["stage_times"]["L2"]["seconds"] > 0
+
+    # Resources over time, per worker process, beside the unit trace.
+    assert "recursos.jsonl" in report["files"]
+    assert run["files"]["recursos"] == "recursos.jsonl"
+    assert run["telemetry"]["samples"] > 0 and run["telemetry"]["error"] is None
+    samples = [json.loads(line) for line in (run_dir / "recursos.jsonl").open()]
+    worker_pids = {s["pid"] for s in samples if s["role"] == "worker"}
+    # A pool that lives less than one interval may fall between two samples.
+    assert worker_pids & {u["pid"] for u in units}
     hpo = {p: p.read_bytes() for p in (run_dir / "hpo").rglob("*") if p.is_file()}
     assert hpo
 
@@ -865,6 +878,31 @@ def test_cli_reports_isolated_unit_failures_with_exit_code_8(
         ("proof-sku", "L2", "completada"),
         ("proof-sku", "L3", "completada"),
     ]
+
+
+def test_cli_resource_sampling_can_be_disabled(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        "pred_engine.pipeline_setup.build_pipeline",
+        lambda *args, **kwargs: verification_pipeline(),
+    )
+    request = request_at(tmp_path)
+    args = [
+        "run",
+        "--csv",
+        str(request.csv_path),
+        "--data-root",
+        str(request.data_root),
+    ]
+
+    assert main([*args, "--telemetry-interval", "-1"]) == 1
+    assert "--telemetry-interval" in capsys.readouterr().err
+
+    assert main([*args, "--telemetry-interval", "0"]) == 7
+    report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    run_dir = Path(report["run_dir"])
+    assert "recursos.jsonl" not in report["files"]
+    assert not (run_dir / "recursos.jsonl").exists()
+    assert json.loads((run_dir / "corrida.json").read_text())["telemetry"] is None
 
 
 def test_cli_seed_errors_are_reported_without_traceback(tmp_path, capsys):

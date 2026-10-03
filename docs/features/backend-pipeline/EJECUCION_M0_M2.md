@@ -53,6 +53,7 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
 | `--min-train`, `--horizon`, `--step`, `--seasonality`, `--metric` | 40, 7, 7, 7, mase | Ventanas walk-forward del HPO y de L3. |
 | `--seed` | 0 | Semilla del HPO y de los modelos. |
 | `--runs-dir`, `--run-id` | `data/runs`, derivado | Ubicación e identidad de la corrida. |
+| `--telemetry-interval` | 1 | Segundos entre muestras de CPU y memoria en `recursos.jsonl`; `0` desactiva el muestreo. No forma parte de la identidad de la corrida. |
 
 Las opciones de la Fase 0 son las de `pred-engine-fase0` con el prefijo
 `--m0-` (por ejemplo, `--m0-metodo`, `--m0-n-series`, `--m0-seed`).
@@ -63,12 +64,13 @@ Todo queda en `data/runs/{run_id}/`:
 
 | Archivo | Contenido |
 | --- | --- |
-| `corrida.json` | Entradas (semilla, artefacto M0, Parquet M1, hashes y filas), opciones, resumen de etapas, corte t*, exclusiones, fallas, evidencia de paralelismo, tiempo de pared, versiones de librerías y la procedencia de cada candidato (perfil, política, referencia al estudio HPO y su evidencia). |
+| `corrida.json` | Entradas (semilla, artefacto M0, Parquet M1, hashes y filas), opciones, resumen de etapas, inicio y fin de cada etapa (`stage_times`), corte t*, exclusiones, fallas, evidencia de paralelismo, tiempo de pared, resumen del muestreo de recursos (`telemetry`), versiones de librerías y la procedencia de cada candidato (perfil, política, referencia al estudio HPO y su evidencia). |
 | `candidatos.json` | Manifiesto de candidatos para M3 (ADR-03-004), el que valida `forecasting.adaptador_candidatos`: contexto de partición (huella del Parquet de M1, t* y fracción reservada), y configuración completa, semilla e identidad de cada candidato. |
 | `pronosticos.parquet` | Pronóstico diario de cada candidato para los días reservados (`sku_id`, `sku_class`, `familia`, `modelo`, `timestamp`, `pronostico`). |
 | `evaluacion.parquet` | Métrica agregada walk-forward y medias de MAE, RMSE, sMAPE y MASE por candidato. |
 | `walk_forward.parquet` | Valor real y pronóstico de cada día de cada ventana walk-forward. |
-| `unidades.jsonl` | Una línea por unidad de L2 o L3: estado, pid, inicio, fin, segundos y error. |
+| `unidades.jsonl` | Traza de modelos: una línea por unidad de L2 o L3 con etapa, SKU, familia, modelo (`sarima`, `lightgbm`, `mlp` o `chronos2`), estado, pid, inicio, fin, segundos, segundos de CPU y error. |
+| `recursos.jsonl` | CPU (en núcleos) y memoria residente cada `--telemetry-interval` segundos, del proceso principal, de cada proceso del pool y de la máquina. |
 | `hpo/` | Manifiesto y trials de cada estudio HPO (control de reanudación 2.9). |
 
 El `run_id` se deriva del hash de la entrada, de las opciones y de la huella
@@ -82,6 +84,44 @@ los procesos distintos, la concurrencia máxima observada y la aceleración
 (tiempo de cómputo sumado dividido por el tiempo de pared del tramo). Los
 procesos se crean con `spawn` y BLAS de una hebra, así que cada unidad usa un
 núcleo.
+
+## Recursos y traza de modelos
+
+Durante L1-L3 una hebra del proceso principal toma una muestra por segundo y
+la agrega a `recursos.jsonl` en el momento, así que si la corrida muere (por
+ejemplo, por falta de memoria) las muestras previas quedan en disco. Cada línea
+tiene `at`, `role`, `pid`, `cpu_cores` y `mem_mb`:
+
+| `role` | `cpu_cores` | `mem_mb` |
+| --- | --- | --- |
+| `host` (solo la primera línea) | Núcleos lógicos de la máquina | Memoria total |
+| `system` | Núcleos ocupados en toda la máquina | Memoria en uso (total menos disponible) |
+| `main`, `worker`, `child` | Núcleos que usó el proceso desde la muestra anterior (1,0 = un núcleo) | Memoria residente (RSS) |
+
+El RSS de varios procesos cuenta dos veces las páginas compartidas; la fila
+`system` no. Un proceso que vive menos que el intervalo puede no aparecer en
+ninguna muestra; su unidad sigue en `unidades.jsonl`. `corrida.json` resume el muestreo en `telemetry`: picos de CPU, de
+RSS y de procesos del pool, y el costo propio de la hebra (`sampler_cpu_s` y
+`sampler_ms_per_sample`).
+
+El muestreo está activo por defecto porque su costo no se nota en la corrida.
+Con 20 SKU y 8 procesos, dos pares de corridas con y sin muestreo tardaron lo
+mismo (108 s frente a 108-111 s, dentro del ruido). La hebra usó 1,1 s de CPU
+en esas corridas, unos 16 ms por muestra; casi todo ese tiempo es la búsqueda
+de los procesos hijos.
+
+Para ver una corrida terminada:
+
+```bash
+uv run pred-engine telemetry data/runs/{run_id}
+```
+
+El comando escribe `data/runs/{run_id}/telemetria.svg` (o la ruta de
+`--output`): las etapas, la CPU y la memoria de la corrida frente a la máquina,
+la memoria de cada proceso y una fila por proceso con cada unidad SKU × familia
+coloreada por modelo. Pasar el puntero sobre una barra muestra SKU, etapa,
+duración, CPU y estado. Sin `recursos.jsonl` el gráfico muestra solo etapas y
+unidades.
 
 ## Fallas y reanudación
 

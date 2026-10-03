@@ -14,6 +14,7 @@ dependencies = [
     "statsmodels>=0.14",
     "optuna>=4.0",
     "lightgbm>=4.0",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
@@ -93,6 +94,8 @@ include = [
     "src/pred_engine/aumentacion/fase0.py",
     "src/pred_engine/pipeline.py",
     "src/pred_engine/run_artifacts.py",
+    "src/pred_engine/run_telemetry.py",
+    "src/pred_engine/run_chart.py",
     "src/pred_engine/cli.py",
     "src/pred_engine/forecasting/adaptador_candidatos",
 ]

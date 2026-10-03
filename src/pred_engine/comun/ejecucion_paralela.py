@@ -75,13 +75,18 @@ def blas_de_una_hebra() -> Iterator[None]:
 
 @dataclass(frozen=True, slots=True)
 class RegistroUnidad:
-    """Traza de una unidad: estado, proceso y reloj de pared (epoch, segundos)."""
+    """Traza de una unidad: estado, proceso y reloj de pared (epoch, segundos).
+
+    ``cpu_s`` es el tiempo de CPU que consumio el proceso mientras corria la
+    unidad (todas sus hebras); ``None`` si la unidad no llego a correr.
+    """
 
     estado: EstadoUnidad
     pid: int
     inicio: float
     fin: float
     error: str | None = None
+    cpu_s: float | None = None
 
     @property
     def duracion_s(self) -> float:
@@ -96,17 +101,23 @@ class ResultadoUnidad[R]:
 
 def _ejecutar_aislada[T, R](funcion: Callable[[T], R], tarea: T) -> ResultadoUnidad[R]:
     """Unidad de trabajo de nivel de modulo (``pickle`` no serializa closures)."""
-    inicio = time.time()
+    inicio, cpu = time.time(), time.process_time()
     try:
         valor = funcion(tarea)
     except Exception as exc:
         registro = RegistroUnidad(
-            "fallida", os.getpid(), inicio, time.time(), describir_error(exc)
+            "fallida",
+            os.getpid(),
+            inicio,
+            time.time(),
+            describir_error(exc),
+            time.process_time() - cpu,
         )
         return ResultadoUnidad(registro)
-    return ResultadoUnidad(
-        RegistroUnidad("completada", os.getpid(), inicio, time.time()), valor
+    registro = RegistroUnidad(
+        "completada", os.getpid(), inicio, time.time(), cpu_s=time.process_time() - cpu
     )
+    return ResultadoUnidad(registro, valor)
 
 
 def describir_error(exc: BaseException) -> str:
