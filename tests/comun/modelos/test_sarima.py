@@ -80,3 +80,22 @@ def test_fallo_de_convergencia_se_convierte_en_ajuste_modelo_error(monkeypatch):
     modelo = SarimaForecaster(order=(1, 0, 0), seasonal_order=(0, 0, 0, 0))
     with pytest.raises(AjusteModeloError, match="no convergio"):
         modelo.fit(_serie_ar1())
+
+
+def test_estimacion_estacionaria_no_produce_pronosticos_explosivos():
+    # Prefijo walk-forward real del panel Kaggle (SKU 104::syn000, ventana 12):
+    # 124 dias con 11 demandas. Sin restringir la estimacion, el optimizador no
+    # convergia, dejaba raices AR dentro del circulo unitario y pronosticaba ~1e63.
+    y = np.zeros(124)
+    demandas = {4: 281, 10: 400, 19: 224, 46: 62, 59: 218, 76: 62}
+    demandas |= {89: 219, 95: 1, 96: 416, 101: 448, 121: 35}
+    for dia, valor in demandas.items():
+        y[dia] = valor
+
+    modelo = SarimaForecaster(
+        order=(2, 0, 2), seasonal_order=(2, 0, 0, 7), tendencia="c"
+    ).fit(y)
+    pronostico = modelo.predict(7)
+
+    assert np.isfinite(pronostico).all()
+    assert pronostico.max() <= y.max()

@@ -38,6 +38,7 @@ from pred_engine.ingesta.pipeline import (
     run_verify_parquet,
 )
 from pred_engine.ingesta.salida import validate_output_contract
+from pred_engine.optimizacion.optimizadores.HPO.poda import es_degenerada
 from pred_engine.optimizacion.router import SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
@@ -361,10 +362,18 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
     y = np.array([obs.demand_qty for obs in task.request.series], dtype=float)
     model = task.factory(selection.forecast_config, seed=selection.forecast_seed)
     forecast = np.asarray(model.fit(y.copy()).predict(task.horizon), dtype=float)
-    if forecast.shape != (task.horizon,) or not np.isfinite(forecast).all():
+    if forecast.shape != (task.horizon,):
         raise ValueError(
             f"pronostico invalido para {selection.sku_id}/{selection.family}: "
-            f"se esperaban {task.horizon} valores finitos"
+            f"se esperaban {task.horizon} valores"
+        )
+    # Regla #3 (ADR-020): el pronostico que recibe M3 cumple la misma regla que
+    # cada ventana del HPO; uno degenerado hace fallar la unidad, no se entrega.
+    degenerado, motivo = es_degenerada(forecast, y_train=y)
+    if degenerado:
+        raise ValueError(
+            f"pronostico degenerado para {selection.sku_id}/{selection.family} "
+            f"desde t*: {motivo} (regla #3)"
         )
     return FittedCandidate(selection, y, forecast)
 

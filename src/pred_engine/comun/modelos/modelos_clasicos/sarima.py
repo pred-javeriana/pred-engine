@@ -42,8 +42,12 @@ class SarimaForecaster(BaseForecaster):
             order=self.order,
             seasonal_order=self.seasonal_order,
             trend=self.tendencia,
-            enforce_stationarity=False,
-            enforce_invertibility=False,
+            # ADR-020: la estimacion se restringe a la region estacionaria e
+            # invertible. Sin restriccion, un optimizador que no converge puede
+            # devolver raices AR dentro del circulo unitario y un pronostico
+            # explosivo (~1e63) que la media recortada del walk-forward oculta.
+            enforce_stationarity=True,
+            enforce_invertibility=True,
         )
         try:
             with warnings.catch_warnings():
