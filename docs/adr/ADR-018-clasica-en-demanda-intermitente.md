@@ -32,7 +32,8 @@ dos causas.
    diferenciación la constante sería una deriva, que no se incluye.
 2. `ClassicalSelectionStrategy` publica `tendencia` en `forecast_config`, de
    modo que el manifiesto de candidatos (ADR-03-004) la declara de forma
-   explícita y M3 no depende de una regla implícita.
+   explícita y M3 no depende de una regla implícita. `ConfigSarima` la exige
+   y rechaza la constante cuando `d` o `D` es mayor que cero.
 3. `PodadorASHAOptuna` excluye de los competidores de un escalón a los trials
    cuyo motivo de cierre es poda semántica (`PREFIJO_PODA_SEMANTICA`).
 

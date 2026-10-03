@@ -40,9 +40,16 @@ aunque un SKU falle y poder retomarse sin repetir el HPO ya terminado.
    pronóstico de los días reservados desde t*. El modelo ajustado no viaja
    entre procesos (un SARIMA serializado ocupa unos 40 MB) y M3 lo reconstruye
    desde la configuración, como pide ADR-03-004.
-5. **Manifiesto tipado (ADR-03-004).**
-   `optimizacion.manifiesto_candidatos` define la unión discriminada por
-   familia, con `extra="forbid"` y todos los hiperparámetros obligatorios.
+5. **Manifiesto de candidatos (ADR-03-004).** `candidatos.json` usa la
+   definición única del contrato M2 → M3
+   (`comun.modelos.manifiesto_candidatos`) y se construye con
+   `optimizacion.router.construir_manifiesto`, el mismo emisor que valida el
+   adaptador de M3 (`forecasting.adaptador_candidatos`, 3.2). El contexto de
+   partición es el real de la corrida: huella SHA-256 del Parquet de M1, t* y
+   la fracción reservada. El manifiesto lleva solo lo que M3 necesita para
+   reconstruir cada candidato (configuración completa, semilla e identidad);
+   la procedencia (perfil, política, referencia al estudio HPO y su
+   evidencia) y las versiones de librerías quedan en `corrida.json`.
 6. **Corrida persistida.** `pred-engine run` escribe
    `{data_root}/runs/{run_id}/` con `corrida.json`, `candidatos.json`,
    `pronosticos.parquet`, `evaluacion.parquet`, `walk_forward.parquet`,
@@ -83,5 +90,7 @@ procesos y respeta la decisión de ADR-03-004 de no serializar modelos.
 - ADR-013 (ASHA secuencial dentro de cada estudio; el paralelismo es entre
   estudios).
 - `src/pred_engine/pipeline.py`, `pipeline_setup.py`, `run_artifacts.py`,
-  `cli.py`, `comun/ejecucion_paralela.py`,
-  `optimizacion/manifiesto_candidatos.py`.
+  `cli.py`, `comun/ejecucion_paralela.py`.
+- `src/pred_engine/comun/modelos/manifiesto_candidatos.py`,
+  `optimizacion/router/manifiesto.py` y `forecasting/adaptador_candidatos/`
+  (contrato, emisor y validación del handoff M2 → M3).

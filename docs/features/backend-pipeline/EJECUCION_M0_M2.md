@@ -59,8 +59,8 @@ Todo queda en `data/runs/{run_id}/`:
 
 | Archivo | Contenido |
 | --- | --- |
-| `corrida.json` | Entradas (semilla, artefacto M0, Parquet M1, hashes y filas), opciones, resumen de etapas, corte t*, exclusiones, fallas, evidencia de paralelismo y tiempo de pared. |
-| `candidatos.json` | Manifiesto tipado para M3 (ADR-03-004): configuración completa, semilla, versiones, estadístico puntual y referencia al estudio HPO de cada candidato. |
+| `corrida.json` | Entradas (semilla, artefacto M0, Parquet M1, hashes y filas), opciones, resumen de etapas, corte t*, exclusiones, fallas, evidencia de paralelismo, tiempo de pared, versiones de librerías y la procedencia de cada candidato (perfil, política, referencia al estudio HPO y su evidencia). |
+| `candidatos.json` | Manifiesto de candidatos para M3 (ADR-03-004), el que valida `forecasting.adaptador_candidatos`: contexto de partición (huella del Parquet de M1, t* y fracción reservada), y configuración completa, semilla e identidad de cada candidato. |
 | `pronosticos.parquet` | Pronóstico diario de cada candidato para los días reservados (`sku_id`, `sku_class`, `familia`, `modelo`, `timestamp`, `pronostico`). |
 | `evaluacion.parquet` | Métrica agregada walk-forward y medias de MAE, RMSE, sMAPE y MASE por candidato. |
 | `walk_forward.parquet` | Valor real y pronóstico de cada día de cada ventana walk-forward. |
@@ -113,8 +113,13 @@ presupuesto por defecto:
 - M2: 212 unidades de L2 (110 clásicas y 102 ML) y 212 de L3, todas
   completas, en 5 min 24 s. Concurrencia máxima 22 y aceleración de 20,1 (L2)
   y 17,8 (L3).
-- Repetir el comando reconstruye los 212 estudios en 1,7 s de L2 y produce un
-  `candidatos.json` idéntico byte a byte.
+- El adaptador de M3 acepta los 212 candidatos de `candidatos.json` (110
+  SARIMA, 80 de ellos con constante, y 102 LightGBM). Cada candidato
+  reconstruido desde el manifiesto y ajustado con la historia admisible
+  reproduce exactamente el pronóstico de M2.
+- Repetir el comando reconstruye los 212 estudios en menos de 2 s de L2, no
+  modifica ningún archivo de `hpo/` y escribe los mismos candidatos y el mismo
+  contexto en `candidatos.json`; solo cambia `emitido_en`.
 
 ## Límites conocidos
 
@@ -122,6 +127,9 @@ presupuesto por defecto:
   reserva (ADR-017).
 - Con la semilla Kaggle la política no enruta DL: DL solo aplica a SKU
   `smooth` y `erratic`.
+- Con la semilla Kaggle, 1 de los 212 candidatos (un SARIMA con `d = 2`)
+  pronostica cero en todos los días reservados. La poda semántica revisa las
+  ventanas del HPO, no el pronóstico final desde t*.
 - La familia `foundation` necesita el extra `foundation` y los pesos de
   Chronos-2 en la caché local.
 - L4 (validación retrospectiva) y la evaluación de M3 sobre la reserva no
