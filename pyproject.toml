@@ -59,7 +59,6 @@ omit = [
     "src/pred_engine/config/*",
     "src/pred_engine/ingesta/validador_tipo_archivo/*",
     "src/pred_engine/forecasting/control_reanudacion/*",
-    "src/pred_engine/forecasting/evaluaciones/*",
     "src/pred_engine/forecasting/generador_pronosticos/*",
 ]
 
@@ -98,6 +97,8 @@ include = [
     "src/pred_engine/run_chart.py",
     "src/pred_engine/cli.py",
     "src/pred_engine/forecasting/adaptador_candidatos",
+    "src/pred_engine/forecasting/evaluaciones/calculo_errores",
+    "src/pred_engine/forecasting/evaluaciones/veredictos",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
