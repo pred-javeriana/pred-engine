@@ -16,4 +16,3 @@ data/processed/**
 !data/raw/.gitkeep
 !data/staging/.gitkeep
 !data/processed/.gitkeep
-.agents/
