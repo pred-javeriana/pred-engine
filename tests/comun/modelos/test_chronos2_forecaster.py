@@ -87,6 +87,18 @@ def test_el_contexto_se_recorta_al_limite_nativo_del_modelo():
     np.testing.assert_array_equal(pipeline.contextos[0], y[-limite:])
 
 
+def test_pronosticar_amplia_el_contexto_con_lo_observado():
+    pipeline = PipelineFalso()
+    y = _serie()
+    observadas = np.array([4.0, 6.0])
+    pronostico = _modelo(pipeline).fit(y).pronosticar(observadas, 3)
+    np.testing.assert_array_equal(
+        pipeline.contextos[0], np.concatenate([y, observadas])
+    )
+    # PipelineFalso: la mediana es el ultimo valor del contexto.
+    np.testing.assert_array_equal(pronostico, [6.0, 6.0, 6.0])
+
+
 def test_el_modelo_solo_ve_lo_que_recibe_en_fit():
     pipeline = PipelineFalso()
     y = _serie()

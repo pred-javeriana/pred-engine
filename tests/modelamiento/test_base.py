@@ -84,6 +84,15 @@ class TestSeasonalNaiveStubPredict:
         result = m.predict(7)
         assert isinstance(result, np.ndarray)
 
+    def test_pronosticar_uses_last_cycle_up_to_origin(self):
+        m = SeasonalNaiveStub(season_length=7).fit(np.arange(1.0, 8.0))
+        forecast = m.pronosticar(np.array([8.0, 9.0]), 3)
+        np.testing.assert_array_equal(forecast, [3.0, 4.0, 5.0])
+
+    def test_pronosticar_rejects_non_finite_observations(self):
+        with pytest.raises(ValueError, match="no finitos"):
+            self._fitted().pronosticar(np.array([1.0, np.nan]), 3)
+
 
 class TestBaseForecasterInterface:
     def test_is_abstract(self):

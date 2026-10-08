@@ -31,9 +31,9 @@ from pred_engine.comun.modelos.modelos_fundacionales.errores import (
     ModeloFundacionalNoDisponibleError,
 )
 from pred_engine.comun.modelos.modelos_fundacionales.pipeline import cargar_pipeline
-from pred_engine.comun.walkforward.protocolos import FabricaPronosticador
 from pred_engine.forecasting.adaptador_candidatos.contratos import (
     CodigoFallo,
+    FabricaAdaptador,
     FalloCandidato,
     HandoffValidado,
     MotivoRechazo,
@@ -52,7 +52,7 @@ def validar_manifiesto(
     esperado: ContextoParticion,
     skus_panel: Collection[str],
     reserva_abierta_en: datetime | None = None,
-    fabricas: Mapping[str, FabricaPronosticador] = FABRICAS,
+    fabricas: Mapping[str, FabricaAdaptador] = FABRICAS,
     cargar_fundacional: Callable[[ConfiguracionFundacional], object] = (
         cargar_pipeline
     ),
@@ -151,7 +151,7 @@ def _identidad(crudo: Mapping[str, Any], campo: str) -> str:
 
 def _validar_candidatos(
     crudos: Sequence[Mapping[str, Any]],
-    fabricas: Mapping[str, FabricaPronosticador],
+    fabricas: Mapping[str, FabricaAdaptador],
 ) -> tuple[list[Candidato], list[FalloCandidato]]:
     validos: list[Candidato] = []
     fallos: list[FalloCandidato] = []

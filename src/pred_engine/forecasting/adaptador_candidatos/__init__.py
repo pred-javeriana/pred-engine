@@ -6,7 +6,9 @@ fallos. La eleccion entre familias es de M3.
 """
 
 from pred_engine.forecasting.adaptador_candidatos.contratos import (
+    AdaptadorCandidato,
     CodigoFallo,
+    FabricaAdaptador,
     FalloCandidato,
     HandoffValidado,
     MotivoRechazo,
@@ -27,9 +29,11 @@ from pred_engine.forecasting.adaptador_candidatos.validacion import (
 )
 
 __all__ = [
+    "AdaptadorCandidato",
     "AdaptadorCandidatosError",
     "CodigoFallo",
     "FABRICAS",
+    "FabricaAdaptador",
     "FalloCandidato",
     "HandoffValidado",
     "LoteRechazadoError",
