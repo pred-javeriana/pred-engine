@@ -34,6 +34,15 @@ class BaseForecaster(ABC):
         Raises ``RuntimeError`` if called before :meth:`fit`.
         """
 
+    @abstractmethod
+    def pronosticar(self, observadas: np.ndarray, horizon: int) -> np.ndarray:
+        """Pronostico desde un origen posterior al ajuste, sin reestimar (ADR-03-004).
+
+        `observadas` son los valores reales que siguen a la serie de `fit` hasta
+        el origen. Vacio, el origen es el fin de esa serie y el resultado es el
+        de `predict`. No cambia lo ajustado: cada origen se pronostica aparte.
+        """
+
     def _require_fitted(self) -> None:
         if not self._fitted:
             raise RuntimeError("Call fit() before predict().")
@@ -52,6 +61,14 @@ class BaseForecaster(ABC):
         serie = np.asarray(y, dtype=float)
         if serie.ndim != 1:
             raise ValueError(f"{nombre} debe ser un array 1D")
+        return serie
+
+    @staticmethod
+    def _validar_observadas(observadas: np.ndarray) -> np.ndarray:
+        """Exige observaciones nuevas 1D y finitas. Comun a todo `pronosticar()`."""
+        serie = BaseForecaster._validar_serie_1d(observadas, "observadas")
+        if not np.all(np.isfinite(serie)):
+            raise ValueError("observadas contiene valores no finitos")
         return serie
 
     @staticmethod
@@ -102,9 +119,16 @@ class SeasonalNaiveStub(BaseForecaster):
         return self
 
     def predict(self, horizon: int) -> np.ndarray:
+        return self.pronosticar(np.empty(0), horizon)
+
+    def pronosticar(self, observadas: np.ndarray, horizon: int) -> np.ndarray:
         self._require_fitted()
         if horizon < 1:
             raise ValueError("horizon must be >= 1")
         assert self._last_season is not None
+        # El ultimo ciclo incluye lo observado hasta el origen.
+        ciclo = np.concatenate(
+            [self._last_season, self._validar_observadas(observadas)]
+        )
         reps = -(-horizon // self.season_length)  # ceiling division
-        return np.tile(self._last_season, reps)[:horizon]
+        return np.tile(ciclo[-self.season_length :], reps)[:horizon]

@@ -144,11 +144,18 @@ class LightGBMForecaster(BaseForecaster):
         return self
 
     def predict(self, horizon: int) -> np.ndarray:
+        return self.pronosticar(np.empty(0), horizon)
+
+    def pronosticar(self, observadas: np.ndarray, horizon: int) -> np.ndarray:
         self._require_fitted()
         self._validar_horizonte(horizon)
         assert self._modelo is not None and self._historia is not None
 
-        historia = self._historia
+        # Los lags y la posicion usan lo observado hasta el origen; los arboles
+        # ajustados no cambian (ADR-03-004).
+        historia = np.concatenate(
+            [self._historia, self._validar_observadas(observadas)]
+        )
         pronostico = np.empty(horizon, dtype=float)
         for paso in range(horizon):
             ventana = historia[-self.lags :].reshape(1, -1)

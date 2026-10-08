@@ -59,14 +59,28 @@ class Chronos2Forecaster(BaseForecaster):
         Unico post-proceso: el recorte a >= 0 de `BaseForecaster` (la demanda
         no puede ser negativa), igual que en SARIMA y LightGBM.
         """
+        return self._cuantiles(np.empty(0), horizon)
+
+    def predict(self, horizon: int) -> np.ndarray:
+        return self.pronosticar(np.empty(0), horizon)
+
+    def pronosticar(self, observadas: np.ndarray, horizon: int) -> np.ndarray:
+        return self._cuantiles(observadas, horizon)[self._indice_puntual()]
+
+    def _cuantiles(self, observadas: np.ndarray, horizon: int) -> np.ndarray:
         self._require_fitted()
         self._validar_horizonte(horizon)
         assert self._contexto is not None
+        # El contexto suma lo observado hasta el origen; los pesos no cambian.
+        contexto = np.concatenate(
+            [self._contexto, self._validar_observadas(observadas)]
+        )
+        contexto = contexto[-self.configuracion.max_contexto :]
 
         pipeline = self._resolver_pipeline()
         try:
             cuantiles = np.asarray(
-                pipeline.pronosticar_cuantiles(self._contexto, horizon), dtype=float
+                pipeline.pronosticar_cuantiles(contexto, horizon), dtype=float
             )
         except Exception as exc:
             raise AjusteModeloError(f"Chronos-2 no pronostico: {exc}") from exc
@@ -77,10 +91,6 @@ class Chronos2Forecaster(BaseForecaster):
                 f"forma de cuantiles {cuantiles.shape}, se esperaba {esperado}"
             )
         return self._recortar_no_negativo(cuantiles)
-
-    def predict(self, horizon: int) -> np.ndarray:
-        cuantiles = self.predict_cuantiles(horizon)
-        return cuantiles[self._indice_puntual()]
 
     @property
     def cuantiles(self) -> tuple[float, ...]:

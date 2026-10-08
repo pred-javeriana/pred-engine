@@ -13,10 +13,13 @@ from pred_engine.comun.walkforward.protocolos import Pronosticador
 from pred_engine.forecasting.adaptador_candidatos import (
     FABRICAS,
     PERIODO_LINEA_BASE,
+    AdaptadorCandidato,
     ModeloNoRegistradoError,
     instanciar,
     instanciar_linea_base,
 )
+
+_FAMILIAS = ["classical", "ml", "dl", "foundation"]
 
 _ADAPTADOR: TypeAdapter[Candidato] = TypeAdapter(Candidato)
 
@@ -38,11 +41,52 @@ def _pronostico(familia: str, semilla: int = 7) -> np.ndarray:
     return modelo.fit(_serie()).predict(7)
 
 
-@pytest.mark.parametrize("familia", ["classical", "ml", "dl", "foundation"])
+def _adaptador(familia: str) -> AdaptadorCandidato:
+    if familia == "linea_base":
+        return instanciar_linea_base()
+    return instanciar(_candidato(familia), pipeline_fundacional=PipelineFalso())
+
+
+@pytest.mark.parametrize("familia", _FAMILIAS)
 def test_cada_familia_cumple_el_contrato_pronosticador(familia: str) -> None:
     modelo = instanciar(_candidato(familia), pipeline_fundacional=PipelineFalso())
     assert isinstance(modelo, Pronosticador)
+    assert isinstance(modelo, AdaptadorCandidato)
     assert modelo.seed == 7  # type: ignore[attr-defined]
+
+
+# --- ADR-03-004: ajustar una vez en t* y pronosticar desde cada origen --------
+
+
+@pytest.mark.parametrize("familia", [*_FAMILIAS, "linea_base"])
+def test_sin_observaciones_nuevas_pronosticar_es_predict(familia: str) -> None:
+    modelo = _adaptador(familia).fit(_serie())
+    assert np.array_equal(
+        modelo.pronosticar(np.empty(0), 7),
+        modelo.predict(7),  # type: ignore[attr-defined]
+    )
+
+
+@pytest.mark.parametrize("familia", [*_FAMILIAS, "linea_base"])
+def test_pronosticar_usa_lo_observado_sin_reajustar(
+    familia: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    modelo = _adaptador(familia).fit(_serie())
+    antes = modelo.predict(5)  # type: ignore[attr-defined]
+
+    def _no_reajustar(y: np.ndarray) -> None:
+        raise AssertionError("pronosticar no debe volver a ajustar")
+
+    monkeypatch.setattr(modelo, "fit", _no_reajustar)
+    # Ceros, lejos del nivel (~20) de la historia: el pronostico debe notarlo.
+    observadas = np.zeros(10)
+    desde_origen = modelo.pronosticar(observadas, 5)
+
+    assert desde_origen.shape == (5,) and np.all(np.isfinite(desde_origen))
+    assert not np.array_equal(desde_origen, antes)
+    assert np.array_equal(modelo.pronosticar(observadas, 5), desde_origen)
+    # Cada origen se pronostica aparte: lo ajustado no cambia.
+    assert np.array_equal(modelo.predict(5), antes)  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("familia", ["classical", "ml", "dl", "foundation"])

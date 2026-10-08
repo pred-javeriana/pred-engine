@@ -92,10 +92,17 @@ class SarimaForecaster(BaseForecaster):
         return self
 
     def predict(self, horizon: int) -> np.ndarray:
+        return self.pronosticar(np.empty(0), horizon)
+
+    def pronosticar(self, observadas: np.ndarray, horizon: int) -> np.ndarray:
         self._require_fitted()
         self._validar_horizonte(horizon)
         assert self._resultado_ajuste is not None
-        pronostico = np.asarray(
-            self._resultado_ajuste.forecast(steps=horizon), dtype=float
-        )
+        nuevas = self._validar_observadas(observadas)
+        resultado = self._resultado_ajuste
+        if nuevas.size:
+            # `extend` filtra las observaciones nuevas con los parametros ya
+            # estimados: actualiza el estado, no reestima (ADR-03-004).
+            resultado = resultado.extend(nuevas)
+        pronostico = np.asarray(resultado.forecast(steps=horizon), dtype=float)
         return self._recortar_no_negativo(pronostico)

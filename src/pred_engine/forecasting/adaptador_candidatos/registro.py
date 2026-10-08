@@ -23,9 +23,9 @@ from pred_engine.comun.modelos.modelos_fundacionales.pipeline import (
     PipelineFundacional,
 )
 from pred_engine.comun.modelos.modelos_machine_learning.lgbm import fabrica_ml
-from pred_engine.comun.walkforward.protocolos import (
-    FabricaPronosticador,
-    Pronosticador,
+from pred_engine.forecasting.adaptador_candidatos.contratos import (
+    AdaptadorCandidato,
+    FabricaAdaptador,
 )
 from pred_engine.forecasting.adaptador_candidatos.errores import (
     ModeloNoRegistradoError,
@@ -38,7 +38,7 @@ _logger = get_logger(__name__)
 # Mismo periodo que la escala de MASE (ADR-03-006).
 PERIODO_LINEA_BASE = 7
 
-FABRICAS: Mapping[str, FabricaPronosticador] = MappingProxyType(
+FABRICAS: Mapping[str, FabricaAdaptador] = MappingProxyType(
     {
         "classical": fabrica_sarima,
         "ml": fabrica_ml,
@@ -51,10 +51,10 @@ FABRICAS: Mapping[str, FabricaPronosticador] = MappingProxyType(
 def instanciar(
     candidato: Candidato,
     *,
-    fabricas: Mapping[str, FabricaPronosticador] = FABRICAS,
+    fabricas: Mapping[str, FabricaAdaptador] = FABRICAS,
     pipeline_fundacional: PipelineFundacional | None = None,
-) -> Pronosticador:
-    """Pronosticador sin ajustar con la configuracion validada, sin defaults."""
+) -> AdaptadorCandidato:
+    """Adaptador sin ajustar con la configuracion validada, sin defaults."""
     if candidato.familia not in fabricas:
         _logger.error(
             "Familia sin fabrica candidato_id=%s familia=%s",
@@ -74,6 +74,6 @@ def instanciar(
     )
 
 
-def instanciar_linea_base() -> Pronosticador:
+def instanciar_linea_base() -> AdaptadorCandidato:
     """Seasonal Naive: recorre las mismas ventanas que los candidatos."""
     return SeasonalNaiveStub(season_length=PERIODO_LINEA_BASE)

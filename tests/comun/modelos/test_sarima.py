@@ -134,3 +134,32 @@ def test_un_ajuste_fallido_invalida_el_modelo_anterior():
         modelo.fit(tendencia)
     with pytest.raises(RuntimeError, match="fit"):
         modelo.predict(3)
+
+
+def test_pronosticar_filtra_lo_observado_con_los_parametros_del_ajuste():
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+    y = _serie_ar1(n=90)
+    historia, observadas = y[:70], y[70:]
+    modelo = SarimaForecaster(
+        order=(1, 0, 0), seasonal_order=(1, 0, 0, 7), tendencia="c"
+    ).fit(historia)
+    parametros = modelo._resultado_ajuste.params.copy()
+
+    pronostico = modelo.pronosticar(observadas, 5)
+
+    # Referencia: los mismos parametros filtrados sobre toda la serie observada.
+    referencia = (
+        SARIMAX(
+            y,
+            order=(1, 0, 0),
+            seasonal_order=(1, 0, 0, 7),
+            trend="c",
+            enforce_stationarity=True,
+            enforce_invertibility=True,
+        )
+        .filter(parametros)
+        .forecast(5)
+    )
+    np.testing.assert_allclose(pronostico, np.clip(referencia, 0, None))
+    np.testing.assert_array_equal(modelo._resultado_ajuste.params, parametros)

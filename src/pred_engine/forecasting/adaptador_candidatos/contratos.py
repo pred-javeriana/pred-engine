@@ -1,14 +1,38 @@
-"""Salida del adaptador: candidatos validos y fallos aislados por candidato."""
+"""Salida del adaptador: candidatos validos, fallos aislados y el adaptador."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, Protocol, runtime_checkable
+
+import numpy as np
 
 from pred_engine.comun.modelos.manifiesto_candidatos import (
     Candidato,
     ContextoParticion,
 )
+
+
+@runtime_checkable
+class AdaptadorCandidato(Protocol):
+    """Adaptador por familia (ADR-03-004).
+
+    `fit` ajusta una sola vez con la historia <= t*; `pronosticar` pronostica
+    desde cada origen de la reserva con lo observado hasta ese origen, sin
+    reestimar parametros.
+    """
+
+    def fit(self, y: np.ndarray) -> AdaptadorCandidato: ...
+
+    def pronosticar(self, observadas: np.ndarray, horizon: int) -> np.ndarray: ...
+
+
+class FabricaAdaptador(Protocol):
+    def __call__(
+        self, configuracion: Mapping[str, Any], *, seed: int
+    ) -> AdaptadorCandidato: ...
+
 
 # Rechazos de lote (ADR-03-005): comprometen la comparacion de TODOS los
 # candidatos, asi que la reserva no se abre.

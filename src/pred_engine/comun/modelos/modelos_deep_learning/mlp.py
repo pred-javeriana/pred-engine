@@ -146,12 +146,18 @@ class MLPForecaster(BaseForecaster):
         return self
 
     def predict(self, horizon: int) -> np.ndarray:
+        return self.pronosticar(np.empty(0), horizon)
+
+    def pronosticar(self, observadas: np.ndarray, horizon: int) -> np.ndarray:
         self._require_fitted()
         if type(horizon) is not int:
             raise ValueError("horizon debe ser un entero")
         self._validar_horizonte(horizon)
         assert self._historia is not None
-        historia = self._historia.copy()
+        # Los lags usan lo observado hasta el origen, normalizado con la media y
+        # escala del ajuste; los pesos no cambian (ADR-03-004).
+        nuevas = (self._validar_observadas(observadas) - self._media) / self._escala
+        historia = np.concatenate([self._historia, nuevas])[-self.lags :]
         predicciones = np.empty(horizon, dtype=float)
         for paso in range(horizon):
             activacion = historia.reshape(1, -1)
