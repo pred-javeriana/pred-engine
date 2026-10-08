@@ -1,8 +1,9 @@
 """Veredictos descriptivos por SKU y por categoria (3.4-A2, ADR-03-008).
 
 Por SKU se aplica la primera regla que se cumpla: FALLO_TECNICO,
-NO_EVALUABLE, EVIDENCIA_INSUFICIENTE, VALIDADO, EXPLORATORIO. No se ejecutan
-pruebas estadisticas: ningun veredicto afirma significancia.
+NO_EVALUABLE, EVIDENCIA_INSUFICIENTE, VALIDADO, EXPLORATORIO. Las reglas son
+descriptivas. Aparte, cada SKU con evidencia suficiente sobre datos reales
+lleva la prueba HLN-DM de su campeon contra Seasonal Naive, con BH entre SKUs.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import replace
 
 import numpy as np
 
@@ -21,6 +23,11 @@ from pred_engine.forecasting.evaluaciones.calculo_errores import (
     EvaluacionRetrospectivaError,
     EvaluacionSku,
     MetricasCandidato,
+)
+from pred_engine.forecasting.evaluaciones.diebold_mariano import (
+    PruebaDM,
+    corregir_multiplicidad,
+    probar_contra_linea_base,
 )
 from pred_engine.forecasting.evaluaciones.veredictos.contratos import (
     POLITICA_INICIAL,
@@ -72,11 +79,15 @@ def emitir_veredictos(
         categorias.append(_resumen(seleccion, propios))
         veredictos.extend(propios)
 
+    # La familia de hipotesis son todos los SKUs probados en la corrida.
+    pruebas = corregir_multiplicidad(
+        {v.sku: v.diebold_mariano for v in veredictos}, politica.alfa_dm
+    )
     return ResultadoEvaluacion(
         version_politica=politica.version,
         version_metricas=VERSION_METRICAS,
         categorias=tuple(categorias),
-        skus=tuple(veredictos),
+        skus=tuple(replace(v, diebold_mariano=pruebas[v.sku]) for v in veredictos),
     )
 
 
@@ -95,7 +106,12 @@ def _veredicto_sku(
         campeon = representante(evaluacion, familia) or next(iter(instancias), None)
 
     fallidos = [c for c in evaluacion.candidatos if c.n_pronosticos_validos == 0]
-    comparacion_incompleta = bool(evaluacion.n_candidatos_fallidos or fallidos)
+    # Solo cuenta la falla de una familia que compite segun la politica.
+    elegibles = politica.familias_elegibles[evaluacion.sku_class]
+    comparacion_incompleta = bool(
+        evaluacion.n_candidatos_fallidos
+        or any(c.familia in elegibles for c in fallidos)
+    )
     todos_fallaron = len(fallidos) == len(evaluacion.candidatos) and bool(
         evaluacion.candidatos or evaluacion.n_candidatos_fallidos
     )
@@ -143,6 +159,9 @@ def _veredicto_sku(
         metricas_campeon=agregadas,
         metricas_linea_base=evaluacion.linea_base.agregadas,
         iqr_diferencia_mae=_iqr_diferencia(campeon, evaluacion.linea_base),
+        diebold_mariano=_prueba_dm(
+            campeon, evaluacion.linea_base, familia, veredicto, datos_sinteticos
+        ),
         justificacion=f"{veredicto}: {motivo}",
         modelos_evaluados=tuple(
             ModeloEvaluado(
@@ -169,6 +188,23 @@ def _motivo_exploratorio(
     if comparacion_incompleta:
         causas.append("comparacion incompleta: algun candidato fallo")
     return "; ".join(causas)
+
+
+def _prueba_dm(
+    campeon: MetricasCandidato | None,
+    linea_base: MetricasCandidato,
+    familia: str,
+    veredicto: Veredicto,
+    datos_sinteticos: bool,
+) -> PruebaDM:
+    # ADR-03-008: nunca sobre datos sinteticos, que inflan el poder de la prueba.
+    if datos_sinteticos:
+        return PruebaDM(0, 0, causa="datos_sinteticos")
+    if familia == FAMILIA_LINEA_BASE:
+        return PruebaDM(0, 0, causa="campeon_es_linea_base")
+    if campeon is None or veredicto not in ("VALIDADO", "EXPLORATORIO"):
+        return PruebaDM(0, 0, causa=f"veredicto:{veredicto}")
+    return probar_contra_linea_base(campeon, linea_base)
 
 
 def _iqr_diferencia(

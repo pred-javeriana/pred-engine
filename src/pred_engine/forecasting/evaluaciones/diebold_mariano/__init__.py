@@ -1,5 +1,19 @@
-"""PRED analytical engine.
+"""Prueba Diebold-Mariano (HLN) del campeon contra Seasonal Naive (3.4).
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
+Lee las metricas por ventana de `calculo_errores`; no recalcula errores. Se
+aplica solo con datos reales y con correccion BH entre SKUs (ADR-03-008, alt. 2).
 """
+
+from pred_engine.forecasting.evaluaciones.diebold_mariano.prueba import (
+    PruebaDM,
+    corregir_multiplicidad,
+    probar_contra_linea_base,
+    prueba_hln,
+)
+
+__all__ = [
+    "PruebaDM",
+    "corregir_multiplicidad",
+    "probar_contra_linea_base",
+    "prueba_hln",
+]

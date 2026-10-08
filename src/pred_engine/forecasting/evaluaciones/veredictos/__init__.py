@@ -5,6 +5,7 @@ archivos (eso es de 3.5).
 """
 
 from pred_engine.forecasting.evaluaciones.veredictos.contratos import (
+    FAMILIAS_ELEGIBLES_INICIALES,
     POLITICA_INICIAL,
     VEREDICTOS,
     ModeloEvaluado,
@@ -25,6 +26,7 @@ from pred_engine.forecasting.evaluaciones.veredictos.veredictos import (
 )
 
 __all__ = [
+    "FAMILIAS_ELEGIBLES_INICIALES",
     "ModeloEvaluado",
     "MotivoSeleccion",
     "POLITICA_INICIAL",

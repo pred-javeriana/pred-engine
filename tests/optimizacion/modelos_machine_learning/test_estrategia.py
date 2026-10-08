@@ -90,7 +90,7 @@ def test_select_devuelve_resultado_con_payload_completo():
     assert resultado.produced_by == "MLSelectionStrategy"
     payload = resultado.payload
     assert {"lags", "n_estimators", "max_depth"} <= set(payload["hiperparametros"])
-    assert payload["metrica_objetivo"] == "mase"
+    assert payload["metrica_objetivo"] == "rmse"
     assert payload["valor"] > 0
     assert payload["n_trials"] == 5
     assert (

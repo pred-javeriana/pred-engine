@@ -56,10 +56,6 @@ def serie(
     return SerieCandidato(candidato_id, familia, modelo, tuple(pronosticos))
 
 
-def linea_base(pronosticos: Sequence[PronosticoFechado]) -> SerieCandidato:
-    return serie("S1/linea_base", pronosticos, FAMILIA_LINEA_BASE, "seasonal_naive")
-
-
 def reserva(valores: Sequence[float]) -> pd.Series:
     return pd.Series(
         np.asarray(valores, dtype=float), index=fechas_desde(T_ESTRELLA, len(valores))
@@ -88,18 +84,22 @@ def metricas_candidato(
     rmse: float = 1.0,
     n: int = 40,
     maes: Sequence[float] | None = None,
+    rmses: Sequence[float] | None = None,
     pronosticos_validos: int | None = None,
     candidato_id: str | None = None,
 ) -> MetricasCandidato:
     maes = list(maes) if maes is not None else [1.0] * n
+    rmses = list(rmses) if rmses is not None else [1.0] * n
     return MetricasCandidato(
         candidato_id=candidato_id or f"S/{familia}",
         familia=familia,
         modelo=familia,
         agregadas=metricas(r, rmse=rmse) if n else None,
         por_ventana=tuple(
-            MetricasVentana(T_ESTRELLA + pd.Timedelta(days=i), metricas(r, mae=m))
-            for i, m in enumerate(maes[:n])
+            MetricasVentana(
+                T_ESTRELLA + pd.Timedelta(days=i), metricas(r, rmse=e, mae=m)
+            )
+            for i, (m, e) in enumerate(zip(maes[:n], rmses[:n], strict=True))
         ),
         n_ventanas_totales=n,
         n_ventanas_validas=n,
@@ -111,7 +111,7 @@ def evaluacion(
     sku: str,
     candidatos: Sequence[MetricasCandidato],
     *,
-    sku_class: str = "lumpy",
+    sku_class: str = "smooth",
     n_obs: int = 40,
     toda_cero: bool = False,
     fallidos: int = 0,
