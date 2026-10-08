@@ -109,7 +109,7 @@ class EvaluationSettings:
     min_train: int
     horizon: int = 7
     step: int = 7
-    metric: str = "mase"
+    metric: str = "rmse"
     seasonality: int = 7
     aggregation: Literal["media", "mediana", "media_recortada"] = "media_recortada"
     trim: float = 0.1

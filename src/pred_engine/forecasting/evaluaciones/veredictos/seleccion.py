@@ -1,8 +1,10 @@
-"""Regla de seleccion por categoria (3.4-A2, ADR-03-007).
+"""Regla de seleccion por categoria (3.4-A2, ADR-03-003 y ADR-03-007).
 
 Por categoria (`sku_class`): mediana de r = RMSE_cand / RMSE_SN sobre el mismo
-conjunto de SKUs para todas las familias; gana la menor mediana salvo que no
-mejore a la linea base (compuerta) o empate con una familia mas simple.
+conjunto de SKUs para todas las familias elegibles; gana la menor mediana salvo
+que no mejore a la linea base (compuerta) o empate con una familia mas simple.
+Las familias elegibles las fija la politica; que M2 entregue o no una familia
+se conoce antes de abrir la reserva, asi que excluirla no es una decision post hoc.
 """
 
 from __future__ import annotations
@@ -41,9 +43,13 @@ def seleccionar_categoria(
     evaluaciones: Sequence[EvaluacionSku],
     politica: PoliticaSeleccion,
 ) -> SeleccionCategoria:
-    # Elegibles: las familias que M2 entrego para esta categoria (enrutamiento
-    # predeclarado). Un SKU sin r para alguna de ellas sale del conjunto comun.
-    familias = sorted({c.familia for e in evaluaciones for c in e.candidatos})
+    # Compiten las familias elegibles que M2 entrego para esta categoria. Un SKU
+    # sin r para alguna de ellas sale del conjunto comun.
+    elegibles = politica.familias_elegibles[sku_class]
+    entregadas = {c.familia for e in evaluaciones for c in e.candidatos}
+    familias = sorted(f for f in elegibles if f in entregadas)
+    familias_excluidas = {f: "no_entregada" for f in elegibles if f not in entregadas}
+    familias_excluidas |= {f: "no_elegible" for f in entregadas if f not in elegibles}
     razones: dict[str, dict[str, float]] = {}
     excluidos: dict[str, str] = {}
     for evaluacion in evaluaciones:
@@ -68,6 +74,7 @@ def seleccionar_categoria(
             "sin_skus_comparables",
             comparables,
             excluidos,
+            familias_excluidas,
         )
 
     medianas = {
@@ -85,6 +92,7 @@ def seleccionar_categoria(
             "compuerta_linea_base",
             comparables,
             excluidos,
+            familias_excluidas,
         )
     # El desempate solo considera familias que tambien mejoran la linea base.
     empatadas = [
@@ -97,7 +105,14 @@ def seleccionar_categoria(
         "empate_por_simplicidad" if len(empatadas) > 1 else "menor_mediana"
     )
     return _seleccion(
-        sku_class, ganadora, medianas, False, motivo, comparables, excluidos
+        sku_class,
+        ganadora,
+        medianas,
+        False,
+        motivo,
+        comparables,
+        excluidos,
+        familias_excluidas,
     )
 
 
@@ -109,14 +124,17 @@ def _seleccion(
     motivo: MotivoSeleccion,
     comparables: tuple[str, ...],
     excluidos: dict[str, str],
+    familias_excluidas: dict[str, str],
 ) -> SeleccionCategoria:
     _logger.info(
-        "Seleccion categoria=%s campeona=%s motivo=%s comparables=%d excluidos=%d",
+        "Seleccion categoria=%s campeona=%s motivo=%s comparables=%d excluidos=%d"
+        " familias_excluidas=%s",
         sku_class,
         familia,
         motivo,
         len(comparables),
         len(excluidos),
+        familias_excluidas,
     )
     return SeleccionCategoria(
         sku_class=sku_class,
@@ -126,6 +144,7 @@ def _seleccion(
         motivo=motivo,
         skus_comparables=comparables,
         excluidos=excluidos,
+        familias_excluidas=familias_excluidas,
     )
 
 

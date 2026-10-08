@@ -36,7 +36,7 @@ class DLSelectionStrategy:
         horizonte: int = 7,
         paso: int = 7,
         min_train: int | None = None,
-        metrica_objetivo: str = "mase",
+        metrica_objetivo: str = "rmse",
         estacionalidad: int = 1,
         reglas: ReglasPoda | None = None,
         seed: int = 0,

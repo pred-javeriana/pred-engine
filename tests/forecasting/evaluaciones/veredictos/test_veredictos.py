@@ -7,7 +7,6 @@ import pytest
 from tests._evaluaciones import (
     corte,
     evaluacion,
-    linea_base,
     metricas_candidato,
     pronostico,
     reserva,
@@ -21,11 +20,15 @@ from pred_engine.forecasting.evaluaciones.calculo_errores import (
     EvaluacionRetrospectivaError,
     evaluar_sku,
 )
+from pred_engine.forecasting.evaluaciones.diebold_mariano import prueba_hln
 from pred_engine.forecasting.evaluaciones.veredictos import (
     POLITICA_INICIAL,
     VEREDICTOS,
     emitir_veredictos,
 )
+
+# RMSE por ventana de un campeon claramente mejor que SN (RMSE 1 por ventana).
+_MEJOR = [0.5, 0.7, 0.4, 0.9] * 10
 
 
 def _unico(*evaluaciones, datos_sinteticos: bool = False):
@@ -73,6 +76,22 @@ def test_candidato_sin_pronostico_valido_marca_comparacion_incompleta() -> None:
         )
     )["A"]
     assert veredicto.comparacion_incompleta is True
+
+
+def test_la_falla_de_una_familia_no_elegible_no_marca_comparacion_incompleta() -> None:
+    # En lumpy la politica no admite DL: su falla no deja incompleta la comparacion.
+    veredicto = _unico(
+        evaluacion(
+            "A",
+            [
+                metricas_candidato("classical", 0.8),
+                metricas_candidato("dl", None, n=0, pronosticos_validos=0),
+            ],
+            sku_class="lumpy",
+        )
+    )["A"]
+    assert veredicto.comparacion_incompleta is False
+    assert veredicto.veredicto == "VALIDADO"
 
 
 def test_categoria_adversa_deja_al_sku_exploratorio_con_la_linea_base() -> None:
@@ -171,32 +190,77 @@ def test_iqr_de_la_diferencia_de_mae_por_ventana() -> None:
     assert veredicto.iqr_diferencia_mae == pytest.approx(1.5)
 
 
+def test_diebold_mariano_acompana_al_veredicto_sin_cambiarlo() -> None:
+    veredicto = _unico(evaluacion("A", [metricas_candidato("ml", 0.8, rmses=_MEJOR)]))[
+        "A"
+    ]
+    prueba = veredicto.diebold_mariano
+    esperado = prueba_hln(np.square(_MEJOR) - 1.0, 1)
+    assert veredicto.veredicto == "VALIDADO"
+    assert prueba.estadistico == pytest.approx(esperado.estadistico)
+    # Una sola prueba en la corrida: BH no cambia el p-valor.
+    assert prueba.p_ajustado == pytest.approx(esperado.p_valor)
+    assert prueba.significativa is True
+
+
+def test_sin_diebold_mariano_queda_la_causa() -> None:
+    campeon = metricas_candidato("ml", 0.8, rmses=_MEJOR)
+    sintetico = _unico(evaluacion("A", [campeon]), datos_sinteticos=True)["A"]
+    adverso = _unico(evaluacion("A", [metricas_candidato("ml", 1.3)]))["A"]
+    corto = _unico(evaluacion("A", [metricas_candidato("ml", 0.5, n=1)]))["A"]
+    assert sintetico.diebold_mariano.causa == "datos_sinteticos"
+    assert adverso.diebold_mariano.causa == "campeon_es_linea_base"
+    assert corto.diebold_mariano.causa == "veredicto:EVIDENCIA_INSUFICIENTE"
+    assert all(
+        v.diebold_mariano.p_ajustado is None for v in (sintetico, adverso, corto)
+    )
+
+
+def test_bh_corrige_entre_todos_los_skus_de_la_corrida() -> None:
+    ruido = [1.2, 0.7, 1.1, 0.8, 0.95] * 8
+    veredictos = _unico(
+        evaluacion("A", [metricas_candidato("ml", 0.8, rmses=_MEJOR)]),
+        evaluacion(
+            "B", [metricas_candidato("ml", 0.9, rmses=ruido)], sku_class="erratic"
+        ),
+    )
+    p_a = prueba_hln(np.square(_MEJOR) - 1.0, 1).p_valor
+    p_b = prueba_hln(np.square(ruido) - 1.0, 1).p_valor
+    assert p_a is not None and p_b is not None and p_a < p_b
+    # BH con m=2, aunque esten en categorias distintas.
+    assert veredictos["A"].diebold_mariano.p_ajustado == pytest.approx(
+        min(2 * p_a, p_b)
+    )
+    assert veredictos["B"].diebold_mariano.p_ajustado == pytest.approx(p_b)
+
+
 def test_resumen_por_categoria() -> None:
     resultado = emitir_veredictos(
         [
             evaluacion("A", [metricas_candidato("ml", 0.5)]),
             evaluacion("B", [metricas_candidato("ml", 1.2)]),
             evaluacion("C", [metricas_candidato("ml", 0.7)], n_obs=0),
-            evaluacion("D", [metricas_candidato("ml", 0.9)], sku_class="smooth"),
+            evaluacion("D", [metricas_candidato("ml", 0.9)], sku_class="erratic"),
         ],
         datos_sinteticos=False,
     )
-    assert [c.sku_class for c in resultado.categorias] == ["lumpy", "smooth"]
-    lumpy = resultado.categorias[0]
-    assert lumpy.seleccion.familia_campeona == "ml"
-    assert lumpy.conteos == {
+    assert [c.sku_class for c in resultado.categorias] == ["erratic", "smooth"]
+    smooth = resultado.categorias[1]
+    assert smooth.seleccion.familia_campeona == "ml"
+    assert smooth.conteos == {
         "FALLO_TECNICO": 0,
         "NO_EVALUABLE": 1,
         "EVIDENCIA_INSUFICIENTE": 0,
         "VALIDADO": 1,
         "EXPLORATORIO": 1,
     }
-    assert sum(lumpy.porcentajes.values()) == pytest.approx(100.0)
-    assert lumpy.mediana_r == pytest.approx(0.7)
-    assert lumpy.n_adversos == 1
-    assert set(lumpy.conteos) == set(VEREDICTOS)
+    assert sum(smooth.porcentajes.values()) == pytest.approx(100.0)
+    assert smooth.mediana_r == pytest.approx(0.7)
+    assert smooth.n_adversos == 1
+    assert set(smooth.conteos) == set(VEREDICTOS)
     assert resultado.version_politica == POLITICA_INICIAL.version
     assert resultado.version_metricas == VERSION_METRICAS
+    assert resultado.datos_sinteticos is False
 
 
 def test_sku_repetido_se_rechaza() -> None:
@@ -212,13 +276,12 @@ def test_flujo_de_metricas_a_veredicto_sobre_35_ventanas() -> None:
     entrada = EntradaSku(
         sku="A",
         sku_class="smooth",
-        historia=np.arange(30, dtype=float) % 7,
+        historia=np.full(30, 10.0),
         reserva=reserva(reales),
-        linea_base=linea_base([pronostico(d, [reales[d] + 2.0]) for d in range(35)]),
         candidatos=(
             serie(
                 "A/ml/lightgbm",
-                [pronostico(d, [reales[d] + 0.5]) for d in range(35)],
+                [pronostico(d, [reales[d] + 0.1]) for d in range(35)],
                 familia="ml",
                 modelo="lightgbm",
             ),
@@ -226,6 +289,12 @@ def test_flujo_de_metricas_a_veredicto_sobre_35_ventanas() -> None:
     )
     evaluado = evaluar_sku(entrada, corte())
     (veredicto,) = emitir_veredictos([evaluado], datos_sinteticos=False).skus
+    # Seasonal Naive (m=7): 10 desde la historia, luego lo observado 7 dias antes.
+    linea_base = np.array([10.0 if d < 7 else reales[d - 7] for d in range(35)])
+    rmse_sn = np.sqrt(np.mean((reales[:35] - linea_base) ** 2))
     assert veredicto.veredicto == "VALIDADO"
     assert veredicto.n_ventanas == 35
-    assert veredicto.razon_sn == pytest.approx(0.25)
+    assert veredicto.razon_sn == pytest.approx(0.1 / rmse_sn)
+    assert veredicto.diebold_mariano.n_ventanas == 35
+    assert veredicto.diebold_mariano.horizonte == 1
+    assert veredicto.diebold_mariano.significativa is True

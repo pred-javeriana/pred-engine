@@ -129,7 +129,7 @@ def seleccionar_configuracion_clasica(
     min_train: int | None = None,
     horizonte: int = 7,
     paso: int = 7,
-    metrica_objetivo: str = "mase",
+    metrica_objetivo: str = "rmse",
     muestreador: optuna.samplers.BaseSampler | None = None,
     reglas: ReglasPoda | None = None,
     seed: int = 0,

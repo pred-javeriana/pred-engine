@@ -56,7 +56,7 @@ def test_devuelve_la_configuracion_ganadora_con_todos_los_hiperparametros():
     sel = resultado.seleccionada
     assert sel is not None
     assert sel.sku_id == "S1"
-    assert sel.metrica_objetivo == "mase"
+    assert sel.metrica_objetivo == "rmse"
     assert sel.valor > 0
     assert {"lags", "n_estimators", "max_depth", "learning_rate"} <= set(
         sel.hiperparametros

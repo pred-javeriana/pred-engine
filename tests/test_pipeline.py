@@ -418,7 +418,7 @@ def test_ambiguous_inputs_are_rejected(kwargs):
         {"min_train": 8, "horizon": 0},
         {"min_train": 8, "step": True},
         {"min_train": 8, "seasonality": 0},
-        {"min_train": 1},
+        {"min_train": 1, "metric": "mase"},
         {"min_train": 8, "metric": "unknown"},
         {"min_train": 8, "aggregation": "unknown"},
         {"min_train": 8, "trim": 0.5},

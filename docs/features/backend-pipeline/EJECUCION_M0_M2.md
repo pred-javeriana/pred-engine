@@ -50,7 +50,7 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
 | `--families` | `classical ml dl` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. |
 | `--trials` | presupuesto por perfil | Trials de HPO por estudio; con presupuestos chicos algunos SKU pueden quedar sin trial completo. |
 | `--workers` | núcleos - 1 | Procesos para las unidades de L2 y L3. |
-| `--min-train`, `--horizon`, `--step`, `--seasonality`, `--metric` | 40, 7, 7, 7, mase | Ventanas walk-forward del HPO y de L3. |
+| `--min-train`, `--horizon`, `--step`, `--seasonality`, `--metric` | 40, 7, 7, 7, rmse | Ventanas walk-forward del HPO y de L3. |
 | `--seed` | 0 | Semilla del HPO y de los modelos. |
 | `--runs-dir`, `--run-id` | `data/runs`, derivado | Ubicación e identidad de la corrida. |
 | `--telemetry-interval` | 1 | Segundos entre muestras de CPU y memoria en `recursos.jsonl`; `0` desactiva el muestreo. No forma parte de la identidad de la corrida. |

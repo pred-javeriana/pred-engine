@@ -221,7 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--step", type=int, default=7)
     run.add_argument("--seasonality", type=int, default=7)
     run.add_argument(
-        "--metric", choices=["mae", "rmse", "smape", "mase"], default="mase"
+        "--metric", choices=["mae", "rmse", "smape", "mase"], default="rmse"
     )
     run.add_argument("--seed", type=int, default=0)
     run.add_argument(

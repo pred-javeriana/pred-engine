@@ -12,14 +12,19 @@ from pred_engine.forecasting.evaluaciones.veredictos import (
     representante,
     seleccionar_categoria,
 )
+from pred_engine.optimizacion.router import FAMILIES_BY_SKU_CLASS
 
 
 def _sku(sku: str, **razones: float | None):
     return evaluacion(sku, [metricas_candidato(f, r) for f, r in razones.items()])
 
 
-def _seleccionar(*evaluaciones, politica: PoliticaSeleccion = POLITICA_INICIAL):
-    return seleccionar_categoria("lumpy", evaluaciones, politica)
+def _seleccionar(
+    *evaluaciones,
+    politica: PoliticaSeleccion = POLITICA_INICIAL,
+    sku_class: str = "smooth",
+):
+    return seleccionar_categoria(sku_class, evaluaciones, politica)  # type: ignore[arg-type]
 
 
 def test_ejemplo_del_adr_gana_chronos_con_mediana_085() -> None:
@@ -27,6 +32,7 @@ def test_ejemplo_del_adr_gana_chronos_con_mediana_085() -> None:
         _sku("A", classical=0.80, foundation=0.90),
         _sku("B", classical=1.10, foundation=0.70),
         _sku("C", classical=0.95, foundation=0.85),
+        sku_class="lumpy",
     )
     assert seleccion.familia_campeona == "foundation"
     assert seleccion.medianas_r == pytest.approx(
@@ -35,6 +41,32 @@ def test_ejemplo_del_adr_gana_chronos_con_mediana_085() -> None:
     assert seleccion.motivo == "menor_mediana"
     assert seleccion.adverso is False
     assert seleccion.skus_comparables == ("A", "B", "C")
+
+
+def test_solo_compiten_las_familias_elegibles_de_la_categoria() -> None:
+    # En lumpy la politica no admite ML, aunque M2 lo entregue y tenga mejor r.
+    seleccion = _seleccionar(
+        _sku("A", classical=0.9, ml=0.5),
+        _sku("B", classical=0.8, ml=0.4),
+        sku_class="lumpy",
+    )
+    assert seleccion.familia_campeona == "classical"
+    assert set(seleccion.medianas_r) == {"classical"}
+    assert seleccion.familias_excluidas == {
+        "foundation": "no_entregada",
+        "ml": "no_elegible",
+    }
+
+
+def test_una_familia_elegible_no_entregada_no_vacia_el_conjunto_comun() -> None:
+    # Sin Chronos en el handoff, los SKUs siguen siendo comparables.
+    seleccion = _seleccionar(_sku("A", classical=0.9), sku_class="lumpy")
+    assert seleccion.skus_comparables == ("A",)
+    assert seleccion.familias_excluidas == {"foundation": "no_entregada"}
+
+
+def test_la_politica_inicial_usa_la_matriz_de_enrutamiento_de_m2() -> None:
+    assert dict(POLITICA_INICIAL.familias_elegibles) == dict(FAMILIES_BY_SKU_CLASS)
 
 
 def test_representante_es_la_configuracion_de_menor_rmse() -> None:
@@ -111,6 +143,11 @@ def test_familia_fuera_del_orden_declarado_es_la_menos_simple() -> None:
         {"tolerancia_empate": -0.1},
         {"tolerancia_empate": float("nan")},
         {"orden_simplicidad": ("ml", "ml")},
+        {"alfa_dm": 0.0},
+        {"alfa_dm": 1.0},
+        {"familias_elegibles": {"smooth": ("ml",)}},
+        {"familias_elegibles": {**FAMILIES_BY_SKU_CLASS, "lumpy": ()}},
+        {"familias_elegibles": {**FAMILIES_BY_SKU_CLASS, "lumpy": ("ml", "ml")}},
     ],
 )
 def test_politica_invalida_se_rechaza(argumentos: dict) -> None:

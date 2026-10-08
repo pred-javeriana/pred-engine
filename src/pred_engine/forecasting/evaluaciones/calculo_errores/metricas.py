@@ -1,6 +1,7 @@
 """Metricas de error sobre la reserva (3.4-A1, ADR-03-006).
 
-Solo recibe arreglos y fechas: no puede reajustar ni tocar un modelo.
+De los candidatos solo recibe arreglos y fechas: no puede reajustarlos. El
+unico modelo que ajusta es la linea base Seasonal Naive (3.4-A1, paso 2).
 """
 
 from __future__ import annotations
@@ -13,12 +14,16 @@ import pandas as pd
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.comun.walkforward.metricas import mae, rmse
+from pred_engine.forecasting.adaptador_candidatos import instanciar_linea_base
 from pred_engine.forecasting.evaluaciones.calculo_errores.contratos import (
+    FAMILIA_LINEA_BASE,
+    MODELO_LINEA_BASE,
     EntradaSku,
     EvaluacionSku,
     Metricas,
     MetricasCandidato,
     MetricasVentana,
+    PronosticoFechado,
     SerieCandidato,
 )
 from pred_engine.forecasting.evaluaciones.calculo_errores.errores import (
@@ -60,11 +65,68 @@ def escala_q1(
     return q1, None
 
 
+def pronosticar_linea_base(entrada: EntradaSku, corte: ReserveCut) -> SerieCandidato:
+    """Seasonal Naive en las mismas ventanas que los candidatos (3.4-A1, ADR-03-004).
+
+    Se ajusta una vez con la historia <= t* y pronostica desde cada origen con lo
+    observado en la reserva hasta ese origen, sin reestimar. Si la historia es
+    mas corta que el periodo o falta una observacion hasta el origen, esa
+    ventana queda sin valores finitos y se cuenta como invalida.
+    """
+    ventanas: dict[pd.Timestamp, pd.DatetimeIndex] = {}
+    for serie in entrada.candidatos:
+        for pronostico in serie.pronosticos:
+            origen, fechas = pronostico.origen, pronostico.fechas
+            _exigir_reserva(origen, fechas, serie, entrada, corte)
+            siguientes = pd.date_range(
+                origen + pd.Timedelta(days=1), periods=len(fechas), freq="D"
+            )
+            if not (
+                fechas.equals(siguientes)
+                and fechas.equals(ventanas.setdefault(origen, fechas))
+            ):
+                _rechazar(
+                    f"la ventana con origen {origen.date()} no son los dias que "
+                    "siguen al origen o difiere entre candidatos",
+                    serie,
+                    entrada,
+                )
+
+    modelo = instanciar_linea_base()
+    try:
+        modelo.fit(entrada.historia)
+        ajustado = True
+    except ValueError:
+        ajustado = False
+        _logger.warning(
+            "Linea base sin ajustar sku=%s: historia de %d dias",
+            entrada.sku,
+            len(entrada.historia),
+        )
+    pronosticos = []
+    for origen in sorted(ventanas):
+        fechas = ventanas[origen]
+        observadas = entrada.reserva.reindex(
+            pd.date_range(corte.first_reserved, origen, freq="D")
+        ).to_numpy(dtype=float)
+        valores = np.full(len(fechas), np.nan)
+        if ajustado and len(fechas) and np.all(np.isfinite(observadas)):
+            valores = modelo.pronosticar(observadas, len(fechas))
+        pronosticos.append(PronosticoFechado(origen, fechas, valores))
+    return SerieCandidato(
+        candidato_id=f"{entrada.sku}/{FAMILIA_LINEA_BASE}/{MODELO_LINEA_BASE}",
+        familia=FAMILIA_LINEA_BASE,
+        modelo=MODELO_LINEA_BASE,
+        pronosticos=tuple(pronosticos),
+    )
+
+
 def evaluar_sku(entrada: EntradaSku, corte: ReserveCut) -> EvaluacionSku:
     """Metricas de la linea base y de cada candidato, por ventana y agregadas."""
     escala = escala_q1(entrada.historia)
     reales = entrada.reserva.dropna()
-    base, ventanas_base = _evaluar(entrada.linea_base, entrada, corte, escala, None)
+    linea_base = pronosticar_linea_base(entrada, corte)
+    base, ventanas_base = _evaluar(linea_base, entrada, corte, escala, None)
     candidatos = tuple(
         _evaluar(serie, entrada, corte, escala, ventanas_base)[0]
         for serie in entrada.candidatos

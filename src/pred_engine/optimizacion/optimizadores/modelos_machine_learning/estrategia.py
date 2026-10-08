@@ -60,7 +60,7 @@ class MLSelectionStrategy:
         presupuestos: Mapping[TopologicalProfile, PresupuestoHPO] | None = None,
         horizonte: int = 7,
         paso: int = 7,
-        metrica_objetivo: str = "mase",
+        metrica_objetivo: str = "rmse",
         min_train: int | None = None,
         seed: int = 0,
         raiz_corrida: str | Path | None = None,

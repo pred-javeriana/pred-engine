@@ -1,12 +1,13 @@
 """Calculo de errores sobre la reserva (3.4-A1, ADR-03-006).
 
 Contrasta pronosticos fechados contra las observaciones reales de la reserva y
-contra Seasonal Naive. No ajusta modelos, no selecciona (veredictos) y no
-persiste (3.5).
+contra Seasonal Naive, que genera en las mismas ventanas. No ajusta los
+candidatos, no selecciona (veredictos) y no persiste (3.5).
 """
 
 from pred_engine.forecasting.evaluaciones.calculo_errores.contratos import (
     FAMILIA_LINEA_BASE,
+    MODELO_LINEA_BASE,
     VERSION_METRICAS,
     EntradaSku,
     EvaluacionSku,
@@ -23,6 +24,7 @@ from pred_engine.forecasting.evaluaciones.calculo_errores.metricas import (
     PERIODO_ESCALA,
     escala_q1,
     evaluar_sku,
+    pronosticar_linea_base,
     separar_reserva,
 )
 
@@ -31,6 +33,7 @@ __all__ = [
     "EvaluacionRetrospectivaError",
     "EvaluacionSku",
     "FAMILIA_LINEA_BASE",
+    "MODELO_LINEA_BASE",
     "Metricas",
     "MetricasCandidato",
     "MetricasVentana",
@@ -40,5 +43,6 @@ __all__ = [
     "VERSION_METRICAS",
     "escala_q1",
     "evaluar_sku",
+    "pronosticar_linea_base",
     "separar_reserva",
 ]

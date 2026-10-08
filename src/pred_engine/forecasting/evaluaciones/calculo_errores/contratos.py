@@ -2,7 +2,8 @@
 
 La entrada es minima a proposito: un pronostico fechado por origen. Hoy el
 pipeline entrega un solo origen (t*, toda la reserva); cuando 3.3 genere las
-ventanas de la reserva, cada ventana es un `PronosticoFechado` mas.
+ventanas de la reserva, cada ventana es un `PronosticoFechado` mas. La linea
+base no llega en la entrada: 3.4 la genera en esas mismas ventanas.
 """
 
 from __future__ import annotations
@@ -15,10 +16,11 @@ import pandas as pd
 
 from pred_engine.comun.modelos import SkuClass
 
-VERSION_METRICAS = "3.4.0"
+VERSION_METRICAS = "3.4.1"
 
 # La linea base no es una familia de M2: se identifica aparte (ADR-03-004).
 FAMILIA_LINEA_BASE = "seasonal_naive"
+MODELO_LINEA_BASE = "seasonal_naive"
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -48,7 +50,6 @@ class EntradaSku:
     sku_class: SkuClass
     historia: np.ndarray
     reserva: pd.Series
-    linea_base: SerieCandidato
     candidatos: tuple[SerieCandidato, ...]
     # Candidatos que no llegaron a pronosticar (3.2 o 3.3); cuentan para
     # `comparacion_incompleta` y `FALLO_TECNICO` (ADR-03-005).
