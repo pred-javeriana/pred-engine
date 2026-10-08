@@ -111,7 +111,7 @@ def test_podados_y_fallos_de_entrenamiento_permanecen_distintos(monkeypatch):
         (serie(), {"paso": 0}, "paso"),
         (serie(), {"horizonte": 0}, "horizonte"),
         (serie(), {"estacionalidad": 0}, "estacionalidad"),
-        (serie(), {"estacionalidad": 10}, "MASE"),
+        (serie(), {"estacionalidad": 10, "metrica_objetivo": "mase"}, "MASE"),
         (serie(), {"reglas": replace(REGLAS_DL, min_ventanas=3)}, "min_ventanas"),
         (
             serie(),
