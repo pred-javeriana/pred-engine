@@ -101,8 +101,9 @@ Una busqueda sin ganador completo genera `SelectionContractError`, no un
 resultado vacio. La funcion de bajo nivel conserva el estudio sin ganador para
 permitir inspeccionar los fallos.
 
-MASE es el default de compatibilidad con el selector ML, no una decision general
-sobre la metrica del proyecto. `metrica_objetivo` permite las metricas comunes
+RMSE es el default, como en los selectores clasico y ML: M3 elige la familia
+campeona con la razon de RMSE frente a Seasonal Naive (ADR-03-007), asi que el
+HPO optimiza el mismo error. `metrica_objetivo` permite las metricas comunes
 MAE, RMSE, sMAPE y MASE (nombres en minuscula); `estacionalidad` configura el
 escalado MASE, con default 1. Horizonte y paso tienen default 7. El minimo de
 entrenamiento cubre el mayor lag mas cinco muestras; para MASE tambien debe

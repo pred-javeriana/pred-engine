@@ -37,7 +37,7 @@ def seleccionar_configuracion_dl(
     min_train: int | None = None,
     horizonte: int = 7,
     paso: int = 7,
-    metrica_objetivo: str = "mase",
+    metrica_objetivo: str = "rmse",
     estacionalidad: int = 1,
     muestreador: Any | None = None,
     reglas: ReglasPoda | None = None,

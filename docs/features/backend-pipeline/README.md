@@ -10,13 +10,16 @@
   shared HPO; foundation is zero-shot and requires optional dependencies and
   pretrained weights for inference. All four have real forecasters.
 - **L3, partial:** `comun.walkforward.evaluar_walk_forward` performs causal
-  window refits and computes MAE/RMSE/sMAPE/MASE. The forecasting generators,
-  comparison and Diebold-Mariano namespaces are currently empty. The pipeline
-  runs the working walk-forward capability and explicitly records L3's partial
-  maturity; it does not invent statistical comparison evidence.
-- **L4, absent:** the retrospective analysis, testing and report-generation
-  namespaces are empty. No built-in verdict or audit-bundle implementation
-  exists. The pipeline stops at L4 with no L4 output.
+  window refits and computes MAE/RMSE/sMAPE/MASE. The forecasting generators
+  namespace (3.3) is still empty. The pipeline runs the working walk-forward
+  capability and explicitly records L3's partial maturity; it does not invent
+  statistical comparison evidence.
+- **L4, absent from the pipeline:** M3's pieces exist as library code (3.2
+  candidate adapter, 3.4 reserve evaluation with verdicts and HLN
+  Diebold-Mariano, 3.5 evidence persistence; see `docs/features/3.Evaluacion/`),
+  but the pipeline does not call them yet: `RetrospectiveValidator` stays unset
+  until the 3.0/3.3 orchestration exists. The M4 analysis and report namespaces
+  are empty. The pipeline stops at L4 with no L4 output.
 
 Phase 0 augmentation is an input producer, not a fifth principal stage.
 
