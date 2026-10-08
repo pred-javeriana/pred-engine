@@ -86,6 +86,7 @@ def emitir_veredictos(
     return ResultadoEvaluacion(
         version_politica=politica.version,
         version_metricas=VERSION_METRICAS,
+        datos_sinteticos=datos_sinteticos,
         categorias=tuple(categorias),
         skus=tuple(replace(v, diebold_mariano=pruebas[v.sku]) for v in veredictos),
     )

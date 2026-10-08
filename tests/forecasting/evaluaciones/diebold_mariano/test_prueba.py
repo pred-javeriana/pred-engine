@@ -97,4 +97,5 @@ def test_bh_ajusta_solo_las_pruebas_calculadas() -> None:
         {"A": 0.03, "B": 0.04, "C": 0.04}
     )
     assert [corregidas[s].significativa for s in "ABC"] == [True, False, False]
+    assert {corregidas[s].alfa for s in "ABC"} == {0.035}
     assert corregidas["D"] == pruebas["D"]

@@ -55,7 +55,7 @@ costo_max=1500, m=7`.
 
 ## Seleccion (`optimizadores/modelos_machine_learning/ml_selection.py`)
 
-### `seleccionar_configuracion_ml(y, sku_id=None, espacio=None, n_trials=30, min_train=None, horizonte=7, paso=7, metrica_objetivo="mase", muestreador=None, reglas=None, seed=0, raiz_corrida=None, run_id=None, historico_previo=None) -> ResultadoSeleccionML`
+### `seleccionar_configuracion_ml(y, sku_id=None, espacio=None, n_trials=30, min_train=None, horizonte=7, paso=7, metrica_objetivo="rmse", muestreador=None, reglas=None, seed=0, raiz_corrida=None, run_id=None, historico_previo=None) -> ResultadoSeleccionML`
 
 - `ValueError` si `y` no es 1D o `len(y) < min_train + horizonte`
   (mensaje con el `sku_id`).
@@ -79,7 +79,7 @@ Un estudio por SKU, ordenado alfabeticamente. `run_id` en kwargs -> `ValueError`
 
 ### `MLSelectionStrategy` (`family = "ml"`)
 
-`__init__(*, espacio=None, presupuestos=None, horizonte=7, paso=7, metrica_objetivo="mase", min_train=None, seed=0, raiz_corrida=None, sesion=None)`
+`__init__(*, espacio=None, presupuestos=None, horizonte=7, paso=7, metrica_objetivo="rmse", min_train=None, seed=0, raiz_corrida=None, sesion=None)`
 
 - `raiz_corrida` sin `sesion` -> `ValueError`. Con ambos, `run_id =
   ml-{sku_id}-{sesion}` (estable entre interrupcion y reanudacion).

@@ -148,5 +148,7 @@ class ResultadoEvaluacion:
 
     version_politica: str
     version_metricas: str
+    # Origen de los datos con que se emitio; 3.5 lo contrasta con el de la corrida.
+    datos_sinteticos: bool
     categorias: tuple[ResumenCategoria, ...]
     skus: tuple[VeredictoSku, ...]

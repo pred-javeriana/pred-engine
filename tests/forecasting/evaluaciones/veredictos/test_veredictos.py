@@ -260,6 +260,7 @@ def test_resumen_por_categoria() -> None:
     assert set(smooth.conteos) == set(VEREDICTOS)
     assert resultado.version_politica == POLITICA_INICIAL.version
     assert resultado.version_metricas == VERSION_METRICAS
+    assert resultado.datos_sinteticos is False
 
 
 def test_sku_repetido_se_rechaza() -> None:

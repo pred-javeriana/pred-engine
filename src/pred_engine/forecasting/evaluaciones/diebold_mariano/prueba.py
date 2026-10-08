@@ -28,7 +28,8 @@ class PruebaDM:
     """HLN-DM del campeon contra Seasonal Naive; `causa` si no se calculo.
 
     `estadistico` < 0 significa que el campeon tiene menor perdida. El p-valor
-    es bilateral; `p_ajustado` y `significativa` llegan con la correccion BH.
+    es bilateral; `p_ajustado`, `significativa` y su nivel `alfa` llegan con la
+    correccion BH.
     """
 
     n_ventanas: int
@@ -37,6 +38,7 @@ class PruebaDM:
     p_valor: float | None = None
     p_ajustado: float | None = None
     significativa: bool | None = None
+    alfa: float | None = None
     causa: str | None = None
 
 
@@ -91,7 +93,10 @@ def corregir_multiplicidad(
         )
         for sku, rechazo, ajustado in zip(calculadas, rechazos, ajustados, strict=True):
             corregidas[sku] = replace(
-                pruebas[sku], p_ajustado=float(ajustado), significativa=bool(rechazo)
+                pruebas[sku],
+                p_ajustado=float(ajustado),
+                significativa=bool(rechazo),
+                alfa=alfa,
             )
     _logger.info(
         "Diebold-Mariano HLN: %d pruebas, %d significativas (BH, alfa=%s)",
