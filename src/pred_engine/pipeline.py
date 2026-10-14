@@ -22,12 +22,15 @@ import pandas as pd
 
 from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
 from pred_engine.comun.ejecucion_paralela import (
+    EtiquetaUnidad,
     RegistroUnidad,
     ResultadoUnidad,
     ejecutar_unidades,
+    emitir_evento,
 )
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
+from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.comun.walkforward.protocolos import (
@@ -473,6 +476,7 @@ class Pipeline:
         factories: Mapping[PredictorFamily, FabricaPronosticador],
         validator: RetrospectiveValidator | None = None,
         workers: int = 1,
+        progress: str | Path | None = None,
     ) -> None:
         if type(workers) is not int or workers < 1:
             raise ValueError("workers must be a positive integer")
@@ -481,6 +485,26 @@ class Pipeline:
         self.factories = dict(factories)
         self.validator = validator
         self.workers = workers
+        # Ruta del flujo de progreso (``progreso.jsonl``); None lo desactiva.
+        self.progress = progress
+
+    def _emit(self, event: str, /, **data: Any) -> None:
+        if self.progress is not None:
+            emitir_evento(self.progress, event, **data)
+
+    @staticmethod
+    def _label(stage: str, sku_id: str, family: PredictorFamily) -> EtiquetaUnidad:
+        return EtiquetaUnidad(stage, sku_id, family, MODELO_POR_FAMILIA[family])
+
+    def _plan(self, stage: str, units: list[EtiquetaUnidad]) -> None:
+        self._emit(
+            "planned",
+            stage=stage,
+            units=[
+                {"sku_id": u.sku_id, "family": u.family, "model": u.model}
+                for u in units
+            ],
+        )
 
     @property
     def stages(self) -> tuple[StageDefinition, ...]:
@@ -550,6 +574,7 @@ class Pipeline:
             cause = self._exclusion_cause(admissible, reserve)
             if cause is not None:
                 exclusions.append(SkuExclusion(str(sku_id), cause))
+                self._emit("excluded", sku_id=str(sku_id), cause=cause)
                 continue
             series = tuple(
                 ClassifiedObservation(**row)
@@ -569,7 +594,18 @@ class Pipeline:
                         self.router, request, decision, factory, reserve.reserved_days
                     )
                 )
-        results = ejecutar_unidades(_fit_unit, tasks, procesos=self.workers)
+        labels = [
+            self._label("L2", task.request.sku_id, task.decision.family)
+            for task in tasks
+        ]
+        self._plan("L2", labels)
+        results = ejecutar_unidades(
+            _fit_unit,
+            tasks,
+            procesos=self.workers,
+            etiquetas=labels,
+            progreso=self.progress,
+        )
         units = _units(
             "L2",
             [(task.request.sku_id, task.decision.family) for task in tasks],
@@ -595,7 +631,18 @@ class Pipeline:
                     candidate.selection, candidate.series, factory, self.settings
                 )
             )
-        results = ejecutar_unidades(_evaluate_unit, tasks, procesos=self.workers)
+        labels = [
+            self._label("L3", c.selection.sku_id, c.selection.family)
+            for c in fitting.candidates
+        ]
+        self._plan("L3", labels)
+        results = ejecutar_unidades(
+            _evaluate_unit,
+            tasks,
+            procesos=self.workers,
+            etiquetas=labels,
+            progreso=self.progress,
+        )
         units = _units(
             "L3",
             [(c.selection.sku_id, c.selection.family) for c in fitting.candidates],
@@ -645,6 +692,7 @@ class Pipeline:
                 )
                 return PipelineResult(tuple(executions))
             current = replace(current, started_at=time.time())
+            self._emit("stage_started", stage=current.definition.id)
             try:
                 value = operation(value)
             except Exception as exc:
@@ -653,6 +701,12 @@ class Pipeline:
                     state="failed",
                     message=str(exc),
                     finished_at=time.time(),
+                )
+                self._emit(
+                    "stage_finished",
+                    stage=current.definition.id,
+                    state="failed",
+                    message=str(exc),
                 )
                 raise PipelineExecutionError(
                     current.definition.id,
@@ -666,4 +720,5 @@ class Pipeline:
                 message=_stage_message(value),
                 finished_at=time.time(),
             )
+            self._emit("stage_finished", stage=current.definition.id, state="completed")
         return PipelineResult(tuple(executions))

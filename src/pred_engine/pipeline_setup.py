@@ -81,6 +81,7 @@ def build_pipeline(
     workers: int = 1,
     hpo_root: str | Path | None = None,
     session: str | None = None,
+    progress: str | Path | None = None,
 ) -> Pipeline:
     """Compose core families; foundation is opt-in and requires the foundation extra.
 
@@ -91,6 +92,9 @@ def build_pipeline(
     Con ``hpo_root`` y ``session`` cada estudio de HPO persiste su manifiesto y
     sus trials (2.9): repetir la corrida con la misma sesion retoma los estudios
     interrumpidos y reconstruye los completados sin reentrenar.
+
+    Con ``progress`` (ruta de ``progreso.jsonl``) la corrida anota su plan de
+    unidades y el inicio y fin de cada una mientras corre (G3).
     """
     policy = ConfiguredTopologyPolicy(families)
     if n_trials is not None and (type(n_trials) is not int or n_trials < 1):
@@ -151,4 +155,5 @@ def build_pipeline(
         factories=model_factories(),
         validator=validator,
         workers=workers,
+        progress=progress,
     )

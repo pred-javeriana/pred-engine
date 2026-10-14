@@ -143,6 +143,17 @@ class). `pred-engine run` also saves the metrics as `topologia.json` in the run
 folder. The platform imports these files; see section 17 of the frontend-engine
 contract in `pred-docs`.
 
+### Progress stream of a run
+
+While a run executes, `pred-engine run` appends one JSON line per event to
+`runs/{run_id}/progreso.jsonl` (schema `pred-engine.progreso/1`, section 18 of the contract):
+`run_started` (with the attempt number), `stage_started`/`stage_finished`, `planned` (the
+SKU × family units of a stage, still pending), `excluded`, `unit_started`/`unit_finished` (written
+by the worker process at the instant they happen, with state, seconds and error) and
+`run_finished` (written after `corrida.json`). Repeating a run with the same `run_id` resumes it:
+the stream keeps earlier attempts and the stored HPO studies are reused. The platform follows this
+file to show tasks moving from pending to running to done.
+
 ```python
 from pred_engine.comun.logger import configure_json_logger
 from pred_engine.ingesta.data import ensure_data_layout

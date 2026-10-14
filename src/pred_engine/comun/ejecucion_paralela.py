@@ -12,6 +12,7 @@ que la funcion y las tareas deben poder serializarse con ``pickle``.
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import time
@@ -19,6 +20,8 @@ from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from pred_engine.comun.logger import get_logger
@@ -26,6 +29,10 @@ from pred_engine.comun.logger import get_logger
 _logger = get_logger(__name__)
 
 EstadoUnidad = Literal["completada", "fallida"]
+
+# Formato del flujo de progreso de una corrida (``progreso.jsonl``): una linea JSON por
+# evento, que la plataforma lee mientras la corrida esta en curso (G3).
+ESQUEMA_PROGRESO = "pred-engine.progreso/1"
 
 _VARS_HILOS_BLAS = (
     "OMP_NUM_THREADS",
@@ -99,8 +106,94 @@ class ResultadoUnidad[R]:
     valor: R | None = None
 
 
-def _ejecutar_aislada[T, R](funcion: Callable[[T], R], tarea: T) -> ResultadoUnidad[R]:
-    """Unidad de trabajo de nivel de modulo (``pickle`` no serializa closures)."""
+@dataclass(frozen=True, slots=True)
+class EtiquetaUnidad:
+    """Identidad observable de una unidad en el flujo de progreso."""
+
+    etapa: str
+    sku_id: str
+    family: str
+    model: str
+
+    def como_dict(self) -> dict[str, str]:
+        return {
+            "stage": self.etapa,
+            "sku_id": self.sku_id,
+            "family": self.family,
+            "model": self.model,
+        }
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, UTC).isoformat()
+
+
+def emitir_evento(ruta: str | Path, evento: str, /, **datos: Any) -> None:
+    """Agrega una linea JSON a ``ruta`` con una sola escritura ``O_APPEND``.
+
+    El progreso es observabilidad: un fallo al escribirlo se registra y nunca
+    interrumpe el trabajo.
+    """
+    registro = {"event": evento, "t": _iso(time.time()), **datos}
+    try:
+        linea = json.dumps(registro, ensure_ascii=False, default=str) + "\n"
+        descriptor = os.open(
+            os.fspath(ruta), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644
+        )
+        try:
+            os.write(descriptor, linea.encode("utf-8"))
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        _logger.warning("No se pudo escribir el evento de progreso %s: %s", evento, exc)
+
+
+def _evento_fin(
+    ruta: str | Path, etiqueta: EtiquetaUnidad, registro: RegistroUnidad
+) -> None:
+    emitir_evento(
+        ruta,
+        "unit_finished",
+        **etiqueta.como_dict(),
+        state=registro.estado,
+        pid=registro.pid,
+        started_at=_iso(registro.inicio),
+        finished_at=_iso(registro.fin),
+        seconds=round(registro.duracion_s, 3),
+        cpu_s=None if registro.cpu_s is None else round(registro.cpu_s, 3),
+        error=registro.error,
+    )
+
+
+def _ejecutar_aislada[T, R](
+    funcion: Callable[[T], R],
+    tarea: T,
+    etiqueta: EtiquetaUnidad | None = None,
+    ruta: str | Path | None = None,
+) -> ResultadoUnidad[R]:
+    """Unidad de trabajo de nivel de modulo (``pickle`` no serializa closures).
+
+    Con ``etiqueta`` y ``ruta`` anota el inicio y el fin de la unidad desde el
+    propio proceso que la corre, en el instante en que ocurren.
+    """
+    seguimiento = etiqueta is not None and ruta is not None
+    if seguimiento:
+        assert etiqueta is not None and ruta is not None
+        emitir_evento(
+            ruta,
+            "unit_started",
+            **etiqueta.como_dict(),
+            pid=os.getpid(),
+            started_at=_iso(time.time()),
+        )
+    resultado = _correr_aislada(funcion, tarea)
+    if seguimiento:
+        assert etiqueta is not None and ruta is not None
+        _evento_fin(ruta, etiqueta, resultado.registro)
+    return resultado
+
+
+def _correr_aislada[T, R](funcion: Callable[[T], R], tarea: T) -> ResultadoUnidad[R]:
     inicio, cpu = time.time(), time.process_time()
     try:
         valor = funcion(tarea)
@@ -129,6 +222,8 @@ def ejecutar_unidades[T, R](
     tareas: Sequence[T],
     *,
     procesos: int = 1,
+    etiquetas: Sequence[EtiquetaUnidad] | None = None,
+    progreso: str | Path | None = None,
 ) -> list[ResultadoUnidad[R]]:
     """Ejecuta ``funcion(tarea)`` por tarea y devuelve los resultados en su orden.
 
@@ -137,11 +232,26 @@ def ejecutar_unidades[T, R](
     memoria), el pool queda inservible: las unidades que no alcanzaron a
     terminar se registran como fallidas con esa causa, y una nueva ejecucion
     puede retomarlas.
+
+    Con ``progreso`` (ruta de un ``.jsonl``) y ``etiquetas`` (una por tarea) cada
+    unidad anota ``unit_started`` y ``unit_finished`` mientras corre; sin ellos el
+    comportamiento no cambia.
     """
     if type(procesos) is not int or procesos < 1:
         raise ValueError(f"procesos debe ser un entero >= 1; se recibio {procesos!r}")
+    if etiquetas is not None and len(etiquetas) != len(tareas):
+        raise ValueError("etiquetas debe tener una entrada por tarea")
+    seguimiento = etiquetas is not None and progreso is not None
+
+    def etiqueta_de(indice: int) -> EtiquetaUnidad | None:
+        return etiquetas[indice] if seguimiento and etiquetas is not None else None
+
+    ruta = progreso if seguimiento else None
     if procesos == 1 or len(tareas) < 2:
-        return [_ejecutar_aislada(funcion, tarea) for tarea in tareas]
+        return [
+            _ejecutar_aislada(funcion, tarea, etiqueta_de(indice), ruta)
+            for indice, tarea in enumerate(tareas)
+        ]
 
     efectivos = min(procesos, len(tareas))
     _logger.info(
@@ -158,7 +268,9 @@ def ejecutar_unidades[T, R](
     ):
         envio = time.time()
         futuros = {
-            ejecutor.submit(_ejecutar_aislada, funcion, tarea): indice
+            ejecutor.submit(
+                _ejecutar_aislada, funcion, tarea, etiqueta_de(indice), ruta
+            ): indice
             for indice, tarea in enumerate(tareas)
         }
         try:
@@ -172,6 +284,10 @@ def ejecutar_unidades[T, R](
                         "fallida", 0, envio, time.time(), describir_error(exc)
                     )
                     resultados[indice] = ResultadoUnidad(registro)
+                    etiqueta = etiqueta_de(indice)
+                    if etiqueta is not None and ruta is not None:
+                        # El hijo murio sin poder anotar su fin: lo anota el padre.
+                        _evento_fin(ruta, etiqueta, registro)
         except BaseException:
             # Una interrupcion no debe dejar corriendo las unidades no iniciadas.
             for pendiente in futuros:

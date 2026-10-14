@@ -144,19 +144,23 @@ def write_run(
     run_id: str,
     metadata: Mapping[str, Any],
     resources: Path | None = None,
+    progress: Path | None = None,
 ) -> dict[str, Path]:
     """Escribe los artefactos disponibles de ``result`` y devuelve sus rutas.
 
     Una corrida que fallo en L2 deja solo ``corrida.json`` y ``unidades.jsonl``;
     repetirla con el mismo ``run_id`` reescribe estos archivos de forma atomica.
     ``resources`` es la serie de recursos que ya escribio ``ResourceSampler``
-    durante la corrida; aqui solo se registra entre los archivos.
+    durante la corrida; aqui solo se registra entre los archivos. ``progress`` es
+    el flujo de eventos (``progreso.jsonl``) que escribio la corrida.
     """
     destino = Path(directory)
     destino.mkdir(parents=True, exist_ok=True)
     archivos: dict[str, Path] = {}
     if resources is not None:
         archivos["recursos"] = resources
+    if progress is not None and progress.is_file():
+        archivos["progreso"] = progress
 
     unidades = destino / "unidades.jsonl"
     lineas = [
