@@ -161,6 +161,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("--data-root", type=Path, default=Path("data"))
     ingest.add_argument("--timeout", type=float, default=30.0)
+    ingest.add_argument(
+        "--confirm-overwrite",
+        action="store_true",
+        help=(
+            "Si raw/ ya tiene un archivo con ese nombre y contenido distinto, "
+            "conservar ambos (el nuevo con el hash en el nombre) en vez de fallar"
+        ),
+    )
 
     classify = sub.add_parser(
         "classify",
@@ -176,6 +184,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parquet de panel diario (salida 1.2)",
     )
     classify.add_argument("--data-root", type=Path, default=Path("data"))
+    classify.add_argument(
+        "--confirm-overwrite",
+        action="store_true",
+        help=(
+            "Si raw/ ya tiene un archivo con ese nombre y contenido distinto, "
+            "conservar ambos (el nuevo con el hash en el nombre) en vez de fallar"
+        ),
+    )
 
     verify = sub.add_parser(
         "verify",
@@ -209,6 +225,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--api-key", default=None)
     run.add_argument("--model", default=None)
     run.add_argument("--timeout", type=float, default=30.0)
+    run.add_argument(
+        "--confirm-overwrite",
+        action="store_true",
+        help=(
+            "Si raw/ ya tiene un archivo con ese nombre y contenido distinto, "
+            "conservar ambos (el nuevo con el hash en el nombre) en vez de fallar"
+        ),
+    )
     run.add_argument(
         "--families",
         nargs="+",
@@ -358,16 +382,28 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         print(exc, file=sys.stderr)
         return 1
 
-    from pred_engine.ingesta.pipeline import run_ingest
+    from pred_engine.ingesta.data import RawConflictError
+    from pred_engine.ingesta.informe import ingest_csv_with_report
+    from pred_engine.ingesta.pipeline import IngestResult
     from pred_engine.ingesta.validador_formato import SchemaBarrierError
 
     try:
-        resultado = run_ingest(
+        salida = ingest_csv_with_report(
             args.csv,
-            proveedor,
+            provider=proveedor,
             data_root=args.data_root,
             timeout=args.timeout,
+            on_conflict="keep_both" if args.confirm_overwrite else "reject",
         )
+        if salida.error is not None:
+            raise salida.error
+        resultado = salida.result
+        assert isinstance(resultado, IngestResult)
+    except RawConflictError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        print("informe:", salida.path, file=sys.stderr)
+        return 7
     except SemanticAlignmentError as exc:
         _logger.error("%s", exc)
         print(exc.diagnostic_json(), file=sys.stderr)
@@ -414,23 +450,42 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     print("filas_panel_diario:", len(resultado.panel))
     _imprimir_topologia(resultado.topology)
     _imprimir_contrato(resultado.panel, resultado.parquet_path)
+    print("informe:", salida.path)
     return 0
 
 
 def _cmd_classify(args: argparse.Namespace) -> int:
-    from pred_engine.ingesta.pipeline import run_classify_csv, run_classify_parquet
+    from pred_engine.ingesta.data import RawConflictError
+    from pred_engine.ingesta.informe import ingest_csv_with_report
+    from pred_engine.ingesta.pipeline import run_classify_parquet
     from pred_engine.ingesta.validador_formato import SchemaBarrierError
 
     if (args.csv is None) == (args.parquet is None):
         print("Pase exactamente uno de --csv o --parquet", file=sys.stderr)
         return 1
+    informe = None
     try:
         if args.csv is not None:
-            topologia, destino = run_classify_csv(args.csv, data_root=args.data_root)
+            salida = ingest_csv_with_report(
+                args.csv,
+                data_root=args.data_root,
+                on_conflict="keep_both" if args.confirm_overwrite else "reject",
+            )
+            informe = salida.path
+            if salida.error is not None:
+                raise salida.error
+            assert salida.result is not None
+            topologia = salida.result.topology
+            destino = salida.result.parquet_path
         else:
             topologia, destino = run_classify_parquet(
                 args.parquet, data_root=args.data_root
             )
+    except RawConflictError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        print("informe:", informe, file=sys.stderr)
+        return 7
     except SchemaBarrierError as exc:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
@@ -451,6 +506,8 @@ def _cmd_classify(args: argparse.Namespace) -> int:
     print("filas_panel_diario:", len(topologia.frame))
     _imprimir_topologia(topologia)
     _imprimir_contrato(topologia.frame, destino)
+    if informe is not None:
+        print("informe:", informe)
     return 0
 
 
@@ -594,6 +651,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             data_root=args.data_root,
             provider=provider,
             timeout=args.timeout,
+            on_conflict="keep_both" if args.confirm_overwrite else "reject",
         )
         sampler = (
             ResourceSampler(run_dir / "recursos.jsonl", args.telemetry_interval)

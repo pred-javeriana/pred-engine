@@ -122,7 +122,26 @@ hard-coded `/data` path.
   raw/         # immutable source CSVs — programmatic writes are blocked
   staging/     # reserved for later cleaning / imputation sessions
   processed/   # Snappy Parquet artefacts for modules 2 and 3
+  ingestas/    # one <sha256>.json report per ingestion (pred-engine.ingesta/1)
 ```
+
+### Deposit into `raw/` and the ingestion report
+
+`pred_engine.ingesta.data.deposit_raw` is the only writer of `raw/` and it is
+add-only: a file already there is never modified or deleted. The same name with
+the same content is reused (`already_present_identical`). The same name with
+**different** content raises `RawConflictError` and writes nothing; with
+`on_conflict="keep_both"` (CLI: `--confirm-overwrite`) the new file is stored as
+`<name>-<first 8 chars of its SHA-256><ext>` and both are kept. `pred-engine
+classify`/`ingest` exit with code 7 on an unconfirmed conflict.
+
+`ingest_csv_with_report` (used by `classify --csv`, `ingest` and `run`) always
+leaves `ingestas/<sha256>.json`, also when the ingestion is `rejected`, `failed`
+or `needs_confirmation`: source hash, deposit, header diagnostic, quality log,
+published Parquet, reserve cut t\* and the per-SKU topology metrics (ADI, CV²,
+class). `pred-engine run` also saves the metrics as `topologia.json` in the run
+folder. The platform imports these files; see section 17 of the frontend-engine
+contract in `pred-docs`.
 
 ```python
 from pred_engine.comun.logger import configure_json_logger

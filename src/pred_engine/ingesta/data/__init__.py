@@ -1,5 +1,13 @@
 """Politica de almacenamiento inmutable y arbol de directorios de ingesta."""
 
+from pred_engine.ingesta.data.deposito import (
+    DepositResult,
+    DepositStatus,
+    OnConflict,
+    RawConflictError,
+    deposit_raw,
+    versioned_name,
+)
 from pred_engine.ingesta.data.layout import (
     DataLayout,
     default_data_root,
@@ -13,9 +21,15 @@ from pred_engine.ingesta.data.proteccion_raw import (
 
 __all__ = [
     "DataLayout",
+    "DepositResult",
+    "DepositStatus",
+    "OnConflict",
+    "RawConflictError",
     "RawWritePermissionError",
     "default_data_root",
+    "deposit_raw",
     "enforce_raw_read_only",
     "ensure_data_layout",
     "raw_read_only_guard",
+    "versioned_name",
 ]
