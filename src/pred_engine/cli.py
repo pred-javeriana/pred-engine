@@ -561,6 +561,14 @@ def _run_pipeline(
     return _exit_code(result), result, None
 
 
+def _next_attempt(progress_path: Path) -> int:
+    """Numero del intento: 1 + los `run_started` que ya dejo este run_id."""
+    if not progress_path.is_file():
+        return 1
+    with progress_path.open(encoding="utf-8") as handle:
+        return 1 + sum(1 for line in handle if '"event": "run_started"' in line)
+
+
 _RUN_SETTINGS = (
     "families",
     "trials",
@@ -576,7 +584,11 @@ _RUN_SETTINGS = (
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    from pred_engine.comun.ejecucion_paralela import resumen_paralelismo
+    from pred_engine.comun.ejecucion_paralela import (
+        ESQUEMA_PROGRESO,
+        emitir_evento,
+        resumen_paralelismo,
+    )
     from pred_engine.comun.reserva import RESERVE_FRACTION
     from pred_engine.optimizacion.router import PredictorFamily
     from pred_engine.pipeline import (
@@ -629,6 +641,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         run_id = args.run_id or run_identifier(inputs["source"]["sha256"], settings)
         runs_dir = args.runs_dir or Path(args.data_root) / "runs"
         run_dir = Path(runs_dir) / run_id
+        progress_path = run_dir / "progreso.jsonl"
         provider = _build_provider(args)[2] if args.provider is not None else None
         pipeline = build_pipeline(
             EvaluationSettings(
@@ -644,6 +657,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             workers=args.workers,
             hpo_root=run_dir / "hpo",
             session=run_id,
+            progress=progress_path,
         )
         request = PipelineInput(
             csv_path=csv_path,
@@ -662,6 +676,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     started = time.time()
+    # Repetir la corrida con el mismo run_id reanuda: el flujo de progreso conserva
+    # los intentos anteriores y cada uno empieza con su propio `run_started`.
+    run_dir.mkdir(parents=True, exist_ok=True)
+    emitir_evento(
+        progress_path,
+        "run_started",
+        schema=ESQUEMA_PROGRESO,
+        run_id=run_id,
+        attempt=_next_attempt(progress_path),
+        workers=args.workers,
+    )
     with sampler or nullcontext():
         code, result, failed_stage = _run_pipeline(pipeline, request)
     metadata = {
@@ -684,12 +709,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
             run_id=run_id,
             metadata=metadata,
             resources=sampler.path if sampler is not None else None,
+            progress=progress_path,
         )
     except (OSError, ValueError) as exc:
+        emitir_evento(
+            progress_path, "run_finished", state="failed", exit_code=1, error=str(exc)
+        )
         print(
             f"error: no se pudo persistir la corrida {run_id}: {exc}", file=sys.stderr
         )
         return 1
+    # Despues de write_run: quien lee el progreso puede fiarse de corrida.json.
+    emitir_evento(
+        progress_path,
+        "run_finished",
+        state="failed" if failed_stage is not None else "completed",
+        exit_code=code,
+        failed_stage=failed_stage,
+        blocked_stage=result.blocked_stage,
+    )
     summary = summarize_run(result)
     if failed_stage is not None:
         summary["failed_stage"] = failed_stage
