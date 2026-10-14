@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from shutil import copy2
 
 import pandas as pd
 
@@ -16,7 +15,12 @@ from pred_engine.ingesta.categorizacion import (
     select_canonical_columns,
 )
 from pred_engine.ingesta.continuidad import resample_daily
-from pred_engine.ingesta.data import ensure_data_layout
+from pred_engine.ingesta.data import (
+    DepositResult,
+    OnConflict,
+    deposit_raw,
+    ensure_data_layout,
+)
 from pred_engine.ingesta.lector import (
     ExtractionArtifact,
     extract_csv,
@@ -43,18 +47,29 @@ class IngestResult:
     panel: pd.DataFrame
     topology: TopologyArtifact
     parquet_path: Path
+    deposit: DepositResult | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CsvIngestResult:
+    """Artefacto de la ruta canonica (CSV con cabeceras canonicas, sin LLM)."""
+
+    source_sha256: str
+    row_count: int
+    deposit: DepositResult
+    validated_rows: int
+    panel_rows: int
+    topology: TopologyArtifact
+    parquet_path: Path
 
 
 def deposit_raw_csv(source: str | Path, *, data_root: str | Path | None = None) -> Path:
-    """Copia el CSV del operador a raw/. No usa la guardia (deposito, no pipeline)."""
-    layout = ensure_data_layout(data_root)
-    origen = Path(source).expanduser().resolve()
-    if not origen.is_file():
-        raise FileNotFoundError(origen)
-    destino = (layout.raw / origen.name).resolve()
-    if origen != destino:
-        copy2(origen, destino)
-    return destino
+    """Copia el CSV del operador a raw/ y devuelve su ruta.
+
+    Nunca sobrescribe: un archivo distinto con el mismo nombre lanza
+    ``RawConflictError``. Para conservar ambos use ``deposit_raw``.
+    """
+    return deposit_raw(source, data_root=data_root, on_conflict="reject").path
 
 
 def _clasificar_panel_diario(panel: pd.DataFrame) -> TopologyArtifact:
@@ -103,18 +118,20 @@ def run_semantic_pipeline(
     return diagnostico, validado, panel, topologia
 
 
-def run_classify_csv(
+def ingest_canonical_csv(
     csv_path: str | Path,
     *,
     data_root: str | Path | None = None,
-) -> tuple[TopologyArtifact, Path]:
-    """Clasifica un CSV con cabeceras canonicas (extras permitidas). Sin LLM."""
+    on_conflict: OnConflict = "reject",
+) -> CsvIngestResult:
+    """Deposita y clasifica un CSV con cabeceras canonicas (extras permitidas). Sin LLM.
+
+    Deposita en raw/ igual que ``run_ingest`` y devuelve el hash de la fuente.
+    """
     layout = ensure_data_layout(data_root)
-    origen = Path(csv_path).expanduser().resolve()
-    if not origen.is_file():
-        raise FileNotFoundError(origen)
+    deposito = deposit_raw(csv_path, data_root=layout.root, on_conflict=on_conflict)
     marco = pd.read_csv(
-        origen,
+        deposito.path,
         dtype=str,
         parse_dates=False,
         keep_default_na=False,
@@ -124,16 +141,34 @@ def run_classify_csv(
     validado = validate_aligned_frame(canonico)
     panel = resample_daily(validado)
     topologia = _clasificar_panel_diario(panel)
-    destino = layout.processed / f"{origen.stem}.parquet"
+    destino = layout.processed / f"{deposito.path.stem}.parquet"
     _publicar_handoff(
         panel,
         topologia,
         destino,
         data_root=layout.root,
-        file_hash=hash_sha256_archivo(origen),
+        file_hash=deposito.sha256,
         mensaje="Handoff 1.4 desde CSV completado",
     )
-    return topologia, destino
+    return CsvIngestResult(
+        source_sha256=deposito.sha256,
+        row_count=len(marco),
+        deposit=deposito,
+        validated_rows=len(validado),
+        panel_rows=len(topologia.frame),
+        topology=topologia,
+        parquet_path=destino,
+    )
+
+
+def run_classify_csv(
+    csv_path: str | Path,
+    *,
+    data_root: str | Path | None = None,
+) -> tuple[TopologyArtifact, Path]:
+    """Clasifica un CSV con cabeceras canonicas (extras permitidas). Sin LLM."""
+    resultado = ingest_canonical_csv(csv_path, data_root=data_root)
+    return resultado.topology, resultado.parquet_path
 
 
 def run_classify_parquet(
@@ -172,10 +207,12 @@ def run_ingest(
     *,
     data_root: str | Path | None = None,
     timeout: float = 30.0,
+    on_conflict: OnConflict = "reject",
 ) -> IngestResult:
     """Deposita, extrae (1.1), diagnostica (1.2), clasifica (1.3) y publica (1.4)."""
     layout = ensure_data_layout(data_root)
-    crudo = deposit_raw_csv(csv_path, data_root=layout.root)
+    deposito = deposit_raw(csv_path, data_root=layout.root, on_conflict=on_conflict)
+    crudo = deposito.path
     extraido = extract_csv(crudo, data_root=layout.root)
     diagnostico, validado, panel, topologia = run_semantic_pipeline(
         extraido.frame,
@@ -198,4 +235,5 @@ def run_ingest(
         panel=topologia.frame,
         topology=topologia,
         parquet_path=destino,
+        deposit=deposito,
     )

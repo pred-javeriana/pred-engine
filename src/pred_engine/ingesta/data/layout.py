@@ -17,6 +17,7 @@ class DataLayout:
     raw: Path
     staging: Path
     processed: Path
+    ingestas: Path
 
 
 def default_data_root() -> Path:
@@ -33,8 +34,9 @@ def ensure_data_layout(data_root: str | Path | None = None) -> DataLayout:
         raw=raiz / "raw",
         staging=raiz / "staging",
         processed=raiz / "processed",
+        ingestas=raiz / "ingestas",
     )
-    for directorio in (layout.raw, layout.staging, layout.processed):
+    for directorio in (layout.raw, layout.staging, layout.processed, layout.ingestas):
         # exist_ok garantiza idempotencia: no falla si el arbol ya existe.
         directorio.mkdir(parents=True, exist_ok=True)
     return layout

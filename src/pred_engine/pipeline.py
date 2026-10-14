@@ -27,17 +27,14 @@ from pred_engine.comun.ejecucion_paralela import (
     ejecutar_unidades,
 )
 from pred_engine.comun.llm import LlmProvider
-from pred_engine.comun.modelos import ClassifiedObservation
+from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
-from pred_engine.ingesta.pipeline import (
-    run_classify_csv,
-    run_ingest,
-    run_verify_parquet,
-)
+from pred_engine.ingesta.informe import ingest_csv_with_report
+from pred_engine.ingesta.pipeline import run_verify_parquet
 from pred_engine.ingesta.salida import validate_output_contract
 from pred_engine.optimizacion.optimizadores.HPO.poda import es_degenerada
 from pred_engine.optimizacion.router import SelectionRouter
@@ -96,6 +93,9 @@ class PipelineInput:
     data_root: str | Path | None = None
     provider: LlmProvider | None = None
     timeout: float = 30.0
+    # "keep_both" conserva el CSV nuevo bajo otro nombre si raw/ ya tiene uno
+    # distinto con el mismo nombre; "reject" falla sin escribir nada.
+    on_conflict: Literal["reject", "keep_both"] = "reject"
 
     def __post_init__(self) -> None:
         if (self.csv_path is None) == (self.parquet_path is None):
@@ -133,6 +133,10 @@ class EvaluationSettings:
 class IngestionArtifact:
     parquet_path: Path
     panel: pd.DataFrame
+    # Metricas por SKU de la clasificacion (G1); vacio si la entrada fue un Parquet
+    # ya clasificado, que no las lleva.
+    topology: tuple[TopologyMetrics, ...] = ()
+    source_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -494,19 +498,24 @@ class Pipeline:
         """L1: reuse current ingestion and consume its published 1.4 contract."""
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
-        elif request.provider is not None:
-            path = run_ingest(
-                cast(str | Path, request.csv_path),
-                request.provider,
-                data_root=request.data_root,
-                timeout=request.timeout,
-            ).parquet_path
-        else:
-            _, path = run_classify_csv(
-                cast(str | Path, request.csv_path),
-                data_root=request.data_root,
-            )
-        return IngestionArtifact(path, run_verify_parquet(path))
+            return IngestionArtifact(path, run_verify_parquet(path))
+        salida = ingest_csv_with_report(
+            cast(str | Path, request.csv_path),
+            data_root=request.data_root,
+            provider=request.provider,
+            timeout=request.timeout,
+            on_conflict=request.on_conflict,
+        )
+        if salida.error is not None:
+            raise salida.error
+        assert salida.result is not None
+        path = salida.result.parquet_path
+        return IngestionArtifact(
+            path,
+            run_verify_parquet(path),
+            topology=tuple(salida.result.topology.metrics),
+            source_sha256=salida.report.ingest_id,
+        )
 
     def _exclusion_cause(
         self, admissible: pd.DataFrame, reserve: ReserveCut

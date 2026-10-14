@@ -23,10 +23,12 @@ from typing import Any
 import pandas as pd
 
 from pred_engine.comun.ejecucion_paralela import resumen_paralelismo
+from pred_engine.comun.modelos import ADI_THRESHOLD, CV2_THRESHOLD
 from pred_engine.comun.modelos.manifiesto_candidatos import (
     MODELO_POR_FAMILIA,
     ContextoParticion,
 )
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.optimizacion.control_reanudacion.almacenamiento import (
     escribir_atomico,
 )
@@ -34,6 +36,7 @@ from pred_engine.optimizacion.router import SelectionResult, construir_manifiest
 from pred_engine.pipeline import FittingArtifact, PipelineResult, summarize_run
 
 RUN_SCHEMA = "pred-engine.corrida/1"
+TOPOLOGY_SCHEMA = "pred-engine.topologia/1"
 _PAQUETES = (
     "pred-engine",
     "numpy",
@@ -181,6 +184,22 @@ def write_run(
     archivos["unidades"] = unidades
 
     fitting, evaluation = result.fitting, result.evaluation
+    ingestion = result.ingestion
+    if ingestion is not None and ingestion.topology:
+        # La topologia es de L1: se guarda aunque L2 o L3 hayan fallado.
+        corte = ReserveCut.of(ingestion.panel)
+        archivos["topologia"] = destino / "topologia.json"
+        _escribir_json(
+            {
+                "schema": TOPOLOGY_SCHEMA,
+                "source_sha256": ingestion.source_sha256,
+                "t_star": corte.t_star.date().isoformat(),
+                "reserved_days": corte.reserved_days,
+                "thresholds": {"adi": ADI_THRESHOLD, "cv2": CV2_THRESHOLD},
+                "metrics": [m.model_dump() for m in ingestion.topology],
+            },
+            archivos["topologia"],
+        )
     procedencia: list[dict[str, Any]] = []
     if fitting is not None:
         selecciones = [c.selection for c in fitting.candidates]
