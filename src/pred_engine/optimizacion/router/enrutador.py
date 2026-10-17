@@ -35,6 +35,11 @@ class SelectionRouter:
         self._policy = policy
         self._registry = registry
 
+    @property
+    def policy(self) -> RoutingPolicy:
+        """La politica con la que se enruta; solo lectura."""
+        return self._policy
+
     def route(self, request: SelectionRequest) -> tuple[SelectionResult, ...]:
         return tuple(self.execute(request, decision) for decision in self.plan(request))
 

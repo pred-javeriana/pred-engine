@@ -69,6 +69,7 @@ Todo queda en `data/runs/{run_id}/`:
 | `pronosticos.parquet` | Pronóstico diario de cada candidato para los días reservados (`sku_id`, `sku_class`, `familia`, `modelo`, `timestamp`, `pronostico`). |
 | `evaluacion.parquet` | Métrica agregada walk-forward y medias de MAE, RMSE, sMAPE y MASE por candidato. |
 | `walk_forward.parquet` | Valor real y pronóstico de cada día de cada ventana walk-forward. |
+| `seleccion.jsonl` | Selección por SKU (`pred-engine.seleccion/1`): una línea por SKU con las cuatro familias, su estado, la evidencia de la configuración elegida, los ensayos del HPO (completados, podados y fallidos, con su motivo) y las ventanas del walk-forward con sus métricas. Se escribe al terminar L2, aunque L3 falle. |
 | `unidades.jsonl` | Traza de modelos: una línea por unidad de L2 o L3 con etapa, SKU, familia, modelo (`sarima`, `lightgbm`, `mlp` o `chronos2`), estado, pid, inicio, fin, segundos, segundos de CPU y error. |
 | `recursos.jsonl` | CPU (en núcleos) y memoria residente cada `--telemetry-interval` segundos, del proceso principal, de cada proceso del pool y de la máquina. |
 | `hpo/` | Manifiesto y trials de cada estudio HPO (control de reanudación 2.9). |
