@@ -44,6 +44,7 @@ from pred_engine.optimizacion.router import SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
     RoutingDecision,
+    RoutingPolicy,
     SelectionRequest,
     SelectionResult,
 )
@@ -186,6 +187,8 @@ class FittingArtifact:
     candidates: tuple[FittedCandidate, ...]
     units: tuple[UnitExecution, ...] = ()
     exclusions: tuple[SkuExclusion, ...] = ()
+    # Politica con la que se enruto: dice que familias corresponden a cada clase.
+    policy: RoutingPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -614,7 +617,14 @@ class Pipeline:
         candidates = tuple(r.valor for r in results if r.valor is not None)
         if not candidates:
             raise ValueError(_no_results_message("L2", units, exclusions))
-        return FittingArtifact(ingestion, reserve, candidates, units, tuple(exclusions))
+        return FittingArtifact(
+            ingestion,
+            reserve,
+            candidates,
+            units,
+            tuple(exclusions),
+            getattr(self.router, "policy", None),
+        )
 
     def evaluate(self, fitting: FittingArtifact) -> EvaluationArtifact:
         """L3: walk-forward causal por candidato, cada uno como unidad aislada."""

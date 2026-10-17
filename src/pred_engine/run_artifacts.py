@@ -3,8 +3,9 @@
 El directorio de la corrida reune lo que M3 y la tesis consumen sin volver a
 ejecutar nada: el manifiesto de candidatos que valida el adaptador de M3
 (ADR-03-004), los pronosticos desde t*, la evidencia walk-forward, la traza de
-cada unidad (proceso, inicio y fin) y un resumen ``corrida.json`` con la
-procedencia de cada candidato (estudio HPO y versiones). Los estudios de HPO
+cada unidad (proceso, inicio y fin), la seleccion por SKU con sus ensayos
+(``seleccion.jsonl``) y un resumen ``corrida.json`` con la procedencia de cada
+candidato (estudio HPO y versiones). Los estudios de HPO
 persisten aparte, bajo ``hpo/``, con su propio control de reanudacion (2.9).
 """
 
@@ -34,6 +35,7 @@ from pred_engine.optimizacion.control_reanudacion.almacenamiento import (
 )
 from pred_engine.optimizacion.router import SelectionResult, construir_manifiesto
 from pred_engine.pipeline import FittingArtifact, PipelineResult, summarize_run
+from pred_engine.run_seleccion import escribir_seleccion
 
 RUN_SCHEMA = "pred-engine.corrida/1"
 TOPOLOGY_SCHEMA = "pred-engine.topologia/1"
@@ -281,6 +283,12 @@ def write_run(
         _escribir_parquet(pd.DataFrame(resumen), archivos["evaluacion"])
         archivos["walk_forward"] = destino / "walk_forward.parquet"
         _escribir_parquet(pd.DataFrame(ventanas), archivos["walk_forward"])
+
+    # La seleccion por SKU (ensayos, evidencia, ventanas) para quien no lee Parquet
+    # ni Optuna; se escribe con que L2 haya terminado, aunque L3 haya fallado.
+    seleccion = escribir_seleccion(result, destino, run_id=run_id, hpo=destino / "hpo")
+    if seleccion is not None:
+        archivos["seleccion"] = seleccion
 
     corrida = destino / "corrida.json"
     archivos["corrida"] = corrida

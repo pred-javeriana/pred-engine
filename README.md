@@ -154,6 +154,24 @@ by the worker process at the instant they happen, with state, seconds and error)
 the stream keeps earlier attempts and the stored HPO studies are reused. The platform follows this
 file to show tasks moving from pending to running to done.
 
+### Selection per SKU of a run
+
+`runs/{run_id}/seleccion.jsonl` (schema `pred-engine.seleccion/1`, section 7.5 of the contract)
+holds one line per SKU with the four families, whether each was selected, failed, could not run
+or was left out (by the policy matrix or by the families the run was configured with), the
+evidence of the chosen configuration, its HPO trials (completed, pruned and failed, each with its
+reason) and the Walk-Forward result per window. It is written as soon as L2 finishes, even if L3
+fails. The trials are read from `hpo/` without Optuna:
+
+```python
+from pred_engine.comun.ensayos_hpo import leer_ensayos
+
+for ensayo in leer_ensayos("data/runs/r-.../hpo/classical-FIL-0001-r-..."):
+    print(ensayo.estado, ensayo.valor, ensayo.motivo)
+```
+
+The foundation family has no study: it is not optimised, so it has neither trials nor counters.
+
 ```python
 from pred_engine.comun.logger import configure_json_logger
 from pred_engine.ingesta.data import ensure_data_layout
