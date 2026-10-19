@@ -31,7 +31,10 @@ from pred_engine.optimizacion.router.contratos import (
     SelectionResult,
     TopologicalProfile,
 )
-from pred_engine.optimizacion.router.errores import SelectionContractError
+from pred_engine.optimizacion.router.errores import (
+    NingunTrialCompletoError,
+    SelectionContractError,
+)
 
 _logger = get_logger(__name__)
 
@@ -123,7 +126,7 @@ class ClassicalSelectionStrategy:
 
         seleccionada = resultado.seleccionada
         if seleccionada is None:
-            raise SelectionContractError(
+            raise NingunTrialCompletoError(
                 f"ningun trial de HPO completo para sku_id={request.sku_id!r} "
                 f"({resultado.estudio.n_fallidos} fallidos, "
                 f"{resultado.estudio.n_podados} podados)"

@@ -250,7 +250,11 @@ def _walk_forward(valor: float = 1.5) -> ResultadoWalkForward:
 
 
 def _unidad(
-    etapa: str, sku: str, familia: str, error: str | None = None
+    etapa: str,
+    sku: str,
+    familia: str,
+    error: str | None = None,
+    codigo: str | None = None,
 ) -> UnitExecution:
     registro = RegistroUnidad(
         estado="fallida" if error else "completada",
@@ -258,6 +262,7 @@ def _unidad(
         inicio=0.0,
         fin=1.0,
         error=error,
+        codigo=codigo,
     )
     return UnitExecution(etapa, sku, familia, registro)  # type: ignore[arg-type]
 
@@ -315,6 +320,7 @@ def _resultado(
             "classical",
             "SelectionContractError: ningun trial de HPO completo para "
             "sku_id='irregular' (0 fallidos, 2 podados)",
+            "selection.no_viable_trial",
         ),
     )
     fitting = FittingArtifact(
@@ -328,6 +334,7 @@ def _resultado(
             SkuExclusion(
                 "corto",
                 "la serie termina antes de t*: no tiene observaciones reservadas",
+                "eligibility.no_reserved_observations",
             ),
         ),
         policy=ConfiguredTopologyPolicy(("classical", "ml", "foundation")),
@@ -355,6 +362,7 @@ def _resultado(
                 "tardio",
                 "classical",
                 "EvaluacionError: ninguna ventana evaluable",
+                "evaluation.failed",
             ),
         ),
     )
@@ -475,6 +483,7 @@ def test_una_unidad_fallida_en_l2_conserva_su_error_y_los_ensayos_que_la_explica
     assert (clasica["estado"], clasica["modelo"]) == ("fallida", "classical:sarima")
     assert clasica["error"]["stage"] == "L2"
     assert clasica["error"]["text"].startswith("SelectionContractError: ningun trial")
+    assert clasica["error"]["code"] == "selection.no_viable_trial"
     assert "evidence" not in clasica and "walk_forward" not in clasica
     # Sin `estudio_hpo` en el payload: el estudio se encuentra por su manifiesto.
     assert [t["estado"] for t in clasica["trials"]] == ["podado", "podado"]
@@ -488,6 +497,7 @@ def test_una_unidad_fallida_en_l3_conserva_la_evidencia_de_l2(documentos):
     assert clasica["error"] == {
         "stage": "L3",
         "text": "EvaluacionError: ninguna ventana evaluable",
+        "code": "evaluation.failed",
     }
     assert clasica["evidence"]["family"] == "classical" and clasica["produced_by"]
     assert len(clasica["trials"]) == 3 and "walk_forward" not in clasica
@@ -551,6 +561,7 @@ def test_un_sku_excluido_por_el_motor_no_es_ejecutable_con_su_causa(documentos):
             "family": familia,
             "estado": "no_ejecutable",
             "cause": "la serie termina antes de t*: no tiene observaciones reservadas",
+            "code": "eligibility.no_reserved_observations",
         }
     assert (
         corto["dl"]["estado"] == "excluida"

@@ -11,6 +11,10 @@ class SelectionContractError(SelectionError):
     """Un contrato de entrada, resultado o familia es invalido."""
 
 
+class NingunTrialCompletoError(SelectionContractError):
+    """Ningun ensayo de HPO termino para el SKU (todos fallidos o podados)."""
+
+
 class UnregisteredFamilyError(SelectionError):
     """La politica pidio una familia sin estrategia registrada."""
 

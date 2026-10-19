@@ -133,3 +133,39 @@ def test_las_etiquetas_deben_ser_una_por_tarea(tmp_path: Path) -> None:
         ejecutar_unidades(
             _doble, [1, 2], etiquetas=_etiquetas(1), progreso=tmp_path / "p.jsonl"
         )
+
+
+def test_la_unidad_fallida_lleva_su_codigo_en_el_registro_y_en_el_evento(
+    tmp_path: Path,
+) -> None:
+    ruta = tmp_path / "progreso.jsonl"
+    etiquetas = [
+        EtiquetaUnidad(etapa, f"SKU-{i}", "classical", "sarima")
+        for i, etapa in enumerate(["L2", "L3", "L2"])
+    ]
+
+    resultados = ejecutar_unidades(
+        _falla_en_tres, [1, 3, 3], etiquetas=etiquetas, progreso=ruta
+    )
+
+    assert resultados[0].registro.codigo is None
+    # Sin tipo propio: el respaldo depende de la etapa de la unidad.
+    assert [r.registro.codigo for r in resultados[1:]] == [
+        "evaluation.failed",
+        "pipeline.stage_failed",
+    ]
+    fines = {e["sku_id"]: e for e in _eventos(ruta) if e["event"] == "unit_finished"}
+    assert fines["SKU-0"]["code"] is None
+    assert fines["SKU-1"]["code"] == "evaluation.failed"
+    assert fines["SKU-2"]["code"] == "pipeline.stage_failed"
+
+
+def test_el_codigo_viaja_desde_el_proceso_hijo(tmp_path: Path) -> None:
+    ruta = tmp_path / "progreso.jsonl"
+
+    resultados = ejecutar_unidades(
+        _falla_en_tres, [3, 1], procesos=2, etiquetas=_etiquetas(2), progreso=ruta
+    )
+
+    assert resultados[0].registro.codigo == "pipeline.stage_failed"
+    assert resultados[1].registro.codigo is None

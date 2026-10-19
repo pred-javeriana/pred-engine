@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from pred_engine.comun.errores_codigo import codigo_de
 from pred_engine.comun.logger import get_logger
 
 _logger = get_logger(__name__)
@@ -85,7 +86,8 @@ class RegistroUnidad:
     """Traza de una unidad: estado, proceso y reloj de pared (epoch, segundos).
 
     ``cpu_s`` es el tiempo de CPU que consumio el proceso mientras corria la
-    unidad (todas sus hebras); ``None`` si la unidad no llego a correr.
+    unidad (todas sus hebras); ``None`` si la unidad no llego a correr. ``codigo`` es
+    el codigo estable del error (seccion 11 del contrato), solo en unidades fallidas.
     """
 
     estado: EstadoUnidad
@@ -94,6 +96,7 @@ class RegistroUnidad:
     fin: float
     error: str | None = None
     cpu_s: float | None = None
+    codigo: str | None = None
 
     @property
     def duracion_s(self) -> float:
@@ -162,6 +165,7 @@ def _evento_fin(
         seconds=round(registro.duracion_s, 3),
         cpu_s=None if registro.cpu_s is None else round(registro.cpu_s, 3),
         error=registro.error,
+        code=registro.codigo,
     )
 
 
@@ -170,6 +174,7 @@ def _ejecutar_aislada[T, R](
     tarea: T,
     etiqueta: EtiquetaUnidad | None = None,
     ruta: str | Path | None = None,
+    etapa: str | None = None,
 ) -> ResultadoUnidad[R]:
     """Unidad de trabajo de nivel de modulo (``pickle`` no serializa closures).
 
@@ -186,14 +191,16 @@ def _ejecutar_aislada[T, R](
             pid=os.getpid(),
             started_at=_iso(time.time()),
         )
-    resultado = _correr_aislada(funcion, tarea)
+    resultado = _correr_aislada(funcion, tarea, etapa)
     if seguimiento:
         assert etiqueta is not None and ruta is not None
         _evento_fin(ruta, etiqueta, resultado.registro)
     return resultado
 
 
-def _correr_aislada[T, R](funcion: Callable[[T], R], tarea: T) -> ResultadoUnidad[R]:
+def _correr_aislada[T, R](
+    funcion: Callable[[T], R], tarea: T, etapa: str | None = None
+) -> ResultadoUnidad[R]:
     inicio, cpu = time.time(), time.process_time()
     try:
         valor = funcion(tarea)
@@ -205,6 +212,7 @@ def _correr_aislada[T, R](funcion: Callable[[T], R], tarea: T) -> ResultadoUnida
             time.time(),
             describir_error(exc),
             time.process_time() - cpu,
+            codigo_de(exc, etapa=etapa),
         )
         return ResultadoUnidad(registro)
     registro = RegistroUnidad(
@@ -246,10 +254,15 @@ def ejecutar_unidades[T, R](
     def etiqueta_de(indice: int) -> EtiquetaUnidad | None:
         return etiquetas[indice] if seguimiento and etiquetas is not None else None
 
+    def etapa_de(indice: int) -> str | None:
+        return etiquetas[indice].etapa if etiquetas is not None else None
+
     ruta = progreso if seguimiento else None
     if procesos == 1 or len(tareas) < 2:
         return [
-            _ejecutar_aislada(funcion, tarea, etiqueta_de(indice), ruta)
+            _ejecutar_aislada(
+                funcion, tarea, etiqueta_de(indice), ruta, etapa_de(indice)
+            )
             for indice, tarea in enumerate(tareas)
         ]
 
@@ -269,7 +282,12 @@ def ejecutar_unidades[T, R](
         envio = time.time()
         futuros = {
             ejecutor.submit(
-                _ejecutar_aislada, funcion, tarea, etiqueta_de(indice), ruta
+                _ejecutar_aislada,
+                funcion,
+                tarea,
+                etiqueta_de(indice),
+                ruta,
+                etapa_de(indice),
             ): indice
             for indice, tarea in enumerate(tareas)
         }
@@ -281,7 +299,12 @@ def ejecutar_unidades[T, R](
                 except Exception as exc:
                     _logger.error("Unidad %d sin resultado: %s", indice, exc)
                     registro = RegistroUnidad(
-                        "fallida", 0, envio, time.time(), describir_error(exc)
+                        "fallida",
+                        0,
+                        envio,
+                        time.time(),
+                        describir_error(exc),
+                        codigo=codigo_de(exc, etapa=etapa_de(indice)),
                     )
                     resultados[indice] = ResultadoUnidad(registro)
                     etiqueta = etiqueta_de(indice)

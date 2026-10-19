@@ -22,7 +22,10 @@ from pred_engine.optimizacion.router.contratos import (
     SelectionResult,
     TopologicalProfile,
 )
-from pred_engine.optimizacion.router.errores import SelectionContractError
+from pred_engine.optimizacion.router.errores import (
+    NingunTrialCompletoError,
+    SelectionContractError,
+)
 
 
 class DLSelectionStrategy:
@@ -91,7 +94,7 @@ class DLSelectionStrategy:
             ) from exc
         mejor = estudio.mejor
         if mejor is None or mejor.valor is None:
-            raise SelectionContractError(
+            raise NingunTrialCompletoError(
                 f"ningun trial de HPO completo para sku_id={request.sku_id!r} "
                 f"({estudio.n_fallidos} fallidos, {estudio.n_podados} podados)"
             )

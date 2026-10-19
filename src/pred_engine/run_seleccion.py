@@ -72,11 +72,20 @@ def _modelo(familia: str) -> str:
 def _fallo(
     unidad: UnitExecution | None, etapa: str, texto: str | None
 ) -> dict[str, str]:
-    """``texto`` es lo que registra la unidad: ``NombreDeClase: mensaje``."""
+    """``texto`` es lo que registra la unidad: ``NombreDeClase: mensaje``.
+
+    ``code`` (seccion 11 del contrato) solo va si la unidad lo registro; cuando falla
+    la etapa entera no hay un tipo de excepcion al que atribuirlo.
+    """
+    codigo = None
     if unidad is not None and unidad.record.error:
         texto = unidad.record.error
         etapa = unidad.stage
-    return {"stage": etapa, "text": texto or "La unidad fallo sin detalle."}
+        codigo = unidad.record.codigo
+    fallo = {"stage": etapa, "text": texto or "La unidad fallo sin detalle."}
+    if codigo is not None:
+        fallo["code"] = codigo
+    return fallo
 
 
 def _resumen_walk_forward(
@@ -123,6 +132,7 @@ class _Contexto:
         self.politica: RoutingPolicy = fitting.policy or InitialTopologyPolicy()
         self.t_star = fitting.reserve.t_star
         self.excluidos = {e.sku_id: e.cause for e in fitting.exclusions}
+        self.codigos_exclusion = {e.sku_id: e.code for e in fitting.exclusions}
         self.candidatos: dict[tuple[str, str], FittedCandidate] = {
             (c.selection.sku_id, c.selection.family): c for c in fitting.candidates
         }
@@ -187,11 +197,15 @@ def _familia(
         }
 
     if sku_id in ctx.excluidos:
-        return {
+        entrada_excluida: dict[str, Any] = {
             "family": familia,
             "estado": "no_ejecutable",
             "cause": ctx.excluidos[sku_id],
         }
+        codigo = ctx.codigos_exclusion.get(sku_id)
+        if codigo is not None:
+            entrada_excluida["code"] = codigo
+        return entrada_excluida
 
     clave = (sku_id, familia)
     candidato = ctx.candidatos.get(clave)

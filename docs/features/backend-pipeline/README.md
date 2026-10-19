@@ -84,7 +84,12 @@ fitting must supply this new configuration boundary.
 L2 devuelve, por candidato, la configuración seleccionada, la historia
 admisible y el pronóstico de los días reservados desde t* (`FittedCandidate.forecast`).
 Un pronóstico degenerado hace fallar su unidad con la causa bajo la regla #3
-(ADR-020). El modelo ajustado no se conserva: se reconstruye con la fábrica, la
+(ADR-020).
+
+Cada exclusión y cada falla de unidad lleva un código estable (ADR-021): `eligibility.*`
+en `exclusions[].code`, y el código de la excepción en `failures[].code`,
+`unidades.jsonl`, el evento `unit_finished` y `seleccion.jsonl`. El texto
+(`cause`, `error`) sigue siendo el detalle técnico. El modelo ajustado no se conserva: se reconstruye con la fábrica, la
 configuración y la semilla. L3 creates fresh models for each causal window; it
 never evaluates using the full-history fitted instance. It preserves the existing walk-forward algorithm, metrics and
 seed derivation. Configuration search and L3 evaluation use the same history:
