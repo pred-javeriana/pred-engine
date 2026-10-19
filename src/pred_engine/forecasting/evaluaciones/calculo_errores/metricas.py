@@ -7,6 +7,7 @@ unico modelo que ajusta es la linea base Seasonal Naive (3.4-A1, paso 2).
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -65,7 +66,13 @@ def escala_q1(
     return q1, None
 
 
-def pronosticar_linea_base(entrada: EntradaSku, corte: ReserveCut) -> SerieCandidato:
+def pronosticar_linea_base(
+    entrada: EntradaSku,
+    corte: ReserveCut,
+    *,
+    ventanas_planeadas: Mapping[pd.Timestamp, pd.DatetimeIndex] | None = None,
+    confirmados: Sequence[PronosticoFechado] = (),
+) -> SerieCandidato:
     """Seasonal Naive en las mismas ventanas que los candidatos (3.4-A1, ADR-03-004).
 
     Se ajusta una vez con la historia <= t* y pronostica desde cada origen con lo
@@ -73,7 +80,7 @@ def pronosticar_linea_base(entrada: EntradaSku, corte: ReserveCut) -> SerieCandi
     mas corta que el periodo o falta una observacion hasta el origen, esa
     ventana queda sin valores finitos y se cuenta como invalida.
     """
-    ventanas: dict[pd.Timestamp, pd.DatetimeIndex] = {}
+    ventanas: dict[pd.Timestamp, pd.DatetimeIndex] = dict(ventanas_planeadas or {})
     for serie in entrada.candidatos:
         for pronostico in serie.pronosticos:
             origen, fechas = pronostico.origen, pronostico.fechas
@@ -92,19 +99,33 @@ def pronosticar_linea_base(entrada: EntradaSku, corte: ReserveCut) -> SerieCandi
                     entrada,
                 )
 
-    modelo = instanciar_linea_base()
-    try:
-        modelo.fit(entrada.historia)
-        ajustado = True
-    except ValueError:
-        ajustado = False
-        _logger.warning(
-            "Linea base sin ajustar sku=%s: historia de %d dias",
-            entrada.sku,
-            len(entrada.historia),
+    restaurados = {p.origen: p for p in confirmados}
+    if len(restaurados) != len(confirmados) or any(
+        p.origen not in ventanas
+        or not p.fechas.equals(ventanas[p.origen])
+        or np.asarray(p.valores).shape != (len(p.fechas),)
+        for p in confirmados
+    ):
+        raise EvaluacionRetrospectivaError(
+            "linea base confirmada incompatible con las ventanas"
         )
+    modelo = instanciar_linea_base()
+    ajustado = False
+    if len(restaurados) < len(ventanas):
+        try:
+            modelo.fit(entrada.historia)
+            ajustado = True
+        except ValueError:
+            _logger.warning(
+                "Linea base sin ajustar sku=%s: historia de %d dias",
+                entrada.sku,
+                len(entrada.historia),
+            )
     pronosticos = []
     for origen in sorted(ventanas):
+        if origen in restaurados:
+            pronosticos.append(restaurados[origen])
+            continue
         fechas = ventanas[origen]
         observadas = entrada.reserva.reindex(
             pd.date_range(corte.first_reserved, origen, freq="D")
@@ -121,11 +142,28 @@ def pronosticar_linea_base(entrada: EntradaSku, corte: ReserveCut) -> SerieCandi
     )
 
 
-def evaluar_sku(entrada: EntradaSku, corte: ReserveCut) -> EvaluacionSku:
+def evaluar_sku(
+    entrada: EntradaSku, corte: ReserveCut, *, linea_base: SerieCandidato | None = None
+) -> EvaluacionSku:
     """Metricas de la linea base y de cada candidato, por ventana y agregadas."""
     escala = escala_q1(entrada.historia)
     reales = entrada.reserva.dropna()
-    linea_base = pronosticar_linea_base(entrada, corte)
+    if linea_base is None:
+        linea_base = pronosticar_linea_base(entrada, corte)
+    elif (
+        linea_base.candidato_id
+        != f"{entrada.sku}/{FAMILIA_LINEA_BASE}/{MODELO_LINEA_BASE}"
+        or linea_base.familia != FAMILIA_LINEA_BASE
+    ):
+        raise EvaluacionRetrospectivaError("identidad de linea base incompatible")
+    else:
+        # Valida el calendario sin volver a emitir pronosticos confirmados.
+        linea_base = pronosticar_linea_base(
+            entrada,
+            corte,
+            ventanas_planeadas={p.origen: p.fechas for p in linea_base.pronosticos},
+            confirmados=linea_base.pronosticos,
+        )
     base, ventanas_base = _evaluar(linea_base, entrada, corte, escala, None)
     candidatos = tuple(
         _evaluar(serie, entrada, corte, escala, ventanas_base)[0]

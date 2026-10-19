@@ -24,6 +24,7 @@ from pred_engine.forecasting.evaluaciones.diebold_mariano import prueba_hln
 from pred_engine.forecasting.evaluaciones.veredictos import (
     POLITICA_INICIAL,
     VEREDICTOS,
+    PoliticaSeleccion,
     emitir_veredictos,
 )
 
@@ -201,6 +202,20 @@ def test_diebold_mariano_acompana_al_veredicto_sin_cambiarlo() -> None:
     # Una sola prueba en la corrida: BH no cambia el p-valor.
     assert prueba.p_ajustado == pytest.approx(esperado.p_valor)
     assert prueba.significativa is True
+
+
+def test_minimo_dm_configurado_no_cambia_el_veredicto_descriptivo() -> None:
+    entrada = evaluacion("A", [metricas_candidato("ml", 0.8, rmses=_MEJOR)])
+    resultado = emitir_veredictos(
+        [entrada], datos_sinteticos=False, politica=PoliticaSeleccion(n_min_dm=41)
+    )
+    veredicto = resultado.skus[0]
+    assert veredicto.veredicto == "VALIDADO"
+    assert veredicto.razon_sn == 0.8
+    assert veredicto.diebold_mariano.n_ventanas == 40
+    assert veredicto.diebold_mariano.causa == "pocas_ventanas"
+    assert veredicto.diebold_mariano.p_valor is None
+    assert _unico(entrada)["A"].diebold_mariano.significativa is True
 
 
 def test_sin_diebold_mariano_queda_la_causa() -> None:

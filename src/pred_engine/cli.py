@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -94,10 +96,12 @@ def _imprimir_contrato(marco, parquet: Path) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from pred_engine.forecasting.evaluaciones.veredictos import POLITICA_INICIAL
+
     parser = argparse.ArgumentParser(
         prog="pred-engine",
         description=(
-            "PRED engine — ingesta 1.2, topologia 1.3 y contrato de salida 1.4."
+            "PRED - ingesta, seleccion de modelos y evaluacion retrospectiva M3."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -207,11 +211,11 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="Ejecutar M0 (opcional) y el pipeline backend L1-L4",
         description=(
-            "Corre L1-L3 y persiste la corrida en {runs-dir}/{run_id}. Con "
+            "Corre L1-L4 y publica M3 en la base unica de plataforma. Con "
             "--seed-csv primero genera el panel sintetico de la Fase 0 (opciones "
-            "--m0-*) y lo usa como entrada de L1. Codigos de salida: 7 = L4 "
-            "ausente sin fallos; 8 = L4 ausente con unidades fallidas aisladas; "
-            "1 = una etapa sin resultados."
+            "--m0-*) y lo usa como entrada de L1. Codigos: 0 = publicada, "
+            "8 = publicada con fallos aislados, 1 = error. La base de plataforma "
+            "debe existir; las migraciones M3 pendientes se aplican automaticamente."
         ),
     )
     source = run.add_mutually_exclusive_group(required=True)
@@ -220,7 +224,26 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument(
         "--seed-csv", type=Path, help="Semilla de la Fase 0 (M0 -> M1 -> M2)"
     )
-    run.add_argument("--data-root", type=Path, default=Path("data"))
+    run.add_argument(
+        "--data-root", type=Path, default=Path(os.environ.get("PRED_DATA_ROOT", "data"))
+    )
+    run.add_argument(
+        "--db-path",
+        type=Path,
+        default=None,
+        help="Base de plataforma existente (PRED_DB_PATH o {data-root}/pred.db)",
+    )
+    run.add_argument(
+        "--datos-sinteticos",
+        action="store_true",
+        help="Marca datos sinteticos o aumentados; --seed-csv lo activa siempre",
+    )
+    run.add_argument(
+        "--dm-min-origins",
+        type=int,
+        default=POLITICA_INICIAL.n_min_dm,
+        help="Minimo de origenes comunes para HLN-DM",
+    )
     run.add_argument("--provider", default=None, help="Sonda semantica opcional")
     run.add_argument("--api-key", default=None)
     run.add_argument("--model", default=None)
@@ -531,7 +554,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 def _exit_code(result: PipelineResult) -> int:
     if result.complete:
-        return 0
+        fallos_m3 = (
+            0
+            if result.validation is None
+            else result.validation.audit_bundle.get("n_fallos", 0)
+        )
+        return 8 if result.failures or fallos_m3 else 0
     return 8 if result.failures else 7
 
 
@@ -580,16 +608,42 @@ _RUN_SETTINGS = (
     "seed",
     "provider",
     "model",
+    "datos_sinteticos",
+    "dm_min_origins",
 )
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    from pred_engine.forecasting.persistencia_evidencia import (
+        BasePlataformaError,
+        abrir_base_plataforma,
+    )
+
+    if args.telemetry_interval < 0:
+        print("error: --telemetry-interval debe ser >= 0", file=sys.stderr)
+        return 1
+    ruta = (
+        args.db_path
+        or os.environ.get("PRED_DB_PATH", "").strip()
+        or args.data_root / "pred.db"
+    )
+    try:
+        with abrir_base_plataforma(ruta) as conn:
+            return _cmd_run_con_base(args, conn)
+    except (BasePlataformaError, sqlite3.DatabaseError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_run_con_base(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
     from pred_engine.comun.ejecucion_paralela import (
         ESQUEMA_PROGRESO,
         emitir_evento,
         resumen_paralelismo,
     )
     from pred_engine.comun.reserva import RESERVE_FRACTION
+    from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
+    from pred_engine.forecasting.evaluaciones.veredictos import POLITICA_INICIAL
     from pred_engine.optimizacion.router import PredictorFamily
     from pred_engine.pipeline import (
         EvaluationSettings,
@@ -641,6 +695,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
         run_id = args.run_id or run_identifier(inputs["source"]["sha256"], settings)
         runs_dir = args.runs_dir or Path(args.data_root) / "runs"
         run_dir = Path(runs_dir) / run_id
+        resumen_previo = run_dir / "corrida.json"
+        if resumen_previo.exists():
+            previo = json.loads(resumen_previo.read_text())
+            opciones_previas = {
+                k: v for k, v in previo["settings"].items() if k != "workers"
+            }
+            if (
+                opciones_previas != settings
+                or previo["inputs"]["source"]["sha256"] != inputs["source"]["sha256"]
+            ):
+                raise ValueError(
+                    "run_id incompatible con la entrada o configuracion previa"
+                )
         progress_path = run_dir / "progreso.jsonl"
         provider = _build_provider(args)[2] if args.provider is not None else None
         pipeline = build_pipeline(
@@ -658,6 +725,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
             hpo_root=run_dir / "hpo",
             session=run_id,
             progress=progress_path,
+            validator=ControladorEvaluacion(
+                conn,
+                run_dir,
+                run_id_m2=run_id,
+                codigo_version=settings["code"],
+                datos_sinteticos=args.datos_sinteticos or args.seed_csv is not None,
+                politica=replace(POLITICA_INICIAL, n_min_dm=args.dm_min_origins),
+                configuracion_m2=settings,
+            ),
         )
         request = PipelineInput(
             csv_path=csv_path,

@@ -1,0 +1,447 @@
+"""M2 real, evaluacion reservada nativa y recuperacion transaccional M3."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+from tests._plataforma import crear_base_plataforma
+
+from pred_engine.forecasting.adaptador_candidatos import LoteRechazadoError
+from pred_engine.forecasting.base import SeasonalNaiveStub
+from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
+from pred_engine.forecasting.persistencia_evidencia import aplicar_migraciones_m3
+from pred_engine.optimizacion.router import (
+    SelectionResult,
+    SelectionRouter,
+    StrategyRegistry,
+)
+from pred_engine.pipeline import EvaluationSettings, PipelineInput
+from pred_engine.pipeline_setup import ConfiguredTopologyPolicy
+from pred_engine.verify import representative_csv, verification_pipeline
+
+pytestmark = pytest.mark.slow
+
+
+def _caso(tmp_path, conn, **opciones):
+    csv = representative_csv(tmp_path / "fuente.csv")
+    pipeline = verification_pipeline()
+    pipeline.validator = ControladorEvaluacion(
+        conn,
+        tmp_path / "corrida",
+        run_id_m2="m2-integral",
+        codigo_version="revision-1",
+        datos_sinteticos=True,
+        **opciones,
+    )
+    return pipeline, PipelineInput(csv_path=csv, data_root=tmp_path / "data")
+
+
+def _conexion(tmp_path, *, factory=sqlite3.Connection):
+    path = crear_base_plataforma(tmp_path / "central.db")
+    conn = sqlite3.connect(path, factory=factory)
+    aplicar_migraciones_m3(conn)
+    return conn
+
+
+def test_m2_a_m3_publica_todas_las_ventanas_y_los_dos_skus(tmp_path):
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    datos = pd.read_csv(request.csv_path)
+    pd.concat(
+        [datos, datos.assign(sku_id="segundo", demand_qty=datos.demand_qty + 100)]
+    ).to_csv(request.csv_path, index=False)
+    resultado = pipeline.run(request)
+    assert resultado.complete is True
+    assert resultado.blocked_stage is None
+    assert [(v.sku_id, v.verdict) for v in resultado.validation.verdicts] == [
+        ("proof-sku", "EVIDENCIA_INSUFICIENTE"),
+        ("segundo", "EVIDENCIA_INSUFICIENTE"),
+    ]
+    assert conn.execute("SELECT estado FROM m3_corridas").fetchall() == [("PUBLICADA",)]
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 24
+    assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 48
+    base = conn.execute(
+        "SELECT valor FROM m3_pronosticos "
+        "WHERE candidato_id = 'proof-sku/seasonal_naive/seasonal_naive' "
+        "AND origen = '2024-01-28' ORDER BY h"
+    ).fetchall()
+    assert [fila[0] for fila in base] == pytest.approx([26.35, 27.7])
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert conn.execute("SELECT ejecucion_id FROM m3_protocolos").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT n_skus, n_instancias, n_calculables FROM m3_cartera "
+        "WHERE familia = 'classical' AND metrica = 'rmse'"
+    ).fetchall() == [(2, 2, 2)]
+    exports = resultado.validation.audit_bundle["archivos"]
+    assert pd.read_csv(Path(exports["m3_veredictos"]).with_suffix(".csv"))[
+        "sku"
+    ].tolist() == ["proof-sku", "segundo"]
+    assert pd.read_parquet(exports["m3_pronosticos"]).shape[0] == 48
+    conn.close()
+
+
+def test_publicada_se_relee_sin_modelos_ni_reescritura(tmp_path, monkeypatch):
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    fitting = pipeline.fit(pipeline.ingest(request))
+    evaluation = pipeline.evaluate(fitting)
+    primera = pipeline.validate(evaluation)
+    unidades = conn.execute(
+        "SELECT * FROM m3_unidades ORDER BY origen, candidato_id"
+    ).fetchall()
+    archivos = {
+        p: Path(p).read_bytes() for p in primera.audit_bundle["archivos"].values()
+    }
+
+    def imposible(configuracion, *, seed):
+        raise KeyboardInterrupt("no se debe ajustar una corrida publicada")
+
+    pipeline.validator.fabricas = {"classical": imposible}
+    emision = json.loads((tmp_path / "corrida" / "candidatos.json").read_text())[
+        "emitido_en"
+    ]
+    (tmp_path / "corrida" / "candidatos.json").unlink()
+
+    def no_revalidar(*args, **kwargs):
+        raise KeyboardInterrupt("una corrida durable no vuelve a cargar pesos")
+
+    monkeypatch.setattr(
+        "pred_engine.forecasting.control_reanudacion.controlador.validar_manifiesto",
+        no_revalidar,
+    )
+    segunda = pipeline.validate(evaluation)
+    assert (
+        json.loads((tmp_path / "corrida" / "candidatos.json").read_text())["emitido_en"]
+        == emision
+    )
+    assert [(v.sku_id, v.verdict) for v in segunda.verdicts] == [
+        ("proof-sku", "EVIDENCIA_INSUFICIENTE")
+    ]
+    assert segunda.audit_bundle["run_id_m3"] == primera.audit_bundle["run_id_m3"]
+    assert (
+        conn.execute(
+            "SELECT * FROM m3_unidades ORDER BY origen, candidato_id"
+        ).fetchall()
+        == unidades
+    )
+    assert {p: Path(p).read_bytes() for p in archivos} == archivos
+    conn.close()
+
+
+@pytest.mark.parametrize("despues", [False, True])
+def test_caida_antes_y_despues_del_commit_preserva_la_unidad_durable(tmp_path, despues):
+    class ConexionConCaida(sqlite3.Connection):
+        armada = False
+
+        def commit(self):
+            if (
+                self.armada
+                and self.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0]
+            ):
+                self.armada = False
+                if despues:
+                    super().commit()
+                raise KeyboardInterrupt("caida de proceso")
+            super().commit()
+
+    conn = _conexion(tmp_path, factory=ConexionConCaida)
+    pipeline, request = _caso(tmp_path, conn)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    conn.armada = True
+    with pytest.raises(KeyboardInterrupt, match="caida de proceso"):
+        pipeline.validate(evaluation)
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == int(
+        despues
+    )
+    assert conn.execute("SELECT estado FROM m3_corridas").fetchone()[0] == "EN_CURSO"
+    previa = conn.execute("SELECT emitido_en FROM m3_unidades").fetchall()
+    final = pipeline.validate(evaluation)
+    assert final.audit_bundle["estado"] == "PUBLICADA"
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 12
+    assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 24
+    if despues:
+        assert (
+            conn.execute(
+                "SELECT emitido_en FROM m3_unidades "
+                "WHERE candidato_id = 'proof-sku/classical/sarima' "
+                "AND origen = '2024-01-28'"
+            ).fetchall()
+            == previa
+        )
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
+
+
+@pytest.mark.parametrize("fase", ["EVALUADA", "SELECCIONADA"])
+def test_reanuda_fases_durables_sin_ajustar_ni_cambiar_unidades(
+    tmp_path, monkeypatch, fase
+):
+    class ConexionConCaida(sqlite3.Connection):
+        armada = False
+
+        def commit(self):
+            fila = (
+                self.execute("SELECT estado FROM m3_corridas").fetchone()
+                if self.armada
+                else None
+            )
+            super().commit()
+            if self.armada and fila == (fase,):
+                self.armada = False
+                raise KeyboardInterrupt("caida despues de fase durable")
+
+    conn = _conexion(tmp_path, factory=ConexionConCaida)
+    pipeline, request = _caso(tmp_path, conn)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    conn.armada = True
+    with pytest.raises(KeyboardInterrupt, match="fase durable"):
+        pipeline.validate(evaluation)
+    assert conn.execute("SELECT estado FROM m3_corridas").fetchone()[0] == fase
+    unidades = conn.execute(
+        "SELECT * FROM m3_unidades ORDER BY candidato_id, origen"
+    ).fetchall()
+    assert len(unidades) == 12
+
+    def no_ajustar(*args, **kwargs):
+        raise KeyboardInterrupt("no se ajusta una fase con ventanas completas")
+
+    pipeline.validator.fabricas = {"classical": no_ajustar}
+    monkeypatch.setattr(SeasonalNaiveStub, "fit", no_ajustar)
+    resultado = pipeline.validate(evaluation)
+    assert resultado.audit_bundle["estado"] == "PUBLICADA"
+    assert (
+        conn.execute(
+            "SELECT * FROM m3_unidades ORDER BY candidato_id, origen"
+        ).fetchall()
+        == unidades
+    )
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
+
+
+def test_caida_despues_del_registro_reusa_la_validacion_durable(tmp_path, monkeypatch):
+    class ConexionConCaida(sqlite3.Connection):
+        armada = False
+
+        def commit(self):
+            if not self.armada:
+                return super().commit()
+            primera = self.execute("SELECT COUNT(*) FROM m3_corridas").fetchone()[0]
+            fijadas = self.execute("SELECT COUNT(*) FROM m3_protocolos").fetchone()[0]
+            super().commit()
+            if self.armada and primera and not fijadas:
+                self.armada = False
+                raise KeyboardInterrupt("caida despues de registrar")
+
+    conn = _conexion(tmp_path, factory=ConexionConCaida)
+    pipeline, request = _caso(tmp_path, conn)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    conn.armada = True
+    with pytest.raises(KeyboardInterrupt, match="registrar"):
+        pipeline.validate(evaluation)
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 0
+
+    def no_revalidar(*args, **kwargs):
+        raise KeyboardInterrupt("no debe cambiar el resultado durable de 3.2")
+
+    monkeypatch.setattr(
+        "pred_engine.forecasting.control_reanudacion.controlador.validar_manifiesto",
+        no_revalidar,
+    )
+    resultado = pipeline.validate(evaluation)
+    assert resultado.audit_bundle["estado"] == "PUBLICADA"
+    assert conn.execute("SELECT COUNT(*) FROM m3_corridas").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 12
+    conn.close()
+
+
+def test_fallo_de_un_sku_es_visible_y_no_imputa_ceros_ni_detiene_otro(tmp_path):
+    class FalloDeUnaSerie(SeasonalNaiveStub):
+        def fit(self, y):
+            if y[0] < 50:
+                raise ValueError("fallo aislado de ajuste")
+            return super().fit(y)
+
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(
+        tmp_path,
+        conn,
+        fabricas={"classical": lambda config, *, seed: FalloDeUnaSerie(1, seed)},
+    )
+    datos = pd.read_csv(request.csv_path)
+    pd.concat(
+        [datos, datos.assign(sku_id="segundo", demand_qty=datos.demand_qty + 100)]
+    ).to_csv(request.csv_path, index=False)
+    resultado = pipeline.run(request)
+    assert [(v.sku_id, v.verdict) for v in resultado.validation.verdicts] == [
+        ("proof-sku", "FALLO_TECNICO"),
+        ("segundo", "EVIDENCIA_INSUFICIENTE"),
+    ]
+    assert resultado.validation.audit_bundle["n_fallos"] == 6
+    assert conn.execute(
+        "SELECT DISTINCT estado FROM m3_unidades "
+        "WHERE candidato_id = 'proof-sku/classical/sarima'"
+    ).fetchall() == [("fallida",)]
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM m3_pronosticos "
+            "WHERE candidato_id = 'proof-sku/classical/sarima' AND valor IS NULL"
+        ).fetchone()[0]
+        == 12
+    )
+    causa = json.loads(
+        conn.execute(
+            "SELECT causa FROM m3_unidades WHERE estado = 'fallida' LIMIT 1"
+        ).fetchone()[0]
+    )
+    assert (causa["sku"], causa["codigo_error"], causa["campo"]) == (
+        "proof-sku",
+        "ajuste_fallido",
+        "fit",
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM m3_pronosticos "
+            "WHERE candidato_id = 'segundo/classical/sarima' AND valor IS NOT NULL"
+        ).fetchone()[0]
+        == 12
+    )
+    conn.close()
+
+
+def test_fallo_parcial_marca_comparacion_incompleta_y_conserva_ventanas(tmp_path):
+    class FalloInicial(SeasonalNaiveStub):
+        def pronosticar(self, observadas, horizon):
+            if not len(observadas):
+                return np.full(horizon, np.nan)
+            return super().pronosticar(observadas, horizon)
+
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(
+        tmp_path,
+        conn,
+        fabricas={"classical": lambda config, *, seed: FalloInicial(1, seed)},
+    )
+    resultado = pipeline.run(request)
+    evidencia = resultado.validation.verdicts[0].evidence
+    assert resultado.validation.audit_bundle["n_fallos"] == 1
+    assert evidencia["comparacion_incompleta"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 12
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM m3_pronosticos WHERE valor IS NULL"
+        ).fetchone()[0]
+        == 2
+    )
+    conn.close()
+
+
+def test_parquet_de_m1_entra_sin_transformacion_ni_republicacion(tmp_path):
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    ingesta = pipeline.ingest(request)
+    contenido = ingesta.parquet_path.read_bytes()
+    assert ingesta.panel.columns.tolist() == [
+        "sku_id",
+        "timestamp",
+        "demand_qty",
+        "lead_time_days",
+        "sku_class",
+    ]
+    resultado = pipeline.run(
+        PipelineInput(
+            parquet_path=ingesta.parquet_path,
+            data_root=tmp_path / "sin_publicacion",
+        )
+    )
+    assert resultado.complete is True
+    assert resultado.validation.verdicts[0].evidence["n_ventanas"] == 6
+    assert ingesta.parquet_path.read_bytes() == contenido
+    assert not (tmp_path / "sin_publicacion").exists()
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
+
+
+def test_handoff_incompatible_queda_rechazado_sin_abrir_ventanas(tmp_path):
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    carpeta = tmp_path / "corrida"
+    carpeta.mkdir()
+    (carpeta / "candidatos.json").write_text('{"schema_version": 99}')
+    with pytest.raises(LoteRechazadoError) as error:
+        pipeline.validate(evaluation)
+    assert error.value.motivo == "version_no_soportada"
+    assert conn.execute("SELECT estado, run_id_m2 FROM m3_corridas").fetchall() == [
+        ("RECHAZADA", "m2-integral")
+    ]
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM evidencia_publicada").fetchone()[0] == 0
+    conn.close()
+
+
+def test_historia_corta_entregada_por_m2_se_excluye_antes_de_ajustar(tmp_path):
+    class SeleccionFija:
+        family = "classical"
+
+        def select(self, request, profile):
+            return SelectionResult(
+                sku_id=request.sku_id,
+                sku_class=request.sku_class,
+                family="classical",
+                profile=profile,
+                produced_by="seleccion-fija",
+                forecast_config={
+                    "p": 0,
+                    "d": 0,
+                    "q": 0,
+                    "P": 0,
+                    "D": 0,
+                    "Q": 0,
+                    "m": 0,
+                    "tendencia": "c",
+                },
+            )
+
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    pd.read_csv(request.csv_path).head(8).to_csv(request.csv_path, index=False)
+    registry = StrategyRegistry()
+    registry.register("classical", SeleccionFija())
+    pipeline.router = SelectionRouter(
+        ConfiguredTopologyPolicy(("classical",)), registry
+    )
+    pipeline.factories = {
+        "classical": lambda config, *, seed: SeasonalNaiveStub(1, seed)
+    }
+    pipeline.settings = EvaluationSettings(min_train=2, horizon=1, step=1)
+    resultado = pipeline.run(request)
+    assert resultado.complete is True
+    assert resultado.validation.verdicts[0].verdict == "EVIDENCIA_INSUFICIENTE"
+    assert (
+        resultado.validation.audit_bundle["exclusiones"]["proof-sku"]["codigo"]
+        == "INSUFFICIENT_HISTORY"
+    )
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 0
+    conn.close()
+
+
+def test_horizonte_mayor_que_reserva_es_insuficiente_sin_truncarlo(tmp_path):
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    evaluation = replace(evaluation, settings=replace(evaluation.settings, horizon=8))
+    resultado = pipeline.validate(evaluation)
+    assert [(v.sku_id, v.verdict) for v in resultado.verdicts] == [
+        ("proof-sku", "EVIDENCIA_INSUFICIENTE")
+    ]
+    assert resultado.audit_bundle["horizonte"] == 8
+    assert resultado.audit_bundle["n_unidades"] == 0
+    assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 0
+    conn.close()

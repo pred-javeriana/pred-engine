@@ -4,9 +4,9 @@ No requiere terminal, servidor, motor de workflows ni estado global de corrida.
 L2 trabaja solo con la historia admisible (hasta t*, ADR-03-003) y, junto con L3,
 ejecuta cada SKU x familia como unidad independiente: en paralelo cuando se
 piden varios procesos, y con fallos aislados por unidad (3.0). L3 entrega
-evidencia walk-forward, no comparacion estadistica; L4 no tiene implementacion
-en el repositorio y la corrida se detiene ahi salvo que el llamador inyecte un
-validador real.
+evidencia walk-forward sobre la historia admisible. L4 integra la evaluacion
+reservada de M3 mediante un validador que recibe la conexion de plataforma.
+Sin esa configuracion, la biblioteca conserva L4 bloqueada.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
+from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredicto
 from pred_engine.ingesta.informe import ingest_csv_with_report
 from pred_engine.ingesta.pipeline import run_verify_parquet
 from pred_engine.ingesta.salida import validate_output_contract
@@ -84,8 +85,8 @@ PRINCIPAL_STAGES = (
     StageDefinition(
         "L4",
         "retrospective validation",
-        "absent",
-        "Verdicts and audit bundles are not implemented",
+        "implemented",
+        "M3 requiere una conexion a la base de plataforma para evaluar y publicar",
     ),
 )
 
@@ -212,12 +213,17 @@ class EvaluationArtifact:
 @dataclass(frozen=True, slots=True)
 class SkuVerdict:
     sku_id: str
-    verdict: Literal["hold", "partial", "fail"]
+    verdict: Veredicto | Literal["hold", "partial", "fail"]
     evidence: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.sku_id.strip() or self.verdict not in ("hold", "partial", "fail"):
-            raise ValueError("A verdict requires a SKU and hold/partial/fail")
+        if not self.sku_id.strip() or self.verdict not in (
+            *VEREDICTOS,
+            "hold",
+            "partial",
+            "fail",
+        ):
+            raise ValueError("Un veredicto requiere SKU y una etiqueta reconocida")
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,7 +233,7 @@ class ValidationArtifact:
 
 
 class RetrospectiveValidator(Protocol):
-    """Future L4 boundary: consume actual L3 evidence, never a fabricated result."""
+    """L4 boundary for native M3 or a caller-provided retrospective validator."""
 
     def __call__(self, evaluation: EvaluationArtifact) -> ValidationArtifact: ...
 
@@ -317,6 +323,8 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
             for stage in result.stages
         ],
     }
+    if result.validation is not None:
+        summary["m3"] = dict(result.validation.audit_bundle)
     if fitting is None:
         return summary
     reserve = fitting.reserve
@@ -516,8 +524,12 @@ class Pipeline:
         return PRINCIPAL_STAGES[:3] + (
             replace(
                 PRINCIPAL_STAGES[3],
-                maturity="caller_provided",
-                capability="Caller-supplied retrospective validator",
+                maturity="implemented"
+                if getattr(self.validator, "nativo", False)
+                else "caller_provided",
+                capability="Evaluacion retrospectiva nativa y publicacion de evidencia"
+                if getattr(self.validator, "nativo", False)
+                else "Caller-supplied retrospective validator",
             ),
         )
 
@@ -668,13 +680,13 @@ class Pipeline:
         return EvaluationArtifact(fitting, self.settings, evaluated, units)
 
     def validate(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
-        """L4: an injected validator must cover every SKU; none is built in."""
+        """L4: the configured validator must cover every handed-off SKU."""
         if self.validator is None:
             raise StageUnavailableError(PRINCIPAL_STAGES[3].capability)
         result = self.validator(evaluation)
         if not isinstance(result, ValidationArtifact):
             raise TypeError("L4 must return ValidationArtifact")
-        expected = {c.fitted.selection.sku_id for c in evaluation.candidates}
+        expected = {c.selection.sku_id for c in evaluation.fitting.candidates}
         actual = [v.sku_id for v in result.verdicts]
         if not expected or set(actual) != expected or len(actual) != len(expected):
             raise ValueError("L4 must return exactly one verdict for every SKU")

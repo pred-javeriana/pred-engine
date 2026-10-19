@@ -1,6 +1,6 @@
 """Diebold-Mariano con correccion HLN y multiplicidad BH entre SKUs.
 
-Implementa la alternativa 2 del ADR-03-008: el campeon de cada SKU contra
+Implementa ADR-03-011: el campeon de cada SKU contra
 Seasonal Naive, solo con datos reales. La perdida es el error cuadratico medio
 de cada ventana, coherente con r = RMSE_c / RMSE_SN (ADR-03-007). Con ventanas
 de horizonte H que se solapan, el diferencial se autocorrelaciona hasta el
@@ -68,17 +68,25 @@ def prueba_hln(diferencias: np.ndarray, horizonte: int) -> PruebaDM:
 
 
 def probar_contra_linea_base(
-    campeon: MetricasCandidato, linea_base: MetricasCandidato
+    campeon: MetricasCandidato,
+    linea_base: MetricasCandidato,
+    *,
+    n_min_ventanas: int = 2,
 ) -> PruebaDM:
-    """HLN-DM sobre las ventanas validas para el campeon y para Seasonal Naive."""
+    """HLN-DM sobre origenes comunes, con minimo predeclarado y horizonte H."""
+    if type(n_min_ventanas) is not int or n_min_ventanas < 2:
+        raise ValueError("n_min_ventanas debe ser un entero >= 2")
     base = {v.origen: v.metricas for v in linea_base.por_ventana}
     pares = [
         (v.metricas, base[v.origen]) for v in campeon.por_ventana if v.origen in base
     ]
     if not pares:
         return PruebaDM(0, 0, causa="sin_ventanas_comunes")
+    horizonte = max(c.n_pares for c, _ in pares)
+    if len(pares) < n_min_ventanas:
+        return PruebaDM(len(pares), horizonte, causa="pocas_ventanas")
     diferencias = np.array([c.rmse**2 - b.rmse**2 for c, b in pares])
-    return prueba_hln(diferencias, max(c.n_pares for c, _ in pares))
+    return prueba_hln(diferencias, horizonte)
 
 
 def corregir_multiplicidad(

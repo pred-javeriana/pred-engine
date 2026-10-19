@@ -15,11 +15,19 @@ from pred_engine.forecasting.persistencia_evidencia.errores import (
     EvidenciaInconsistenteError,
     PersistenciaEvidenciaError,
 )
+from pred_engine.forecasting.persistencia_evidencia.migraciones import (
+    VERSION_ESQUEMA_M3,
+    BasePlataformaError,
+    abrir_base_plataforma,
+    aplicar_migraciones_m3,
+    textos_migraciones_m3,
+)
 from pred_engine.forecasting.persistencia_evidencia.repositorio import (
     TABLAS,
     TABLAS_POR_SKU,
     VENTANA_AGREGADA,
     consultar,
+    contar_fallos,
     esquema_m3,
     estado_corrida,
     guardar_evaluacion,
@@ -28,9 +36,15 @@ from pred_engine.forecasting.persistencia_evidencia.repositorio import (
     publicar,
     registrar_corrida,
     unidades_confirmadas,
+    veredictos_publicados,
 )
 
 __all__ = [
+    "VERSION_ESQUEMA_M3",
+    "BasePlataformaError",
+    "abrir_base_plataforma",
+    "aplicar_migraciones_m3",
+    "textos_migraciones_m3",
     "EstadoCorrida",
     "EstadoCorridaError",
     "EvidenciaInconsistenteError",
@@ -40,6 +54,8 @@ __all__ = [
     "TABLAS_POR_SKU",
     "VENTANA_AGREGADA",
     "consultar",
+    "contar_fallos",
+    "veredictos_publicados",
     "esquema_m3",
     "estado_corrida",
     "guardar_evaluacion",

@@ -58,6 +58,7 @@ from pred_engine.verify import (
     verification_pipeline,
     verify_pipeline,
 )
+from tests._plataforma import crear_base_plataforma
 
 
 def request_at(root: Path) -> PipelineInput:
@@ -250,10 +251,13 @@ def test_l3_causal_window_error_preserves_fitting(tmp_path, monkeypatch):
 def test_l4_is_unavailable_not_a_fake_verdict(tmp_path):
     pipeline = verification_pipeline()
     result = pipeline.run(request_at(tmp_path))
-    with pytest.raises(StageUnavailableError, match="not implemented"):
+    with pytest.raises(StageUnavailableError, match="base de plataforma"):
         pipeline.validate(result.evaluation)
     assert result.validation is None
-    assert result.stages[3].message == "Verdicts and audit bundles are not implemented"
+    assert (
+        result.stages[3].message
+        == "M3 requiere una conexion a la base de plataforma para evaluar y publicar"
+    )
     assert result.blocked_stage == "L4"
 
 
@@ -343,7 +347,8 @@ def test_default_core_composition_fits_and_evaluates_all_families(tmp_path):
         assert candidate.walk_forward.ventanas[0].y_real.tolist() == [32.0, 33.35]
 
 
-def test_real_cli_default_composition_reports_blocker(tmp_path, capsys):
+def test_real_cli_default_composition_publishes_m3(tmp_path, capsys):
+    crear_base_plataforma(tmp_path / "data" / "pred.db")
     request = core_request_at(tmp_path)
     code = main(
         [
@@ -367,21 +372,19 @@ def test_real_cli_default_composition_reports_blocker(tmp_path, capsys):
         ]
     )
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert code == 7
-    assert report["complete"] is False
-    assert report["blocked_stage"] == "L4"
-    assert [s["state"] for s in report["stages"]] == [
-        "completed",
-        "completed",
-        "completed",
-        "blocked",
-    ]
+    assert code == 0
+    assert report["complete"] is True
+    assert report["blocked_stage"] is None
+    assert [s["state"] for s in report["stages"]] == ["completed"] * 4
+    assert report["m3"]["estado"] == "PUBLICADA"
+    assert report["m3"]["n_unidades"] == 92
     panel = pd.read_parquet(tmp_path / "data/processed/sales.parquet")
     assert panel.shape == (120, 5)
     assert panel["demand_qty"].iloc[:3].tolist() == [18.0, 19.35, 20.7]
 
 
 def test_cli_reports_same_honest_blocker(tmp_path, monkeypatch, capsys):
+    crear_base_plataforma(tmp_path / "data" / "pred.db")
     monkeypatch.setattr(
         "pred_engine.pipeline_setup.build_pipeline",
         lambda *args, **kwargs: verification_pipeline(),
@@ -765,17 +768,14 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
         validar_manifiesto,
     )
 
+    crear_base_plataforma(tmp_path / "data" / "pred.db")
     args = _seed_run_args(tmp_path)
     code = main(args)
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
-    assert code == (8 if report["failures"] else 7)
-    assert [s["state"] for s in report["stages"]] == [
-        "completed",
-        "completed",
-        "completed",
-        "blocked",
-    ]
+    assert code == (8 if report["failures"] or report["m3"]["n_fallos"] else 0)
+    assert [s["state"] for s in report["stages"]] == ["completed"] * 4
+    assert report["m3"]["estado"] == "PUBLICADA"
     run_dir = Path(report["run_dir"])
     assert run_dir.parent == tmp_path / "data" / "runs"
     run = json.loads((run_dir / "corrida.json").read_text())
@@ -820,7 +820,7 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     assert len(units) == report["units"]["L2"]["total"] + report["units"]["L3"]["total"]
     assert {u["model"] for u in units} <= {"sarima", "lightgbm"}
     assert all(u["cpu_s"] > 0 for u in units if u["state"] == "completada")
-    assert set(run["stage_times"]) == {"L1", "L2", "L3"}
+    assert set(run["stage_times"]) == {"L1", "L2", "L3", "L4"}
     assert run["stage_times"]["L2"]["seconds"] > 0
 
     # Resources over time, per worker process, beside the unit trace.
@@ -847,11 +847,14 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     )
     assert rebuilt["candidatos"] == first["candidatos"]
     assert rebuilt["contexto"] == first["contexto"]
+    assert rebuilt["emitido_en"] == first["emitido_en"]
 
 
 def test_cli_reports_isolated_unit_failures_with_exit_code_8(
     tmp_path, monkeypatch, capsys
 ):
+    crear_base_plataforma(tmp_path / "data" / "pred.db")
+
     def failing_pipeline(*args, **kwargs):
         pipeline = verification_pipeline()
         pipeline.router = _RouterFailingForOneSku(pipeline.router)
@@ -881,6 +884,7 @@ def test_cli_reports_isolated_unit_failures_with_exit_code_8(
 
 
 def test_cli_resource_sampling_can_be_disabled(tmp_path, monkeypatch, capsys):
+    crear_base_plataforma(tmp_path / "data" / "pred.db")
     monkeypatch.setattr(
         "pred_engine.pipeline_setup.build_pipeline",
         lambda *args, **kwargs: verification_pipeline(),
@@ -906,6 +910,7 @@ def test_cli_resource_sampling_can_be_disabled(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_seed_errors_are_reported_without_traceback(tmp_path, capsys):
+    crear_base_plataforma(tmp_path / "data" / "pred.db")
     code = main(
         [
             "run",

@@ -15,6 +15,7 @@ from typing import Literal
 from pred_engine.comun.modelos import SKU_CLASSES, SkuClass
 from pred_engine.forecasting.evaluaciones.calculo_errores import Metricas
 from pred_engine.forecasting.evaluaciones.diebold_mariano import PruebaDM
+from pred_engine.optimizacion.router.politica import FAMILIES_BY_SKU_CLASS
 
 Veredicto = Literal[
     "FALLO_TECNICO",
@@ -41,37 +42,33 @@ MotivoSeleccion = Literal[
 
 # ADR-03-003: familias elegibles por categoria, declaradas antes de abrir la
 # reserva. Valor inicial: la matriz de enrutamiento 2.2 de M2.
-FAMILIAS_ELEGIBLES_INICIALES: Mapping[SkuClass, tuple[str, ...]] = MappingProxyType(
-    {
-        "smooth": ("classical", "ml", "dl", "foundation"),
-        "erratic": ("classical", "ml", "dl", "foundation"),
-        "intermittent": ("classical", "ml", "foundation"),
-        "lumpy": ("classical", "foundation"),
-    }
-)
+FAMILIAS_ELEGIBLES_INICIALES: Mapping[SkuClass, tuple[str, ...]] = FAMILIES_BY_SKU_CLASS
 
 
 @dataclass(frozen=True, slots=True)
 class PoliticaSeleccion:
     """Se congela y versiona antes de abrir la reserva (ADR-03-003/007/008)."""
 
-    version: str = "3.4.1-inicial"
+    version: str = "3.4.2-inicial"
     n_min: int = 30
     tolerancia_empate: float = 0.01
     orden_simplicidad: tuple[str, ...] = ("classical", "ml", "dl", "foundation")
     familias_elegibles: Mapping[SkuClass, tuple[str, ...]] = field(
         default_factory=lambda: FAMILIAS_ELEGIBLES_INICIALES
     )
-    # Nivel de la prueba HLN-DM, con BH entre SKUs (ADR-03-008, alt. 2).
+    # Nivel de HLN-DM/BH y minimo de origenes predeclarados (ADR-03-011).
     alfa_dm: float = 0.05
+    n_min_dm: int = 30
 
     def __post_init__(self) -> None:
         if not self.version.strip():
             raise ValueError("la politica debe declarar su version")
-        if self.n_min < 1:
-            raise ValueError("n_min debe ser >= 1")
+        if type(self.n_min) is not int or self.n_min < 1:
+            raise ValueError("n_min debe ser un entero >= 1")
         if not self.tolerancia_empate >= 0:
             raise ValueError("tolerancia_empate debe ser >= 0")
+        if type(self.n_min_dm) is not int or self.n_min_dm < 2:
+            raise ValueError("n_min_dm debe ser un entero >= 2")
         if not 0 < self.alfa_dm < 1:
             raise ValueError("alfa_dm debe estar en (0, 1)")
         if len(set(self.orden_simplicidad)) != len(self.orden_simplicidad):
@@ -81,6 +78,17 @@ class PoliticaSeleccion:
         for familias in self.familias_elegibles.values():
             if not familias or len(set(familias)) != len(familias):
                 raise ValueError("cada categoria necesita familias sin repetir")
+        object.__setattr__(self, "orden_simplicidad", tuple(self.orden_simplicidad))
+        object.__setattr__(
+            self,
+            "familias_elegibles",
+            MappingProxyType(
+                {
+                    clase: tuple(familias)
+                    for clase, familias in self.familias_elegibles.items()
+                }
+            ),
+        )
 
 
 POLITICA_INICIAL = PoliticaSeleccion()

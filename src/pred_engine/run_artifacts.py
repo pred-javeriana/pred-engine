@@ -111,7 +111,9 @@ def _contexto(fitting: FittingArtifact) -> ContextoParticion:
     )
 
 
-def _procedencia(candidato_id: str, seleccion: SelectionResult) -> dict[str, Any]:
+def procedencia_candidato(
+    candidato_id: str, seleccion: SelectionResult
+) -> dict[str, Any]:
     """Lo que el manifiesto no lleva: politica, perfil y evidencia del HPO."""
     payload = seleccion.payload
     return {
@@ -216,9 +218,12 @@ def write_run(
             emitido_en=datetime.now(UTC),
         )
         archivos["candidatos"] = destino / "candidatos.json"
-        escribir_atomico(archivos["candidatos"], manifiesto + "\n")
+        # El handoff ya pudo ser validado por M3 antes de abrir la reserva.
+        # Reanudar o guardar el resumen nunca cambia su emision original.
+        if not archivos["candidatos"].exists():
+            escribir_atomico(archivos["candidatos"], manifiesto + "\n")
         procedencia = [
-            _procedencia(crudo["candidato_id"], seleccion)
+            procedencia_candidato(crudo["candidato_id"], seleccion)
             for crudo, seleccion in zip(
                 json.loads(manifiesto)["candidatos"], selecciones, strict=True
             )

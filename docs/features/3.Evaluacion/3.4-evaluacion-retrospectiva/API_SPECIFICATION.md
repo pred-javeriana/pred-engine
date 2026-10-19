@@ -59,8 +59,8 @@ fechas=reserve.reserved_dates, valores=FittedCandidate.forecast)` por candidato.
 ```python
 separar_reserva(serie: pd.Series, corte: ReserveCut) -> tuple[np.ndarray, pd.Series]
 escala_q1(historia: np.ndarray, m: int = 7) -> tuple[float | None, str | None]
-pronosticar_linea_base(entrada: EntradaSku, corte: ReserveCut) -> SerieCandidato
-evaluar_sku(entrada: EntradaSku, corte: ReserveCut) -> EvaluacionSku
+pronosticar_linea_base(entrada, corte, *, ventanas_planeadas=None, confirmados=()) -> SerieCandidato
+evaluar_sku(entrada, corte, *, linea_base=None) -> EvaluacionSku
 ```
 
 - `pronosticar_linea_base`: Seasonal Naive (`instanciar_linea_base()` de 3.2)
@@ -99,12 +99,13 @@ propiedad `cobertura = n_ventanas_validas / n_ventanas_totales`.
 
 | Campo | Default |
 | --- | --- |
-| `version` | `"3.4.1-inicial"` |
+| `version` | `"3.4.2-inicial"` |
 | `n_min` | `30` |
 | `tolerancia_empate` | `0.01` |
 | `orden_simplicidad` | `("classical", "ml", "dl", "foundation")` |
 | `familias_elegibles` | `FAMILIAS_ELEGIBLES_INICIALES` |
 | `alfa_dm` | `0.05` (nivel de HLN-DM con BH) |
+| `n_min_dm` | `30` origenes comunes antes de emitir un p-valor |
 
 `ValueError` si la version esta vacia, `n_min < 1`, `tolerancia_empate < 0`,
 `orden_simplicidad` repite familias, `familias_elegibles` no cubre las cuatro
@@ -157,7 +158,7 @@ seleccion definitiva sigue siendo por categoria (ADR-03-003).
 
 ```python
 prueba_hln(diferencias: np.ndarray, horizonte: int) -> PruebaDM
-probar_contra_linea_base(campeon: MetricasCandidato, linea_base: MetricasCandidato) -> PruebaDM
+probar_contra_linea_base(campeon, linea_base, *, n_min_ventanas=2) -> PruebaDM
 corregir_multiplicidad(pruebas: Mapping[str, PruebaDM], alfa: float) -> dict[str, PruebaDM]
 ```
 
@@ -166,6 +167,8 @@ corregir_multiplicidad(pruebas: Mapping[str, PruebaDM], alfa: float) -> dict[str
 - `probar_contra_linea_base`: diferencial `MSE_campeon - MSE_SN` por ventana
   comun (`rmse**2` de `por_ventana`); `horizonte` = mayor `n_pares` de esas
   ventanas.
+- `emitir_veredictos` pasa el minimo de politica `n_min_dm` a la prueba.
+  El default matematico de bajo nivel no sustituye ese minimo de corrida.
 - `corregir_multiplicidad`: Benjamini-Hochberg (`statsmodels`, `fdr_bh`) sobre
   las pruebas con p-valor; las demas quedan igual. `emitir_veredictos` la
   aplica sobre todos los SKUs de la corrida.

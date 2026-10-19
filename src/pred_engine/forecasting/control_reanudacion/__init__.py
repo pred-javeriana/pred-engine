@@ -1,5 +1,7 @@
-"""PRED analytical engine.
+"""Coordinacion y recuperacion nativa de la evaluacion M3."""
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
-"""
+from pred_engine.forecasting.control_reanudacion.controlador import (
+    ControladorEvaluacion,
+)
+
+__all__ = ["ControladorEvaluacion"]

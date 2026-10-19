@@ -178,7 +178,8 @@ def _restaurar(
                     or fallo.candidato_id != candidato.candidato_id
                     or fallo.modelo != candidato.modelo
                     or fallo.origen != origen
-                    or not np.isnan(valores).all()
+                    or np.isfinite(valores).all()
+                    or np.isinf(valores).any()
                 )
             )
         ):

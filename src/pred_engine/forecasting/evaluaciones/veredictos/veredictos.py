@@ -106,7 +106,12 @@ def _veredicto_sku(
         instancias = [c for c in evaluacion.candidatos if c.familia == familia]
         campeon = representante(evaluacion, familia) or next(iter(instancias), None)
 
-    fallidos = [c for c in evaluacion.candidatos if c.n_pronosticos_validos == 0]
+    fallidos = [
+        c
+        for c in evaluacion.candidatos
+        if (c.n_ventanas_totales > 0 or evaluacion.linea_base.n_ventanas_totales > 0)
+        and c.n_pronosticos_validos == 0
+    ]
     # Solo cuenta la falla de una familia que compite segun la politica.
     elegibles = politica.familias_elegibles[evaluacion.sku_class]
     comparacion_incompleta = bool(
@@ -121,7 +126,14 @@ def _veredicto_sku(
     n = 0 if campeon is None else campeon.n_ventanas_validas
 
     veredicto: Veredicto
-    if todos_fallaron or all(c.n_pronosticos_validos == 0 for c in instancias):
+    if (
+        todos_fallaron
+        or not instancias
+        or (
+            any(c.n_ventanas_totales > 0 for c in instancias)
+            and all(c.n_pronosticos_validos == 0 for c in instancias)
+        )
+    ):
         veredicto = "FALLO_TECNICO"
         motivo = "la instancia campeona o todos los candidatos no produjeron pronostico"
     elif evaluacion.n_obs_validas_reserva == 0:
@@ -161,7 +173,12 @@ def _veredicto_sku(
         metricas_linea_base=evaluacion.linea_base.agregadas,
         iqr_diferencia_mae=_iqr_diferencia(campeon, evaluacion.linea_base),
         diebold_mariano=_prueba_dm(
-            campeon, evaluacion.linea_base, familia, veredicto, datos_sinteticos
+            campeon,
+            evaluacion.linea_base,
+            familia,
+            veredicto,
+            datos_sinteticos,
+            politica,
         ),
         justificacion=f"{veredicto}: {motivo}",
         modelos_evaluados=tuple(
@@ -197,15 +214,18 @@ def _prueba_dm(
     familia: str,
     veredicto: Veredicto,
     datos_sinteticos: bool,
+    politica: PoliticaSeleccion,
 ) -> PruebaDM:
-    # ADR-03-008: nunca sobre datos sinteticos, que inflan el poder de la prueba.
+    # ADR-03-011: nunca sobre datos sinteticos, que inflan el poder de la prueba.
     if datos_sinteticos:
         return PruebaDM(0, 0, causa="datos_sinteticos")
     if familia == FAMILIA_LINEA_BASE:
         return PruebaDM(0, 0, causa="campeon_es_linea_base")
     if campeon is None or veredicto not in ("VALIDADO", "EXPLORATORIO"):
         return PruebaDM(0, 0, causa=f"veredicto:{veredicto}")
-    return probar_contra_linea_base(campeon, linea_base)
+    return probar_contra_linea_base(
+        campeon, linea_base, n_min_ventanas=politica.n_min_dm
+    )
 
 
 def _iqr_diferencia(
