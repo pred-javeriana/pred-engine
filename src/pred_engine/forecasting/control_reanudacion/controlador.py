@@ -44,6 +44,7 @@ from pred_engine.forecasting.generador_pronosticos import (
     separar_serie,
     ventanas_reserva,
 )
+from pred_engine.forecasting.generador_pronosticos.particion import ventanas_observables
 from pred_engine.forecasting.persistencia_evidencia import (
     EvidenciaInconsistenteError,
     IdentidadCorrida,
@@ -67,6 +68,7 @@ from pred_engine.forecasting.persistencia_evidencia.recuperacion import (
 )
 from pred_engine.forecasting.persistencia_evidencia.referencias import (
     asegurar_referencias,
+    finalizar_referencia,
 )
 from pred_engine.optimizacion.control_reanudacion.almacenamiento import escribir_atomico
 from pred_engine.optimizacion.router import construir_manifiesto
@@ -109,12 +111,16 @@ class ControladorEvaluacion:
         run_id_m2: str,
         codigo_version: str,
         datos_sinteticos: bool,
+        data_root: str | Path | None = None,
         politica: PoliticaSeleccion = POLITICA_INICIAL,
         configuracion_m2: Mapping[str, Any] | None = None,
         fabricas: Mapping[str, FabricaAdaptador] = FABRICAS,
     ) -> None:
         self.conn = conn
         self.directorio = Path(directorio)
+        self.data_root = (
+            Path(data_root) if data_root is not None else self.directorio.parent
+        )
         self.run_id_m2 = run_id_m2
         self.codigo_version = codigo_version
         self.datos_sinteticos = datos_sinteticos
@@ -123,6 +129,20 @@ class ControladorEvaluacion:
         self.fabricas = fabricas
 
     def __call__(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
+        try:
+            resultado = self._evaluar(evaluation)
+        except Exception as error:
+            finalizar_referencia(self.conn, self.run_id_m2, error=error)
+            raise
+        finalizar_referencia(
+            self.conn,
+            self.run_id_m2,
+            hay_fallos=bool(resultado.audit_bundle["n_fallos"])
+            or any(u.failed for u in (*evaluation.fitting.units, *evaluation.units)),
+        )
+        return resultado
+
+    def _evaluar(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
         from pred_engine.pipeline import SkuVerdict, ValidationArtifact
         from pred_engine.run_artifacts import (
             library_versions,
@@ -147,8 +167,6 @@ class ControladorEvaluacion:
         ruta_manifiesto = self.directorio / "candidatos.json"
         faltaba_manifiesto = not ruta_manifiesto.exists()
         contenido = nuevo if faltaba_manifiesto else ruta_manifiesto.read_text()
-        if faltaba_manifiesto:
-            escribir_atomico(ruta_manifiesto, contenido + "\n")
         config = ConfiguracionPronosticos(
             evaluation.settings.horizon, self.codigo_version
         )
@@ -188,12 +206,16 @@ class ControladorEvaluacion:
             run_id_m2=self.run_id_m2,
             directorio=self.directorio,
             configuracion=self.configuracion_m2,
-            hay_fallos=any(u.failed for u in (*fitting.units, *evaluation.units)),
+            data_root=self.data_root,
         )
         apertura = datetime.now(UTC)
         guardado = protocolo_guardado(self.conn, identidad.run_id)
-        if guardado is not None and faltaba_manifiesto:
+        if guardado is not None:
             contenido = guardado["manifiesto"]
+        if faltaba_manifiesto or (
+            guardado is not None
+            and ruta_manifiesto.read_text().strip() != contenido.strip()
+        ):
             escribir_atomico(ruta_manifiesto, contenido + "\n")
         try:
             handoff = restaurar_handoff(
@@ -260,9 +282,37 @@ class ControladorEvaluacion:
             except SerieNoElegibleError as error:
                 exclusiones[sku] = {"codigo": error.codigo, "causa": str(error)}
         elegibles = set(skus) - set(exclusiones)
-        n_previstas = (
-            sum(c.sku in elegibles for c in handoff.candidatos) + len(elegibles)
-        ) * len(plan)
+        calendarios = {
+            sku: pd.DatetimeIndex(panel.loc[panel["sku_id"] == sku, "timestamp"])
+            for sku in skus
+        }
+        planes = {
+            sku: ventanas_observables(corte, config.horizonte, calendarios[sku])
+            if sku in elegibles
+            else ()
+            for sku in skus
+        }
+        origenes = {
+            sku: {v.origen for v in planeadas} for sku, planeadas in planes.items()
+        }
+        exclusiones_datos = {
+            sku: [
+                {
+                    "origen": v.origen.isoformat(),
+                    "causa": "sin_contexto_observado"
+                    if v.origen not in origenes[sku]
+                    else "sin_datos_objetivo",
+                }
+                for v in plan
+                if v.origen not in origenes[sku]
+                or not v.fechas.isin(calendarios[sku]).all()
+            ]
+            for sku in elegibles
+        }
+        n_previstas = sum(
+            (sum(c.sku == sku for c in handoff.candidatos) + 1) * len(planes[sku])
+            for sku in skus
+        )
         fijar_protocolo(
             self.conn,
             run_id,
@@ -280,6 +330,7 @@ class ControladorEvaluacion:
                 "ejecucion_id": ejecucion_id,
                 "exclusiones_m2": [asdict(e) for e in fitting.exclusions],
                 "exclusiones_m3": exclusiones,
+                "exclusiones_datos": exclusiones_datos,
                 "fallos_m2": [
                     {"sku": u.sku_id, "familia": u.family, "causa": u.record.error}
                     for u in fitting.units
@@ -301,7 +352,7 @@ class ControladorEvaluacion:
         if estado_corrida(self.conn, run_id) in ("EN_CURSO", "EVALUADA"):
             fallos_sku = Counter(f.sku for f in handoff.fallos)
             for sku in skus:
-                plan_sku = plan if sku in elegibles else ()
+                plan_sku = planes[sku]
                 grupo = panel.loc[panel["sku_id"] == sku].sort_values("timestamp")
                 serie = pd.Series(
                     grupo["demand_qty"].to_numpy(),
@@ -418,6 +469,7 @@ class ControladorEvaluacion:
                 "n_unidades": n_previstas,
                 "n_fallos": n_fallos,
                 "exclusiones": exclusiones,
+                "exclusiones_datos": exclusiones_datos,
                 "archivos": {tabla: str(path) for tabla, path in archivos.items()},
                 "csv": {
                     tabla: str(path.with_suffix(".csv"))

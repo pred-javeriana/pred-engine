@@ -141,6 +141,40 @@ def _escribir_json(datos: Any, ruta: Path) -> None:
     escribir_atomico(ruta, json.dumps(datos, ensure_ascii=False, indent=2) + "\n")
 
 
+def fijar_identidad(
+    directorio: Path, fuente_sha256: str, settings: Mapping[str, Any]
+) -> None:
+    """Fija la identidad antes de HPO; un intento rechazado no puede sustituirla.
+
+    Sin identidad ni resumen completo no se adivina la entrada original de
+    checkpoints antiguos. Se debe restaurar la identidad o usar otra corrida.
+    """
+    destino = directorio / "identidad.json"
+    solicitada = {"source_sha256": fuente_sha256, "settings": dict(settings)}
+    anterior = None
+    if destino.exists():
+        anterior = json.loads(destino.read_text())
+    elif (directorio / "corrida.json").exists():
+        resumen = json.loads((directorio / "corrida.json").read_text())
+        if resumen.get("summary", {}).get("complete") is True:
+            anterior = {
+                "source_sha256": resumen["inputs"]["source"]["sha256"],
+                "settings": {
+                    k: v for k, v in resumen["settings"].items() if k != "workers"
+                },
+            }
+    if anterior is not None and anterior != solicitada:
+        raise ValueError("run_id incompatible con la entrada o configuracion previa")
+    if anterior is None and any((directorio / "hpo").glob("*/manifiesto.json")):
+        raise ValueError(
+            "falta la identidad durable de los checkpoints; "
+            "restaure la identidad original o use otro run_id"
+        )
+    if not destino.exists():
+        directorio.mkdir(parents=True, exist_ok=True)
+        escribir_atomico(destino, json.dumps(solicitada, sort_keys=True) + "\n")
+
+
 def write_run(
     result: PipelineResult,
     directory: str | Path,

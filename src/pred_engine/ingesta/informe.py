@@ -68,6 +68,7 @@ class _Modelo(BaseModel):
 
 
 class SourceFileInfo(_Modelo):
+    datos_sinteticos: bool | None = Field(default=None, strict=True)
     name: str
     sha256: str
     row_count: int = Field(ge=0)
@@ -93,6 +94,7 @@ class ValidationInfo(_Modelo):
 
 
 class PublishedInfo(_Modelo):
+    sha256: str | None = None
     parquet_path: str
     rows: int = Field(ge=0)
     n_skus: int = Field(ge=0)
@@ -273,6 +275,7 @@ def _informe_aceptado(
             n_skus=n_skus,
         ),
         published=PublishedInfo(
+            sha256=hash_sha256_archivo(resultado.parquet_path),
             parquet_path=_relativa(resultado.parquet_path, raiz),
             rows=len(topologia.frame),
             n_skus=n_skus,
@@ -381,6 +384,7 @@ def ingest_csv_with_report(
     provider: LlmProvider | None = None,
     timeout: float = 30.0,
     on_conflict: OnConflict = "reject",
+    datos_sinteticos: bool | None = None,
 ) -> ReportedIngest:
     """Ingiere un CSV y deja siempre su informe en ``ingestas/<sha256>.json``.
 
@@ -394,6 +398,7 @@ def ingest_csv_with_report(
     if not origen.is_file():
         raise FileNotFoundError(origen)
     fuente = SourceFileInfo(
+        datos_sinteticos=datos_sinteticos,
         name=origen.name,
         sha256=hash_sha256_archivo(origen),
         row_count=_contar_filas(origen),

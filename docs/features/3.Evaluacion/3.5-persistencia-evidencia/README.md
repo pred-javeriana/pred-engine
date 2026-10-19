@@ -12,8 +12,10 @@ El motor conserva los textos canónicos:
 - `esquema_m3.sql`: esquema inicial, inmutable.
 - `esquema_m3_0002.sql`: protocolo congelado, fallos durables por ventana,
   procedencia y resúmenes de cartera.
+- `esquema_m3_0003.sql`: procedencia M1 por CSV y huella del Parquet.
 
-La plataforma incorpora copias exactas como migraciones 0005 y 0006.
+La plataforma incorpora copias exactas como migraciones 0005, 0006 y 0007.
+Las dos primeras se conservan sin cambios. La versión vigente es 7.
 `aplicar_migraciones_m3` usa el mismo `PRAGMA user_version`. El CLI aplica las
 pendientes sobre una base existente con las migraciones previas de plataforma.
 No modifica las versiones 0001 a 0004 y rechaza una versión desconocida.
@@ -24,6 +26,7 @@ vigente y su motivo se documentan en ADR-021.
 
 | Tabla | Contenido |
 | --- | --- |
+| `m3_ingestas` | Procedencia real/sintética inmutable por identidad CSV y Parquet M1 |
 | `m3_corridas` | Identidad, referencia de ingesta fuente, corrida M2, origen de datos, estado y rechazo |
 | `m3_protocolos` | Protocolo y handoff congelados, apertura, procedencia, ejecución de plataforma y unidades previstas |
 | `m3_skus` | SKU del handoff, incluidos los que solo tienen fallos de adaptación |

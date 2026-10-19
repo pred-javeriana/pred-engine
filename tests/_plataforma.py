@@ -27,7 +27,7 @@ def crear_base_plataforma(ruta: Path) -> Path:
             id INTEGER PRIMARY KEY, ingesta_id INTEGER NOT NULL REFERENCES ingestas(id),
             configuracion_id INTEGER NOT NULL REFERENCES configuraciones(id),
             seed INTEGER NOT NULL, estado TEXT NOT NULL,
-            run_id TEXT UNIQUE, ruta_corrida TEXT
+            run_id TEXT UNIQUE, ruta_corrida TEXT, error_json TEXT
         );
         PRAGMA user_version = 4;
     """)

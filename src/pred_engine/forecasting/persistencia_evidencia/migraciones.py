@@ -14,7 +14,11 @@ _logger = get_logger(__name__)
 
 # Las versiones 1 a 4 pertenecen a la plataforma. Estos textos son la fuente
 # unica de sus migraciones 0005 y 0006, y tambien los aplica el CLI del motor.
-MIGRACIONES_M3 = ((5, "esquema_m3.sql"), (6, "esquema_m3_0002.sql"))
+MIGRACIONES_M3 = (
+    (5, "esquema_m3.sql"),
+    (6, "esquema_m3_0002.sql"),
+    (7, "esquema_m3_0003.sql"),
+)
 VERSION_ESQUEMA_M3 = MIGRACIONES_M3[-1][0]
 
 

@@ -101,6 +101,7 @@ class PipelineInput:
     # "keep_both" conserva el CSV nuevo bajo otro nombre si raw/ ya tiene uno
     # distinto con el mismo nombre; "reject" falla sin escribir nada.
     on_conflict: Literal["reject", "keep_both"] = "reject"
+    datos_sinteticos: bool | None = None
 
     def __post_init__(self) -> None:
         if (self.csv_path is None) == (self.parquet_path is None):
@@ -544,6 +545,7 @@ class Pipeline:
             provider=request.provider,
             timeout=request.timeout,
             on_conflict=request.on_conflict,
+            datos_sinteticos=request.datos_sinteticos,
         )
         if salida.error is not None:
             raise salida.error
@@ -680,13 +682,17 @@ class Pipeline:
         return EvaluationArtifact(fitting, self.settings, evaluated, units)
 
     def validate(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
-        """L4: the configured validator must cover every handed-off SKU."""
+        """L4: native covers handoff SKUs; legacy covers evaluated SKUs."""
         if self.validator is None:
             raise StageUnavailableError(PRINCIPAL_STAGES[3].capability)
         result = self.validator(evaluation)
         if not isinstance(result, ValidationArtifact):
             raise TypeError("L4 must return ValidationArtifact")
-        expected = {c.selection.sku_id for c in evaluation.fitting.candidates}
+        expected = (
+            {c.selection.sku_id for c in evaluation.fitting.candidates}
+            if getattr(self.validator, "nativo", False)
+            else {c.fitted.selection.sku_id for c in evaluation.candidates}
+        )
         actual = [v.sku_id for v in result.verdicts]
         if not expected or set(actual) != expected or len(actual) != len(expected):
             raise ValueError("L4 must return exactly one verdict for every SKU")

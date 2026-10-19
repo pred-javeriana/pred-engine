@@ -123,13 +123,20 @@ def registrar_corrida(
     with _transaccion(conn):
         origenes = conn.execute(
             "SELECT DISTINCT datos_sinteticos FROM m3_corridas "
-            "WHERE ingesta_sha256 = ?",
+            "WHERE ingesta_sha256 = ?1 UNION "
+            "SELECT datos_sinteticos FROM m3_ingestas WHERE ingesta_sha256 = ?1",
             (ingesta_sha256,),
         ).fetchall()
         if any(bool(f[0]) != datos_sinteticos for f in origenes):
             raise _inconsistente(
                 "el origen real o sintetico de una ingesta no puede cambiar"
             )
+        conn.execute(
+            "INSERT INTO m3_ingestas "
+            "(ingesta_sha256, ingesta_ref_m1, datos_sinteticos) "
+            "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+            (ingesta_sha256, identidad.ingesta_ref_m1, datos_sinteticos),
+        )
         nueva = conn.execute(
             "INSERT INTO m3_corridas (run_id, ingesta_sha256, run_id_m2, identidad,"
             " datos_sinteticos, estado, causa_rechazo) VALUES (?, ?, ?, ?, ?, ?, ?)"

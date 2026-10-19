@@ -29,6 +29,7 @@ from pred_engine.forecasting.generador_pronosticos.contratos import (
 )
 from pred_engine.forecasting.generador_pronosticos.particion import (
     separar_serie,
+    ventanas_observables,
     ventanas_reserva,
 )
 
@@ -57,11 +58,16 @@ def generar_pronosticos(
     Los errores de esa escritura se propagan, no se confunden con una falla
     del modelo. Un reinicio pasa las unidades durables en ``confirmadas``.
     """
-    ventanas = ventanas_reserva(corte, configuracion.horizonte)
+    todas = ventanas_reserva(corte, configuracion.horizonte)
+    valores = np.asarray(pd.to_numeric(serie, errors="coerce"), dtype=float)
+    fechas = pd.Index(np.asarray(serie.index)[np.isfinite(valores) & (valores >= 0)])
+    ventanas = ventanas_observables(corte, configuracion.horizonte, fechas)
+    origenes = {v.origen for v in ventanas}
+    exclusiones = tuple(v for v in todas if v.origen not in origenes)
     restauradas = _restaurar(candidato, configuracion, ventanas, confirmadas)
     if len(restauradas) == len(ventanas) and ventanas:
         return ResultadoPronosticos(
-            candidato, tuple(restauradas[v.origen] for v in ventanas)
+            candidato, tuple(restauradas[v.origen] for v in ventanas), exclusiones
         )
     historia, reserva = separar_serie(candidato.sku, serie, corte, configuracion)
     modelo: AdaptadorCandidato | None = None
@@ -107,7 +113,7 @@ def generar_pronosticos(
         len(restauradas),
         sum(u.fallo is not None for u in unidades),
     )
-    return ResultadoPronosticos(candidato, tuple(unidades))
+    return ResultadoPronosticos(candidato, tuple(unidades), exclusiones)
 
 
 def _pronosticar(

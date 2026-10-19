@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 
 import numpy as np
@@ -50,6 +51,59 @@ def _generar(serie=None, **opciones):
         fabricas=opciones.pop("fabricas", {"classical": _fabrica}),
         **opciones,
     )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("familia", ["classical", "ml", "dl"])
+def test_adaptadores_reales_ajustan_una_vez_y_no_leen_futuro(familia):
+    dates = pd.date_range("2024-01-01", periods=80)
+    series = pd.Series(20 + np.arange(80) * 0.05 + np.sin(np.arange(80)), index=dates)
+    corte = ReserveCut(
+        t_star=dates[63],
+        first_reserved=dates[64],
+        last_observed=dates[-1],
+        reserved_days=16,
+    )
+    origin = dates[67]
+    changed = series.copy()
+    changed.loc[changed.index > origin] *= 50
+    recipe = TypeAdapter(Candidato).validate_python(candidato(familia))
+    outputs, fits = [], []
+    for data in (series, changed):
+        calls = []
+
+        def profile(frame, event, arg):
+            if (
+                event == "call"
+                and frame.f_code.co_name == "fit"
+                and "/comun/modelos/" in frame.f_code.co_filename
+            ):
+                calls.append(frame.f_code.co_filename)
+
+        previous = sys.getprofile()
+        sys.setprofile(profile)
+        try:
+            outputs.append(
+                generar_pronosticos(
+                    recipe, data, corte, ConfiguracionPronosticos(7, "revision")
+                )
+            )
+        finally:
+            sys.setprofile(previous)
+        fits.append(len(calls))
+    assert fits == [1, 1]
+    assert [len(o.unidades) for o in outputs] == [10, 10]
+    assert [o.fallos for o in outputs] == [(), ()]
+    prefixes = [
+        [
+            u.pronostico.valores.tobytes()
+            for u in o.unidades
+            if u.pronostico.origen <= origin
+        ]
+        for o in outputs
+    ]
+    assert len(prefixes[0]) == 5
+    assert prefixes[0] == prefixes[1]
 
 
 def test_todos_los_origenes_diarios_con_horizonte_completo_y_trazabilidad():
@@ -209,8 +263,12 @@ def test_falta_observacion_hasta_el_origen_solo_afecta_origenes_posteriores():
     datos = _serie().drop(pd.Timestamp("2024-01-17"))
     resultado = _generar(datos)
     assert resultado.serie.pronosticos[0].valores.tolist() == [16.0, 16.0]
-    assert [f.codigo_error for f in resultado.fallos] == ["observaciones_ausentes"] * 2
-    assert all(np.isnan(p.valores).all() for p in resultado.serie.pronosticos[1:])
+    assert resultado.fallos == ()
+    assert len(resultado.serie.pronosticos) == 1
+    assert [v.origen for v in resultado.exclusiones] == [
+        pd.Timestamp("2024-01-17"),
+        pd.Timestamp("2024-01-18"),
+    ]
 
 
 @pytest.mark.parametrize(

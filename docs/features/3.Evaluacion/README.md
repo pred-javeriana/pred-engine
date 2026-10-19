@@ -3,8 +3,9 @@
 M3 recibe el Parquet inmutable de M1 y los candidatos completos de M2. Evalúa
 cada configuración sobre todas las ventanas completas de la reserva final del
 20 %, compara con Seasonal Naive, selecciona por categoría y publica los
-resultados de cada SKU. No ejecuta HPO, no retunea y no desarrolla la interfaz
-de M4.
+resultados de cada SKU entregado en el handoff. Las exclusiones previas de M2
+se consultan por separado en la procedencia. M3 no ejecuta HPO, no retunea y
+no desarrolla la interfaz de M4.
 
 ## Ejecución
 
@@ -23,13 +24,22 @@ base. `--db-path` tiene prioridad sobre `PRED_DB_PATH`; sin ambos se usa
 
 Para datos aumentados o sintéticos se debe indicar `--datos-sinteticos`.
 `--seed-csv` activa esa condición automáticamente. El protocolo conserva el
-origen de los datos y rechaza cambiarlo para una misma ingesta.
+origen de los datos y rechaza cambiarlo para una misma ingesta. M1 publica
+`source_file.datos_sinteticos` y `published.sha256`; la importación conserva
+esa procedencia para el proceso que consume el Parquet. Un Parquet externo
+sin procedencia exige `--datos-sinteticos` o `--datos-reales`, nunca se presume
+real por omisión.
 
 - Salida 0: etapas completas y evidencia PUBLICADA.
 - Salida 8: publicación completa con fallos técnicos aislados en M2 o M3.
 - Salida 1: entrada, identidad, base o etapa inválida.
 - Un pipeline de biblioteca sin validador configurado puede conservar L4
   bloqueada. No representa una evaluación realizada.
+
+Los días reservados sin observación producen exclusiones de datos, no fallos
+técnicos. Se omiten los orígenes sin contexto y se identifican las ventanas
+sin objetivos completos. No se imputan ceros ni se acorta H. La ejecución de
+plataforma solo termina después del resultado L4 y conserva su error si falla.
 
 ## Contrato de biblioteca
 
@@ -43,7 +53,7 @@ with abrir_base_plataforma("data/pred.db") as conn:
     validator = ControladorEvaluacion(
         conn, "data/runs/mi-corrida",
         run_id_m2="mi-corrida", codigo_version="revision-del-codigo",
-        datos_sinteticos=False,
+        datos_sinteticos=False, data_root="data",
     )
     pipeline = build_pipeline(
         EvaluationSettings(min_train=60, horizon=7, step=28),
@@ -54,7 +64,13 @@ with abrir_base_plataforma("data/pred.db") as conn:
 
 La conexión pertenece al llamador. La configuración y el identificador de la
 corrida deben ser estables al reanudar. El CLI construye esa identidad desde
-la entrada, las opciones y la versión de código.
+la entrada, las opciones y la versión de código. Guarda `identidad.json`
+antes del HPO, por separado del resumen de cada intento. Rechazar otra entrada
+no sustituye esa identidad ni bloquea la reanudación correcta. Si una corrida
+antigua perdió tanto la identidad como un resumen completo, se exige restaurar
+esa identidad o usar otra corrida; los checkpoints parciales no prueban por sí
+solos cuál era el archivo de entrada original. SQLite conserva
+el manifiesto autorizado y se consulta antes de restaurar un archivo perdido.
 
 ## Capacidades y propietarios
 

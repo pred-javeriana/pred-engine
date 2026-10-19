@@ -48,6 +48,19 @@ def ventanas_reserva(corte: ReserveCut, horizonte: int) -> tuple[VentanaReserva,
     )
 
 
+def ventanas_observables(
+    corte: ReserveCut, horizonte: int, fechas: pd.Index
+) -> tuple[VentanaReserva, ...]:
+    """Conserva H completo y omite origenes sin contexto diario observado."""
+    ausentes = np.cumsum(~corte.reserved_dates.isin(fechas))
+    return tuple(
+        v
+        for v in ventanas_reserva(corte, horizonte)
+        if v.origen == corte.t_star
+        or ausentes[(v.origen - corte.first_reserved).days] == 0
+    )
+
+
 def separar_serie(
     sku: str,
     serie: pd.Series,

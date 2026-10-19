@@ -86,6 +86,7 @@ class UnidadPronostico:
 class ResultadoPronosticos:
     candidato: Candidato
     unidades: tuple[UnidadPronostico, ...]
+    exclusiones: tuple[VentanaReserva, ...] = ()
 
     @property
     def serie(self) -> SerieCandidato:

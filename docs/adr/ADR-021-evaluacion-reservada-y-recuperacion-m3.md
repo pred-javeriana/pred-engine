@@ -33,8 +33,9 @@ para incorporar observaciones reservadas y para emitir evidencia estadística.
    `--db-path`, `PRED_DB_PATH` o `{data-root}/pred.db`, en ese orden. No crea
    una base alternativa cuando la de plataforma falta.
 5. **Migraciones compartidas.** El motor conserva el texto canónico de los
-   esquemas M3. La plataforma incorpora copias exactas como migraciones 0005
-   y 0006. Ambos usan `PRAGMA user_version`. El CLI aplica migraciones M3
+   esquemas M3. La plataforma incorpora copias exactas como migraciones 0005,
+   0006 y 0007. La última conserva la procedencia declarada por M1 sin cambiar
+   los textos ya publicados. Ambos usan `PRAGMA user_version`. El CLI aplica migraciones M3
    pendientes sobre una base de plataforma existente, sin alterar las
    migraciones 0001 a 0004 ni aceptar versiones desconocidas.
 6. **Unidad durable.** Cada origen confirma pronóstico, estado, causa si

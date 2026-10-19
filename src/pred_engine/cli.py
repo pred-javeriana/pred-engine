@@ -42,6 +42,7 @@ from pred_engine.ingesta.salida import OutputHandoffError
 from pred_engine.ingesta.sonda import SemanticAlignmentError, probe_headers
 
 if TYPE_CHECKING:
+    from pred_engine.forecasting.evaluaciones.veredictos import PoliticaSeleccion
     from pred_engine.pipeline import Pipeline, PipelineInput, PipelineResult
 
 _logger = get_logger(__name__)
@@ -197,6 +198,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    for entrada in (ingest, classify):
+        entrada.add_argument("--datos-sinteticos", action="store_true")
     verify = sub.add_parser(
         "verify",
         help="Releer un Parquet 1.4 y validar el contrato (sin LLM)",
@@ -233,10 +236,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Base de plataforma existente (PRED_DB_PATH o {data-root}/pred.db)",
     )
-    run.add_argument(
+    procedencia = run.add_mutually_exclusive_group()
+    procedencia.add_argument(
         "--datos-sinteticos",
         action="store_true",
         help="Marca datos sinteticos o aumentados; --seed-csv lo activa siempre",
+    )
+    procedencia.add_argument(
+        "--datos-reales",
+        action="store_true",
+        help="Declara origen real para un Parquet externo sin procedencia M1",
     )
     run.add_argument(
         "--dm-min-origins",
@@ -417,6 +426,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             data_root=args.data_root,
             timeout=args.timeout,
             on_conflict="keep_both" if args.confirm_overwrite else "reject",
+            datos_sinteticos=args.datos_sinteticos,
         )
         if salida.error is not None:
             raise salida.error
@@ -493,6 +503,7 @@ def _cmd_classify(args: argparse.Namespace) -> int:
                 args.csv,
                 data_root=args.data_root,
                 on_conflict="keep_both" if args.confirm_overwrite else "reject",
+                datos_sinteticos=args.datos_sinteticos,
             )
             informe = salida.path
             if salida.error is not None:
@@ -628,14 +639,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
         or args.data_root / "pred.db"
     )
     try:
+        from pred_engine.forecasting.evaluaciones.veredictos import POLITICA_INICIAL
+
+        politica = replace(POLITICA_INICIAL, n_min_dm=args.dm_min_origins)
+        if args.seed_csv is not None and args.datos_reales:
+            raise ValueError("M0 genera datos sinteticos; no admite --datos-reales")
         with abrir_base_plataforma(ruta) as conn:
-            return _cmd_run_con_base(args, conn)
+            return _cmd_run_con_base(args, conn, politica)
     except (BasePlataformaError, sqlite3.DatabaseError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
 
-def _cmd_run_con_base(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
+def _cmd_run_con_base(
+    args: argparse.Namespace, conn: sqlite3.Connection, politica: PoliticaSeleccion
+) -> int:
     from pred_engine.comun.ejecucion_paralela import (
         ESQUEMA_PROGRESO,
         emitir_evento,
@@ -643,7 +661,9 @@ def _cmd_run_con_base(args: argparse.Namespace, conn: sqlite3.Connection) -> int
     )
     from pred_engine.comun.reserva import RESERVE_FRACTION
     from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
-    from pred_engine.forecasting.evaluaciones.veredictos import POLITICA_INICIAL
+    from pred_engine.forecasting.persistencia_evidencia.referencias import (
+        buscar_ingesta,
+    )
     from pred_engine.optimizacion.router import PredictorFamily
     from pred_engine.pipeline import (
         EvaluationSettings,
@@ -653,6 +673,7 @@ def _cmd_run_con_base(args: argparse.Namespace, conn: sqlite3.Connection) -> int
     from pred_engine.pipeline_setup import build_pipeline
     from pred_engine.run_artifacts import (
         code_fingerprint,
+        fijar_identidad,
         library_versions,
         run_identifier,
         sha256_file,
@@ -687,7 +708,30 @@ def _cmd_run_con_base(args: argparse.Namespace, conn: sqlite3.Connection) -> int
             "path": str(source.resolve()),
             "sha256": sha256_file(source),
         }
+        es_sintetico = args.datos_sinteticos or args.seed_csv is not None
+        if args.parquet is not None:
+            previa = buscar_ingesta(
+                conn, source, Path(args.data_root), inputs["source"]["sha256"]
+            )
+            declarada = (
+                True
+                if args.datos_sinteticos
+                else (False if args.datos_reales else None)
+            )
+            conocida = previa[1] if previa else None
+            if declarada is not None and conocida is not None and declarada != conocida:
+                raise ValueError(
+                    "el origen real o sintetico de una ingesta no puede cambiar"
+                )
+            origen = conocida if declarada is None else declarada
+            if origen is None:
+                raise ValueError(
+                    "Parquet sin procedencia M1: declare "
+                    "--datos-sinteticos o --datos-reales"
+                )
+            es_sintetico = origen
         settings = {name: getattr(args, name) for name in _RUN_SETTINGS} | {
+            "datos_sinteticos": es_sintetico,
             "reserve_fraction": RESERVE_FRACTION,
             "pred_engine": library_versions().get("pred-engine", "desconocida"),
             "code": code_fingerprint(),
@@ -695,19 +739,7 @@ def _cmd_run_con_base(args: argparse.Namespace, conn: sqlite3.Connection) -> int
         run_id = args.run_id or run_identifier(inputs["source"]["sha256"], settings)
         runs_dir = args.runs_dir or Path(args.data_root) / "runs"
         run_dir = Path(runs_dir) / run_id
-        resumen_previo = run_dir / "corrida.json"
-        if resumen_previo.exists():
-            previo = json.loads(resumen_previo.read_text())
-            opciones_previas = {
-                k: v for k, v in previo["settings"].items() if k != "workers"
-            }
-            if (
-                opciones_previas != settings
-                or previo["inputs"]["source"]["sha256"] != inputs["source"]["sha256"]
-            ):
-                raise ValueError(
-                    "run_id incompatible con la entrada o configuracion previa"
-                )
+        fijar_identidad(run_dir, inputs["source"]["sha256"], settings)
         progress_path = run_dir / "progreso.jsonl"
         provider = _build_provider(args)[2] if args.provider is not None else None
         pipeline = build_pipeline(
@@ -730,8 +762,9 @@ def _cmd_run_con_base(args: argparse.Namespace, conn: sqlite3.Connection) -> int
                 run_dir,
                 run_id_m2=run_id,
                 codigo_version=settings["code"],
-                datos_sinteticos=args.datos_sinteticos or args.seed_csv is not None,
-                politica=replace(POLITICA_INICIAL, n_min_dm=args.dm_min_origins),
+                datos_sinteticos=es_sintetico,
+                data_root=args.data_root,
+                politica=politica,
                 configuracion_m2=settings,
             ),
         )
@@ -742,6 +775,7 @@ def _cmd_run_con_base(args: argparse.Namespace, conn: sqlite3.Connection) -> int
             provider=provider,
             timeout=args.timeout,
             on_conflict="keep_both" if args.confirm_overwrite else "reject",
+            datos_sinteticos=es_sintetico,
         )
         sampler = (
             ResourceSampler(run_dir / "recursos.jsonl", args.telemetry_interval)
