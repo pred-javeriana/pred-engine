@@ -129,9 +129,10 @@ def test_parquet_relativo_reusa_csv_y_ejecucion_importados(tmp_path):
         (str(parquet.relative_to(request.data_root)),),
     )
     conn.execute("DELETE FROM m3_ingestas")
+    # La ejecucion de la plataforma declara la semilla que usa el pipeline.
     conn.execute(
         "INSERT INTO ejecuciones (ingesta_id, configuracion_id, seed, estado, run_id) "
-        "VALUES (1,1,0,'pendiente','worker')"
+        "VALUES (1,1,17,'pendiente','worker')"
     )
     conn.commit()
     p.validator = ControladorEvaluacion(

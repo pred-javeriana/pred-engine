@@ -14,8 +14,10 @@ from pred_engine.forecasting.persistencia_evidencia.repositorio import _transacc
 if TYPE_CHECKING:
     from pred_engine.pipeline import IngestionArtifact
 
-# Ajustes que cambian resultados, comunes a la plataforma y al CLI. Los ajustes
-# de ejecucion (workers) y los sobres propios de cada representacion no cuentan.
+# Ajustes que cambian resultados y que toda ejecucion declara, en la plataforma
+# y en el motor. Los ajustes de ejecucion (workers) y los sobres propios de cada
+# representacion no cuentan. Una configuracion antigua de la plataforma sin
+# familias ni ensayos uso los valores por omision del CLI.
 AJUSTES_RESULTADO = (
     "families",
     "trials",
@@ -25,10 +27,10 @@ AJUSTES_RESULTADO = (
     "seasonality",
     "metric",
     "seed",
-    "provider",
-    "model",
-    "dm_min_origins",
 )
+_POR_OMISION = {"families": ["classical", "ml", "dl"], "trials": None}
+# Opciones que solo el CLI registra; se comparan cuando ambas partes las tienen.
+AJUSTES_OPCIONALES = ("provider", "model", "dm_min_origins")
 
 
 def origen_registrado(conn: sqlite3.Connection, sha: str) -> bool | None:
@@ -76,6 +78,8 @@ def buscar_ingesta(
     if len(candidatas) > 1:
         raise ValueError("la ruta Parquet corresponde a varias ingestas sin huella M1")
     sha = next(iter(candidatas), None)
+    if sha is not None:
+        _verificar_contenido(conn, sha, data_root, ingesta_ref_m1, destino)
     conocida = origen_registrado(conn, sha) if sha is not None else None
     if sha is not None and conocida is not None:
         return sha, conocida
@@ -125,11 +129,49 @@ def origen_conocido(
 
 
 def _ajustes(parametros: Mapping[str, Any]) -> dict[str, Any]:
+    completos = {**_POR_OMISION, **parametros}
     return {
-        k: json.loads(json.dumps(parametros[k]))
-        for k in AJUSTES_RESULTADO
-        if k in parametros
+        k: json.loads(json.dumps(completos[k]))
+        for k in (*AJUSTES_RESULTADO, *AJUSTES_OPCIONALES)
+        if k in completos
     }
+
+
+def _ajustes_distintos(
+    guardados: Mapping[str, Any], nuevos: Mapping[str, Any]
+) -> list[str]:
+    """Un ajuste obligatorio ausente en una de las partes tambien es distinto."""
+    a, b = _ajustes(guardados), _ajustes(nuevos)
+    comunes = (k for k in AJUSTES_OPCIONALES if k in a and k in b)
+    return sorted(
+        k
+        for k in (*AJUSTES_RESULTADO, *comunes)
+        if k not in a or k not in b or a[k] != b[k]
+    )
+
+
+def _verificar_contenido(
+    conn: sqlite3.Connection, sha: str, data_root: Path, ingesta_ref_m1: str, ruta: Path
+) -> None:
+    """Una ruta registrada solo identifica la ingesta si conserva su contenido."""
+    from pred_engine.ingesta.informe import IngestReportFile, report_path
+
+    huellas = {
+        r[0]
+        for r in conn.execute(
+            "SELECT ingesta_ref_m1 FROM m3_ingestas WHERE ingesta_sha256 = ?", (sha,)
+        )
+    }
+    informe = report_path(data_root, sha)
+    if informe.exists():
+        report = IngestReportFile.model_validate_json(informe.read_text())
+        if report.published is not None and report.published.sha256 is not None:
+            huellas.add(report.published.sha256)
+    if huellas and ingesta_ref_m1 not in huellas:
+        raise ValueError(
+            f"el Parquet registrado en {ruta} cambio de contenido: la procedencia "
+            "de su ingesta ya no aplica; vuelva a clasificar el archivo"
+        )
 
 
 def asegurar_referencias(
@@ -156,7 +198,12 @@ def asegurar_referencias(
         data_root=data_root,
         ingesta_ref_m1=ingesta_ref_m1,
     )
-    origen = resolver_origen(conocida, datos_sinteticos)
+    # La entrada, M1 o la base y el validador deben coincidir cuando declaran.
+    origen = resolver_origen(
+        resolver_origen(conocida, ingesta.datos_sinteticos), datos_sinteticos
+    )
+    if "seed" not in configuracion:
+        raise ValueError("la configuracion M2 no declara la semilla que uso")
     with _transaccion(conn):
         conn.execute(
             "INSERT INTO ingestas (sha256, nombre_archivo, filas, skus, ruta_parquet) "
@@ -173,19 +220,16 @@ def asegurar_referencias(
             "SELECT id FROM ingestas WHERE sha256 = ?", (sha,)
         ).fetchone()[0]
         existente = conn.execute(
-            "SELECT e.id, e.ingesta_id, c.parametros FROM ejecuciones e "
+            "SELECT e.id, e.ingesta_id, c.parametros, e.seed FROM ejecuciones e "
             "JOIN configuraciones c ON c.id = e.configuracion_id WHERE e.run_id = ?",
             (run_id_m2,),
         ).fetchone()
         if existente is not None:
             if existente[1] != ingesta_id:
                 raise ValueError("run_id de M2 pertenece a otra ingesta de plataforma")
-            guardados, nuevos = (
-                _ajustes(json.loads(existente[2])),
-                _ajustes(configuracion),
-            )
-            distintos = sorted(
-                k for k in guardados.keys() & nuevos.keys() if guardados[k] != nuevos[k]
+            # La semilla de la ejecucion es la de su columna, comun a ambos sistemas.
+            distintos = _ajustes_distintos(
+                {**json.loads(existente[2]), "seed": existente[3]}, configuracion
             )
             if distintos:
                 raise ValueError(
@@ -205,7 +249,7 @@ def asegurar_referencias(
             (
                 ingesta_id,
                 configuracion_id,
-                configuracion.get("seed", 0),
+                configuracion["seed"],
                 run_id_m2,
                 str(directorio),
             ),

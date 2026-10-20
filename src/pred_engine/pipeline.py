@@ -143,6 +143,8 @@ class IngestionArtifact:
     # ya clasificado, que no las lleva.
     topology: tuple[TopologyMetrics, ...] = ()
     source_sha256: str | None = None
+    # Origen declarado en la entrada (CSV resuelto con su informe M1, o Parquet).
+    datos_sinteticos: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +193,8 @@ class FittingArtifact:
     exclusions: tuple[SkuExclusion, ...] = ()
     # Politica con la que se enruto: dice que familias corresponden a cada clase.
     policy: RoutingPolicy | None = None
+    # Ajustes de M2 que cambian resultados (familias, ensayos, semilla).
+    m2_settings: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -489,10 +493,14 @@ class Pipeline:
         validator: RetrospectiveValidator | None = None,
         workers: int = 1,
         progress: str | Path | None = None,
+        m2_settings: Mapping[str, Any] | None = None,
     ) -> None:
         if type(workers) is not int or workers < 1:
             raise ValueError("workers must be a positive integer")
         self.router = router
+        # Result-changing M2 settings the router was built with; the native
+        # validator records them, so a composition must declare them.
+        self.m2_settings = dict(m2_settings or {})
         self.settings = evaluation
         self.factories = dict(factories)
         self.validator = validator
@@ -538,7 +546,11 @@ class Pipeline:
         """L1: reuse current ingestion and consume its published 1.4 contract."""
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
-            return IngestionArtifact(path, run_verify_parquet(path))
+            return IngestionArtifact(
+                path,
+                run_verify_parquet(path),
+                datos_sinteticos=request.datos_sinteticos,
+            )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
             data_root=request.data_root,
@@ -556,6 +568,7 @@ class Pipeline:
             run_verify_parquet(path),
             topology=tuple(salida.result.topology.metrics),
             source_sha256=salida.report.ingest_id,
+            datos_sinteticos=salida.report.source_file.datos_sinteticos,
         )
 
     def _exclusion_cause(
@@ -638,6 +651,7 @@ class Pipeline:
             units,
             tuple(exclusions),
             getattr(self.router, "policy", None),
+            dict(self.m2_settings),
         )
 
     def evaluate(self, fitting: FittingArtifact) -> EvaluationArtifact:

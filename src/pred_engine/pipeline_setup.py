@@ -87,7 +87,8 @@ def build_pipeline(
 
     With n_trials=None the original strategy budgets are preserved. Evaluation
     settings also define HPO windows. For custom search spaces, construct a
-    SelectionRouter with existing strategies and pass it to Pipeline.
+    SelectionRouter with existing strategies and pass it to Pipeline, with
+    ``m2_settings`` naming its families, trials and seed for the native validator.
 
     Con ``hpo_root`` y ``session`` cada estudio de HPO persiste su manifiesto y
     sus trials (2.9): repetir la corrida con la misma sesion retoma los estudios
@@ -156,4 +157,5 @@ def build_pipeline(
         validator=validator,
         workers=workers,
         progress=progress,
+        m2_settings={"families": list(families), "trials": n_trials, "seed": seed},
     )

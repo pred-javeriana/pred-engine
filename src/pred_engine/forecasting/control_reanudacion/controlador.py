@@ -143,9 +143,11 @@ class ControladorEvaluacion:
             ingesta_ref_m1=ingesta_ref_m1,
             run_id_m2=self.run_id_m2,
             directorio=self.directorio,
-            # Los ajustes evaluados son los que cambian resultados en la base.
+            # Los ajustes efectivos de M2 y de la evaluacion son los que cambian
+            # resultados; prevalecen sobre la configuracion que declara el llamador.
             configuracion={
                 **self.configuracion_m2,
+                **evaluation.fitting.m2_settings,
                 "min_train": ajustes.min_train,
                 "horizon": ajustes.horizon,
                 "step": ajustes.step,

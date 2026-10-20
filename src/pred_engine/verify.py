@@ -84,6 +84,7 @@ def verification_pipeline() -> Pipeline:
         SelectionRouter(ConfiguredTopologyPolicy(("classical",)), registry),
         settings,
         factories={"classical": fabrica_sarima},
+        m2_settings={"families": ["classical"], "trials": 1, "seed": 17},
     )
 
 

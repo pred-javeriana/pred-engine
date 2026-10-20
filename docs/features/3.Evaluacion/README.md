@@ -33,11 +33,16 @@ real por omisión. El origen desconocido produce resultados exploratorios sin
 valores p; no habilita VALIDADO. Se reutiliza una declaración anterior por
 huella CSV o Parquet y un conflicto se rechaza antes de M1/HPO.
 `ControladorEvaluacion` aplica la misma regla en la biblioteca: resuelve el
-origen registrado en la base o en el informe M1 con la declaración del
-llamador y rechaza un conflicto antes de registrar la ejecución. Un `run_id`
-de M2 ya registrado en la base solo se reutiliza con los mismos ajustes que
-cambian resultados (familias, ensayos, `min_train`, horizonte, paso,
-estacionalidad, métrica, semilla); `workers` puede cambiar.
+origen registrado en la base o en el informe M1, el origen declarado en
+`PipelineInput` y la declaración del validador, y rechaza un conflicto antes
+de registrar la ejecución. Una ruta Parquet registrada cuyo contenido cambió
+ya no identifica su ingesta: se rechaza en lugar de heredar su procedencia.
+La ejecución central guarda los ajustes efectivos de M2 que `build_pipeline`
+usó (familias, ensayos, semilla); un `Pipeline` compuesto a mano los declara
+con `m2_settings`. Un `run_id` de M2 ya registrado en la base solo se
+reutiliza con los mismos ajustes que cambian resultados (familias, ensayos,
+`min_train`, horizonte, paso, estacionalidad, métrica, semilla); `workers`
+puede cambiar.
 
 - Salida 0: etapas completas y evidencia PUBLICADA.
 - Salida 8: publicación completa con fallos técnicos aislados en M2 o M3.
