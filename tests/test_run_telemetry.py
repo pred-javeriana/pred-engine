@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -62,20 +64,22 @@ def test_registra_cpu_y_memoria_del_proceso_principal_y_de_cada_worker(tmp_path)
 
 
 def test_no_registra_un_worker_zombi_que_ya_no_tiene_memoria(tmp_path):
-    pid = os.fork()
-    if pid == 0:
-        os._exit(0)
+    ruta = tmp_path / "recursos.jsonl"
+    hijo = subprocess.Popen([sys.executable, "-c", "pass"])
     try:
-        # El hijo termino y nadie lo ha recogido: es zombi con rss 0.
-        deadline = time.monotonic() + 5
-        while psutil.Process(pid).status() != psutil.STATUS_ZOMBIE:
-            assert time.monotonic() < deadline
+        # El hijo termino y nadie lo ha recogido (sin poll): es zombi con rss 0.
+        limite = time.monotonic() + 10
+        while psutil.Process(hijo.pid).status() != psutil.STATUS_ZOMBIE:
+            assert time.monotonic() < limite
             time.sleep(0.01)
-        sampler = ResourceSampler(tmp_path / "recursos.jsonl")
-        filas = sampler._filas()
+        with ResourceSampler(ruta, interval=0.05):
+            time.sleep(0.2)
     finally:
-        os.waitpid(pid, 0)
-    assert pid not in {f["pid"] for f in filas}
+        hijo.wait()
+
+    filas = _filas(ruta)
+    assert any(f["pid"] == os.getpid() and f["mem_mb"] > 0 for f in filas)
+    assert hijo.pid not in {f["pid"] for f in filas}
     assert all(f["mem_mb"] > 0 for f in filas)
 
 
