@@ -28,6 +28,7 @@ from pred_engine.forecasting.generador_pronosticos.contratos import (
     VentanaReserva,
 )
 from pred_engine.forecasting.generador_pronosticos.particion import (
+    fechas_observadas,
     separar_serie,
     ventanas_observables,
     ventanas_reserva,
@@ -59,9 +60,9 @@ def generar_pronosticos(
     del modelo. Un reinicio pasa las unidades durables en ``confirmadas``.
     """
     todas = ventanas_reserva(corte, configuracion.horizonte)
-    valores = np.asarray(pd.to_numeric(serie, errors="coerce"), dtype=float)
-    fechas = pd.Index(np.asarray(serie.index)[np.isfinite(valores) & (valores >= 0)])
-    ventanas = ventanas_observables(corte, configuracion.horizonte, fechas)
+    ventanas = ventanas_observables(
+        corte, configuracion.horizonte, fechas_observadas(serie)
+    )
     origenes = {v.origen for v in ventanas}
     exclusiones = tuple(v for v in todas if v.origen not in origenes)
     restauradas = _restaurar(candidato, configuracion, ventanas, confirmadas)

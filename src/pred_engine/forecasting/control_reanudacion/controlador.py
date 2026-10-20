@@ -44,7 +44,10 @@ from pred_engine.forecasting.generador_pronosticos import (
     separar_serie,
     ventanas_reserva,
 )
-from pred_engine.forecasting.generador_pronosticos.particion import ventanas_observables
+from pred_engine.forecasting.generador_pronosticos.particion import (
+    fechas_observadas,
+    ventanas_observables,
+)
 from pred_engine.forecasting.persistencia_evidencia import (
     EvidenciaInconsistenteError,
     IdentidadCorrida,
@@ -154,6 +157,7 @@ class ControladorEvaluacion:
             ejecucion_id,
             hay_fallos=bool(resultado.audit_bundle["n_fallos"])
             or any(u.failed for u in (*evaluation.fitting.units, *evaluation.units)),
+            conservar_completada=resultado.audit_bundle["publicada_previamente"],
         )
         return resultado
 
@@ -164,7 +168,6 @@ class ControladorEvaluacion:
         ejecucion_id: int,
         ingesta_ref_m1: str,
     ) -> ValidationArtifact:
-        from pred_engine.pipeline import SkuVerdict, ValidationArtifact
         from pred_engine.run_artifacts import (
             library_versions,
             procedencia_candidato,
@@ -243,6 +246,18 @@ class ControladorEvaluacion:
                 raise LoteRechazadoError(
                     "contexto_incompatible", "particion durable incompatible"
                 )
+            # Misma entrada y protocolo: una publicacion congelada se reutiliza
+            # aunque un reintento de M2 recalcule otro conjunto de candidatos.
+            if estado_corrida(self.conn, identidad.run_id) == "PUBLICADA":
+                assert guardado is not None
+                return self._artefacto(
+                    identidad.run_id,
+                    config,
+                    n_previstas=guardado["n_unidades_previstas"],
+                    exclusiones=guardado["procedencia"]["exclusiones_m3"],
+                    exclusiones_datos=guardado["procedencia"]["exclusiones_datos"],
+                    publicada_previamente=True,
+                )
             existente = json.loads(contenido)
             if existente.get("candidatos") != json.loads(nuevo)["candidatos"]:
                 raise LoteRechazadoError(
@@ -293,10 +308,10 @@ class ControladorEvaluacion:
             except SerieNoElegibleError as error:
                 exclusiones[sku] = {"codigo": error.codigo, "causa": str(error)}
         elegibles = set(skus) - set(exclusiones)
-        calendarios = {
-            sku: pd.DatetimeIndex(panel.loc[panel["sku_id"] == sku, "timestamp"])
-            for sku in skus
-        }
+        series_sku = {sku: _serie(panel, sku) for sku in skus}
+        # El mismo calendario finito que usa el generador: un valor no finito
+        # es contexto faltante, no una falla del modelo ni de la linea base.
+        calendarios = {sku: fechas_observadas(series_sku[sku]) for sku in skus}
         planes = {
             sku: ventanas_observables(corte, config.horizonte, calendarios[sku])
             if sku in elegibles
@@ -364,11 +379,7 @@ class ControladorEvaluacion:
             fallos_sku = Counter(f.sku for f in handoff.fallos)
             for sku in skus:
                 plan_sku = planes[sku]
-                grupo = panel.loc[panel["sku_id"] == sku].sort_values("timestamp")
-                serie = pd.Series(
-                    grupo["demand_qty"].to_numpy(),
-                    index=pd.DatetimeIndex(grupo["timestamp"]),
-                )
+                serie = series_sku[sku]
                 historia, reserva = separar_reserva(serie, corte)
                 series = []
                 for candidato in (c for c in handoff.candidatos if c.sku == sku):
@@ -464,6 +475,27 @@ class ControladorEvaluacion:
                 politica=self.politica,
             )
             guardar_evaluacion(self.conn, run_id, evaluaciones, resultado)
+        return self._artefacto(
+            run_id,
+            config,
+            n_previstas=n_previstas,
+            exclusiones=exclusiones,
+            exclusiones_datos=exclusiones_datos,
+            publicada_previamente=False,
+        )
+
+    def _artefacto(
+        self,
+        run_id: str,
+        config: ConfiguracionPronosticos,
+        *,
+        n_previstas: int,
+        exclusiones: Mapping[str, Any],
+        exclusiones_datos: Mapping[str, Any],
+        publicada_previamente: bool,
+    ) -> ValidationArtifact:
+        from pred_engine.pipeline import SkuVerdict, ValidationArtifact
+
         archivos = publicar(self.conn, run_id, self.directorio / "m3")
         filas = veredictos_publicados(self.conn, run_id)
         _logger.info("Evaluacion publicada run_id=%s skus=%d", run_id, len(filas))
@@ -481,6 +513,7 @@ class ControladorEvaluacion:
                 "n_fallos": n_fallos,
                 "exclusiones": exclusiones,
                 "exclusiones_datos": exclusiones_datos,
+                "publicada_previamente": publicada_previamente,
                 "archivos": {tabla: str(path) for tabla, path in archivos.items()},
                 "csv": {
                     tabla: str(path.with_suffix(".csv"))
@@ -488,3 +521,10 @@ class ControladorEvaluacion:
                 },
             },
         )
+
+
+def _serie(panel: pd.DataFrame, sku: str) -> pd.Series:
+    grupo = panel.loc[panel["sku_id"] == sku].sort_values("timestamp")
+    return pd.Series(
+        grupo["demand_qty"].to_numpy(), index=pd.DatetimeIndex(grupo["timestamp"])
+    )

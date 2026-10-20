@@ -14,7 +14,7 @@ esquema_m3() -> str
 ```
 
 `abrir_base_plataforma` usa modo `rw`, nunca crea un archivo ausente y aplica
-solo las migraciones M3 pendientes. La versión vigente es 8, con las migraciones 0005 a 0008. Se exige una base
+solo las migraciones M3 pendientes. La versión vigente es 9, con las migraciones 0005 a 0009. Se exige una base
 de plataforma de versión 4 o posterior conocida. Base ausente, transacción
 ajena o versión desconocida producen `BasePlataformaError` sin crear otra base.
 La migración y el cambio de versión son atómicos; una repetición no los duplica.

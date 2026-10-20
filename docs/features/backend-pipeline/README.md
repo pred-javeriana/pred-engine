@@ -39,13 +39,16 @@ with abrir_base_plataforma("data/pred.db") as conn:
     validator = ControladorEvaluacion(
         conn, "data/runs/sales", run_id_m2="sales",
         codigo_version=code_fingerprint(), datos_sinteticos=False,
+        data_root="data",
     )
     pipeline = build_pipeline(
         EvaluationSettings(min_train=60, horizon=7, step=28),
         families=("classical", "ml"), n_trials=10, workers=4,
         hpo_root="data/runs/sales/hpo", session="sales", validator=validator,
     )
-    result = pipeline.run(PipelineInput(csv_path="sales.csv", data_root="data"))
+    result = pipeline.run(
+        PipelineInput(csv_path="sales.csv", data_root="data", datos_sinteticos=False)
+    )
 ```
 
 The platform migrator creates the database first. The engine opens it in

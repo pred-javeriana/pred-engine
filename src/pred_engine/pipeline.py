@@ -682,18 +682,25 @@ class Pipeline:
         return EvaluationArtifact(fitting, self.settings, evaluated, units)
 
     def validate(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
-        """L4: native covers handoff SKUs; legacy covers evaluated SKUs."""
+        """L4: native covers handoff SKUs; legacy covers evaluated SKUs.
+
+        A reused native publication covers its frozen handoff, not the SKUs a
+        later M2 retry happened to fit.
+        """
         if self.validator is None:
             raise StageUnavailableError(PRINCIPAL_STAGES[3].capability)
         result = self.validator(evaluation)
         if not isinstance(result, ValidationArtifact):
             raise TypeError("L4 must return ValidationArtifact")
+        actual = [v.sku_id for v in result.verdicts]
+        nativo = getattr(self.validator, "nativo", False)
         expected = (
-            {c.selection.sku_id for c in evaluation.fitting.candidates}
-            if getattr(self.validator, "nativo", False)
+            set(actual)
+            if nativo and result.audit_bundle.get("publicada_previamente")
+            else {c.selection.sku_id for c in evaluation.fitting.candidates}
+            if nativo
             else {c.fitted.selection.sku_id for c in evaluation.candidates}
         )
-        actual = [v.sku_id for v in result.verdicts]
         if not expected or set(actual) != expected or len(actual) != len(expected):
             raise ValueError("L4 must return exactly one verdict for every SKU")
         if not result.audit_bundle:

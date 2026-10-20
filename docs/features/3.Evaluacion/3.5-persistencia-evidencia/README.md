@@ -14,9 +14,11 @@ El motor conserva los textos canónicos:
   procedencia y resúmenes de cartera.
 - `esquema_m3_0003.sql`: procedencia M1 por CSV y huella del Parquet.
 - `esquema_m3_0004.sql`: distingue ausencia de declaración de datos reales.
+- `esquema_m3_0005.sql`: la vista `evidencia_publicada` expone
+  `origen_declarado` junto a `datos_sinteticos`.
 
-La plataforma incorpora copias exactas como migraciones 0005 a 0008.
-Las versiones anteriores se conservan sin cambios. La versión vigente es 8.
+La plataforma incorpora copias exactas como migraciones 0005 a 0009.
+Las versiones anteriores se conservan sin cambios. La versión vigente es 9.
 `aplicar_migraciones_m3` usa el mismo `PRAGMA user_version`. El CLI aplica las
 pendientes sobre una base existente con las migraciones previas de plataforma.
 No modifica las versiones 0001 a 0004 y rechaza una versión desconocida.

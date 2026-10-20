@@ -34,8 +34,9 @@ para incorporar observaciones reservadas y para emitir evidencia estadística.
    una base alternativa cuando la de plataforma falta.
 5. **Migraciones compartidas.** El motor conserva el texto canónico de los
    esquemas M3. La plataforma incorpora copias exactas como migraciones 0005
-   a 0008. La 0007 conserva la procedencia M1 y la 0008 distingue el origen
-   desconocido de una declaración real, sin cambiar los textos ya publicados. Ambos usan `PRAGMA user_version`. El CLI aplica migraciones M3
+   a 0009. La 0007 conserva la procedencia M1, la 0008 distingue el origen
+   desconocido de una declaración real y la 0009 expone esa marca en la vista
+   publicada, sin cambiar los textos ya publicados. Ambos usan `PRAGMA user_version`. El CLI aplica migraciones M3
    pendientes sobre una base de plataforma existente, sin alterar las
    migraciones 0001 a 0004 ni aceptar versiones desconocidas.
 6. **Unidad durable.** Cada origen confirma pronóstico, estado, causa si

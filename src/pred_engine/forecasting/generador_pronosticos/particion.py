@@ -48,6 +48,14 @@ def ventanas_reserva(corte: ReserveCut, horizonte: int) -> tuple[VentanaReserva,
     )
 
 
+def fechas_observadas(serie: pd.Series) -> pd.DatetimeIndex:
+    """Calendario observado: solo fechas con demanda finita y no negativa."""
+    valores = np.asarray(pd.to_numeric(serie, errors="coerce"), dtype=float)
+    return pd.DatetimeIndex(
+        np.asarray(serie.index)[np.isfinite(valores) & (valores >= 0)]
+    )
+
+
 def ventanas_observables(
     corte: ReserveCut, horizonte: int, fechas: pd.Index
 ) -> tuple[VentanaReserva, ...]:

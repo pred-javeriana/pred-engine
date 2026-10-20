@@ -156,8 +156,13 @@ def finalizar_referencia(
     *,
     hay_fallos: bool = False,
     error: Exception | None = None,
+    conservar_completada: bool = False,
 ) -> None:
-    """Registra el resultado L4 sin borrar su error ni confundir M2 con la corrida."""
+    """Registra el resultado L4 sin borrar su error ni confundir M2 con la corrida.
+
+    ``conservar_completada`` deja intacta una ejecucion ya completada: reutilizar
+    una publicacion congelada no reescribe el estado que describe esa corrida.
+    """
     from pred_engine.ingesta.informe import ErrorDetail, error_code
 
     estado = (
@@ -177,6 +182,7 @@ def finalizar_referencia(
     )
     with _transaccion(conn):
         conn.execute(
-            "UPDATE ejecuciones SET estado = ?, error_json = ? WHERE id = ?",
-            (estado, detalle, ejecucion_id),
+            "UPDATE ejecuciones SET estado = ?, error_json = ? WHERE id = ? AND NOT "
+            "(? AND estado IN ('completada', 'completada_con_fallos'))",
+            (estado, detalle, ejecucion_id, conservar_completada),
         )

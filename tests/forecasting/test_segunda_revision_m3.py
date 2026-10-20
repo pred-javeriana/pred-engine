@@ -184,10 +184,16 @@ def test_receta_distinta_no_reescribe_evidencia_publicada(tmp_path):
             "m3_protocolos",
         )
     }
+    execution = conn.execute("SELECT estado, error_json FROM ejecuciones").fetchall()
     different = replace(evaluation, fitting=replace(evaluation.fitting, candidates=()))
-    with pytest.raises(LoteRechazadoError, match="conjunto M2"):
-        pipeline.validate(different)
+    reused = pipeline.validate(different)
+    assert reused.audit_bundle["publicada_previamente"] is True
+    assert [v.sku_id for v in reused.verdicts] == ["proof-sku"]
     assert {t: conn.execute(f"SELECT * FROM {t}").fetchall() for t in before} == before
+    assert (
+        conn.execute("SELECT estado, error_json FROM ejecuciones").fetchall()
+        == execution
+    )
     conn.close()
 
 
