@@ -110,17 +110,15 @@ class ControladorEvaluacion:
         *,
         run_id_m2: str,
         codigo_version: str,
-        datos_sinteticos: bool,
-        data_root: str | Path | None = None,
+        datos_sinteticos: bool | None,
+        data_root: str | Path,
         politica: PoliticaSeleccion = POLITICA_INICIAL,
         configuracion_m2: Mapping[str, Any] | None = None,
         fabricas: Mapping[str, FabricaAdaptador] = FABRICAS,
     ) -> None:
         self.conn = conn
         self.directorio = Path(directorio)
-        self.data_root = (
-            Path(data_root) if data_root is not None else self.directorio.parent
-        )
+        self.data_root = Path(data_root)
         self.run_id_m2 = run_id_m2
         self.codigo_version = codigo_version
         self.datos_sinteticos = datos_sinteticos
@@ -129,31 +127,53 @@ class ControladorEvaluacion:
         self.fabricas = fabricas
 
     def __call__(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
+        from pred_engine.run_artifacts import sha256_file
+
+        ingesta = evaluation.fitting.ingestion
+        ingesta_ref_m1 = sha256_file(ingesta.parquet_path)
+        # La posesion pertenece a esta llamada: una colision rechazada no puede
+        # finalizar una ejecucion ajena ni heredar la posesion de un intento previo.
+        ingesta_sha, ejecucion_id = asegurar_referencias(
+            self.conn,
+            ingesta,
+            ingesta_ref_m1=ingesta_ref_m1,
+            run_id_m2=self.run_id_m2,
+            directorio=self.directorio,
+            configuracion=self.configuracion_m2,
+            data_root=self.data_root,
+        )
         try:
-            resultado = self._evaluar(evaluation)
+            resultado = self._evaluar(
+                evaluation, ingesta_sha, ejecucion_id, ingesta_ref_m1
+            )
         except Exception as error:
-            finalizar_referencia(self.conn, self.run_id_m2, error=error)
+            finalizar_referencia(self.conn, ejecucion_id, error=error)
             raise
         finalizar_referencia(
             self.conn,
-            self.run_id_m2,
+            ejecucion_id,
             hay_fallos=bool(resultado.audit_bundle["n_fallos"])
             or any(u.failed for u in (*evaluation.fitting.units, *evaluation.units)),
         )
         return resultado
 
-    def _evaluar(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
+    def _evaluar(
+        self,
+        evaluation: EvaluationArtifact,
+        ingesta_sha: str,
+        ejecucion_id: int,
+        ingesta_ref_m1: str,
+    ) -> ValidationArtifact:
         from pred_engine.pipeline import SkuVerdict, ValidationArtifact
         from pred_engine.run_artifacts import (
             library_versions,
             procedencia_candidato,
-            sha256_file,
         )
 
         fitting = evaluation.fitting
         panel, corte = fitting.ingestion.panel, fitting.reserve
         contexto = ContextoParticion(
-            ingesta_ref_m1=sha256_file(fitting.ingestion.parquet_path),
+            ingesta_ref_m1=ingesta_ref_m1,
             t_corte_reserva=corte.t_star.date(),
             fraccion_reserva=corte.fraction,
         )
@@ -198,15 +218,6 @@ class ControladorEvaluacion:
             t_corte_reserva=contexto.t_corte_reserva,
             version_politica=self.politica.version,
             version_metricas=VERSION_METRICAS,
-        )
-        ingesta_sha, ejecucion_id = asegurar_referencias(
-            self.conn,
-            fitting.ingestion,
-            ingesta_ref_m1=contexto.ingesta_ref_m1,
-            run_id_m2=self.run_id_m2,
-            directorio=self.directorio,
-            configuracion=self.configuracion_m2,
-            data_root=self.data_root,
         )
         apertura = datetime.now(UTC)
         guardado = protocolo_guardado(self.conn, identidad.run_id)

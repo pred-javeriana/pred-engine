@@ -67,12 +67,12 @@ from pred_engine.run_artifacts import code_fingerprint
 with abrir_base_plataforma("data/pred.db") as conn:
     validator = ControladorEvaluacion(
         conn, "data/runs/sales", run_id_m2="sales",
-        codigo_version=code_fingerprint(), datos_sinteticos=False,
+        codigo_version=code_fingerprint(), datos_sinteticos=False, data_root="data",
     )
     pipeline = build_pipeline(
         EvaluationSettings(min_train=40), n_trials=4, validator=validator,
     )
-    result = pipeline.run(PipelineInput(csv_path="sales.csv", data_root="data"))
+    result = pipeline.run(PipelineInput(csv_path="sales.csv", data_root="data", datos_sinteticos=False))
     assert result.complete
     assert result.validation.audit_bundle["estado"] == "PUBLICADA"
 ```

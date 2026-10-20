@@ -199,7 +199,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     for entrada in (ingest, classify):
-        entrada.add_argument("--datos-sinteticos", action="store_true")
+        origen = entrada.add_mutually_exclusive_group()
+        origen.add_argument(
+            "--datos-sinteticos",
+            dest="datos_sinteticos",
+            action="store_const",
+            const=True,
+            default=None,
+        )
+        origen.add_argument(
+            "--datos-reales", dest="datos_sinteticos", action="store_const", const=False
+        )
     verify = sub.add_parser(
         "verify",
         help="Releer un Parquet 1.4 y validar el contrato (sin LLM)",
@@ -659,11 +669,14 @@ def _cmd_run_con_base(
         emitir_evento,
         resumen_paralelismo,
     )
+    from pred_engine.comun.procedencia import resolver_origen
     from pred_engine.comun.reserva import RESERVE_FRACTION
     from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
     from pred_engine.forecasting.persistencia_evidencia.referencias import (
         buscar_ingesta,
+        origen_registrado,
     )
+    from pred_engine.ingesta.informe import origen_informe
     from pred_engine.optimizacion.router import PredictorFamily
     from pred_engine.pipeline import (
         EvaluationSettings,
@@ -708,28 +721,22 @@ def _cmd_run_con_base(
             "path": str(source.resolve()),
             "sha256": sha256_file(source),
         }
-        es_sintetico = args.datos_sinteticos or args.seed_csv is not None
+        declarada = (
+            True
+            if args.datos_sinteticos or args.seed_csv is not None
+            else (False if args.datos_reales else None)
+        )
         if args.parquet is not None:
             previa = buscar_ingesta(
                 conn, source, Path(args.data_root), inputs["source"]["sha256"]
             )
-            declarada = (
-                True
-                if args.datos_sinteticos
-                else (False if args.datos_reales else None)
-            )
             conocida = previa[1] if previa else None
-            if declarada is not None and conocida is not None and declarada != conocida:
-                raise ValueError(
-                    "el origen real o sintetico de una ingesta no puede cambiar"
-                )
-            origen = conocida if declarada is None else declarada
-            if origen is None:
-                raise ValueError(
-                    "Parquet sin procedencia M1: declare "
-                    "--datos-sinteticos o --datos-reales"
-                )
-            es_sintetico = origen
+        else:
+            conocida = resolver_origen(
+                origen_registrado(conn, inputs["source"]["sha256"]),
+                origen_informe(args.data_root, inputs["source"]["sha256"]),
+            )
+        es_sintetico = resolver_origen(conocida, declarada)
         settings = {name: getattr(args, name) for name in _RUN_SETTINGS} | {
             "datos_sinteticos": es_sintetico,
             "reserve_fraction": RESERVE_FRACTION,

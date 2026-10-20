@@ -74,7 +74,7 @@ _DTYPES = {"INTEGER": "Int64", "REAL": "Float64", "TEXT": "string"}
 
 
 def esquema_m3() -> str:
-    """DDL de las tablas `m3_*`; la plataforma lo aplica como su migracion 0002."""
+    """DDL inicial de las tablas `m3_*`, publicado como migracion 0005."""
     paquete = files("pred_engine.forecasting.persistencia_evidencia")
     return paquete.joinpath("esquema_m3.sql").read_text(encoding="utf-8")
 
@@ -85,7 +85,7 @@ def registrar_corrida(
     handoff: HandoffValidado | LoteRechazadoError,
     *,
     ingesta_sha256: str,
-    datos_sinteticos: bool,
+    datos_sinteticos: bool | None,
     run_id_m2: str | None = None,
 ) -> str:
     """Registra la corrida con el resultado de 3.2 y devuelve su `run_id`.
@@ -123,8 +123,9 @@ def registrar_corrida(
     with _transaccion(conn):
         origenes = conn.execute(
             "SELECT DISTINCT datos_sinteticos FROM m3_corridas "
-            "WHERE ingesta_sha256 = ?1 UNION "
-            "SELECT datos_sinteticos FROM m3_ingestas WHERE ingesta_sha256 = ?1",
+            "WHERE ingesta_sha256 = ?1 AND origen_declarado=1 UNION "
+            "SELECT datos_sinteticos FROM m3_ingestas "
+            "WHERE ingesta_sha256 = ?1 AND origen_declarado=1",
             (ingesta_sha256,),
         ).fetchall()
         if any(bool(f[0]) != datos_sinteticos for f in origenes):
@@ -133,27 +134,38 @@ def registrar_corrida(
             )
         conn.execute(
             "INSERT INTO m3_ingestas "
-            "(ingesta_sha256, ingesta_ref_m1, datos_sinteticos) "
-            "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-            (ingesta_sha256, identidad.ingesta_ref_m1, datos_sinteticos),
+            "(ingesta_sha256, ingesta_ref_m1, datos_sinteticos, origen_declarado) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (ingesta_sha256, ingesta_ref_m1) "
+            "DO UPDATE SET datos_sinteticos=excluded.datos_sinteticos, "
+            "origen_declarado=excluded.origen_declarado "
+            "WHERE m3_ingestas.origen_declarado=0",
+            (
+                ingesta_sha256,
+                identidad.ingesta_ref_m1,
+                bool(datos_sinteticos),
+                datos_sinteticos is not None,
+            ),
         )
         nueva = conn.execute(
             "INSERT INTO m3_corridas (run_id, ingesta_sha256, run_id_m2, identidad,"
-            " datos_sinteticos, estado, causa_rechazo) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " datos_sinteticos, estado, causa_rechazo, origen_declarado) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (run_id) DO NOTHING",
             (
                 run_id,
                 ingesta_sha256,
                 run_id_m2,
                 identidad.canonica(),
-                datos_sinteticos,
+                bool(datos_sinteticos),
                 estado,
                 causa,
+                datos_sinteticos is not None,
             ),
         ).rowcount
         if not nueva:
             previa = conn.execute(
-                "SELECT identidad, ingesta_sha256, run_id_m2, datos_sinteticos "
+                "SELECT identidad, ingesta_sha256, run_id_m2, datos_sinteticos, "
+                "origen_declarado "
                 "FROM m3_corridas WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
@@ -161,11 +173,18 @@ def registrar_corrida(
                 identidad.canonica(),
                 ingesta_sha256,
                 run_id_m2,
-                datos_sinteticos,
+                bool(datos_sinteticos),
+                datos_sinteticos is not None,
             ):
                 raise _inconsistente(
                     "referencias u origen de datos incompatibles con la corrida previa"
                 )
+        if not nueva and isinstance(handoff, LoteRechazadoError):
+            conn.execute(
+                "UPDATE m3_corridas SET estado='RECHAZADA', causa_rechazo=? "
+                "WHERE run_id=? AND estado!='PUBLICADA'",
+                (causa, run_id),
+            )
         if nueva:
             conn.executemany(
                 "INSERT INTO m3_skus (run_id, sku) VALUES (?, ?)",
@@ -362,8 +381,9 @@ def guardar_evaluacion(
         if estado == "SELECCIONADA":
             _logger.info("Evaluacion ya guardada run_id=%s; sin cambios", run_id)
             return
-        texto, datos_sinteticos = conn.execute(
-            "SELECT identidad, datos_sinteticos FROM m3_corridas WHERE run_id = ?",
+        texto, datos_sinteticos, origen_declarado = conn.execute(
+            "SELECT identidad, datos_sinteticos, origen_declarado "
+            "FROM m3_corridas WHERE run_id = ?",
             (run_id,),
         ).fetchone()
         identidad = json.loads(texto)
@@ -375,7 +395,9 @@ def guardar_evaluacion(
                 f"identidad {declaradas}"
             )
         # ADR-03-008: con datos sinteticos no hay VALIDADO ni Diebold-Mariano.
-        if resultado.datos_sinteticos != bool(datos_sinteticos):
+        if resultado.datos_sinteticos != (
+            bool(datos_sinteticos) if origen_declarado else None
+        ):
             raise _inconsistente(
                 f"corrida {run_id}: veredictos emitidos con datos_sinteticos="
                 f"{resultado.datos_sinteticos}, distinto del de la corrida"

@@ -37,6 +37,7 @@ def _caso(tmp_path, conn, **opciones):
         run_id_m2="m2-integral",
         codigo_version="revision-1",
         datos_sinteticos=True,
+        data_root=tmp_path / "data",
         **opciones,
     )
     return pipeline, PipelineInput(csv_path=csv, data_root=tmp_path / "data")

@@ -33,9 +33,9 @@ para incorporar observaciones reservadas y para emitir evidencia estadística.
    `--db-path`, `PRED_DB_PATH` o `{data-root}/pred.db`, en ese orden. No crea
    una base alternativa cuando la de plataforma falta.
 5. **Migraciones compartidas.** El motor conserva el texto canónico de los
-   esquemas M3. La plataforma incorpora copias exactas como migraciones 0005,
-   0006 y 0007. La última conserva la procedencia declarada por M1 sin cambiar
-   los textos ya publicados. Ambos usan `PRAGMA user_version`. El CLI aplica migraciones M3
+   esquemas M3. La plataforma incorpora copias exactas como migraciones 0005
+   a 0008. La 0007 conserva la procedencia M1 y la 0008 distingue el origen
+   desconocido de una declaración real, sin cambiar los textos ya publicados. Ambos usan `PRAGMA user_version`. El CLI aplica migraciones M3
    pendientes sobre una base de plataforma existente, sin alterar las
    migraciones 0001 a 0004 ni aceptar versiones desconocidas.
 6. **Unidad durable.** Cada origen confirma pronóstico, estado, causa si
@@ -44,7 +44,9 @@ para incorporar observaciones reservadas y para emitir evidencia estadística.
 7. **Protocolo congelado.** La identidad incorpora la receta completa y la
    configuración predeclarada. El manifiesto, el instante de apertura y la
    procedencia se conservan en SQLite. Reanudar no vuelve a emitir el handoff.
-   El origen real o sintético de una ingesta no cambia entre corridas.
+   El origen real o sintético declarado de una ingesta no cambia entre corridas.
+   Una ausencia queda desconocida y no admite inferencia ni VALIDADO. La carga
+   web sigue recibiendo solo el archivo, sin declarar que los datos sean reales.
 8. **Publicación.** M3 publica métricas por candidato y ventana, selección,
    veredictos y resúmenes de cartera precalculados. SQLite es la fuente de
    verdad. Parquet y CSV son exportaciones derivadas. El directorio final

@@ -14,7 +14,7 @@ esquema_m3() -> str
 ```
 
 `abrir_base_plataforma` usa modo `rw`, nunca crea un archivo ausente y aplica
-solo las migraciones M3 pendientes. La versión vigente es 6. Se exige una base
+solo las migraciones M3 pendientes. La versión vigente es 8, con las migraciones 0005 a 0008. Se exige una base
 de plataforma de versión 4 o posterior conocida. Base ausente, transacción
 ajena o versión desconocida producen `BasePlataformaError` sin crear otra base.
 La migración y el cambio de versión son atómicos; una repetición no los duplica.
@@ -30,15 +30,20 @@ como `m3-` seguido de 16 dígitos hexadecimales.
 registrar_corrida(
     conn, identidad: IdentidadCorrida,
     handoff: HandoffValidado | LoteRechazadoError,
-    *, ingesta_sha256: str, datos_sinteticos: bool, run_id_m2: str | None = None,
+    *, ingesta_sha256: str, datos_sinteticos: bool | None, run_id_m2: str | None = None,
 ) -> str
 ```
 
 Un handoff válido crea EN_CURSO, sus SKU y sus fallos de candidato. Un rechazo
-crea RECHAZADA con causa. Repetir una identidad compatible no cambia los datos.
+crea RECHAZADA con causa o marca así la corrida incompleta existente. Una
+PUBLICADA conserva su estado y evidencia. Repetir un handoff compatible no
+cambia los datos.
 Referencias u origen de datos incompatibles producen
 `EvidenciaInconsistenteError`. El origen real o sintético queda ligado a la
-ingesta, no se cambia para obtener otro resultado estadístico.
+ingesta, no se cambia para obtener otro resultado estadístico. `None` es origen
+desconocido: no admite VALIDADO ni valores p. En SQLite, `origen_declarado=0`
+representa esa ausencia; el bit `datos_sinteticos=0` por sí solo no declara
+datos reales. Las declaraciones conocidas tienen `origen_declarado=1`.
 
 ## Unidades
 

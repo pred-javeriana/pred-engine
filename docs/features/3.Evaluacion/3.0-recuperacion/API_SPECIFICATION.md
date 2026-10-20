@@ -9,8 +9,8 @@ ControladorEvaluacion(
     *,
     run_id_m2: str,
     codigo_version: str,
-    datos_sinteticos: bool,
-    data_root: str | Path | None = None,
+    datos_sinteticos: bool | None,
+    data_root: str | Path,
     politica: PoliticaSeleccion = POLITICA_INICIAL,
     configuracion_m2: Mapping[str, Any] | None = None,
     fabricas: Mapping[str, FabricaAdaptador] = FABRICAS,
@@ -21,7 +21,8 @@ La conexión debe estar abierta, sin transacción activa y con las migraciones
 M3 aplicadas. `directorio` es la carpeta de la corrida M2. El llamador conserva
 la propiedad de la conexión y la cierra al terminar. `data_root` es la raíz
 efectiva que permite resolver las rutas relativas registradas por M1; el CLI
-la pasa explícitamente. La identidad CSV original no se sustituye por la huella
+la pasa explícitamente. Es un colaborador obligatorio, no se infiere desde
+`directorio`. La identidad CSV original no se sustituye por la huella
 Parquet cuando la plataforma ya conoce esa ingesta.
 
 La instancia implementa `RetrospectiveValidator`:
@@ -48,8 +49,12 @@ origen de datos, H, número de unidades, fallos técnicos, exclusiones de datos
 y rutas de exportación. Las ventanas sin contexto no se registran como fallos
 del modelo; las ventanas sin objetivos completos no se puntúan ni se rellenan
 con ceros. La ejecución de plataforma solo se declara terminada después de L4;
-un error de esa etapa deja `detenida` y conserva el detalle L4.
-Los errores de lote producen `LoteRechazadoError` y se registran RECHAZADA.
+un error de esa etapa deja `detenida` y conserva el detalle L4 solo en la
+ejecución cuya propiedad confirmó esta llamada. Una colisión de identidad no
+finaliza una ejecución ajena. Los errores de lote producen `LoteRechazadoError`
+y crean o dejan RECHAZADA la corrida incompleta con su causa. Si cambia el
+conjunto M2 al reanudar, el rechazo es terminal. Una corrida PUBLICADA nunca
+se reemplaza ni se convierte en rechazada.
 Una excepción de almacenamiento se propaga y conserva la última fase durable.
 
 La biblioteca permite construir `Pipeline` sin este validador para ejecutar

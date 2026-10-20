@@ -51,13 +51,14 @@ _logger = get_logger(__name__)
 def emitir_veredictos(
     evaluaciones: Sequence[EvaluacionSku],
     *,
-    datos_sinteticos: bool,
+    datos_sinteticos: bool | None,
     politica: PoliticaSeleccion = POLITICA_INICIAL,
 ) -> ResultadoEvaluacion:
     """Seleccion por categoria y veredicto visible para cada SKU.
 
     `datos_sinteticos` viene de la referencia de ingesta de M1: con datos
-    sinteticos o aumentados ningun SKU pasa de EXPLORATORIO.
+    sinteticos, aumentados o desconocidos ningun SKU pasa de EXPLORATORIO.
+    Solo False declara datos reales y permite inferencia.
     """
     skus = [e.sku for e in evaluaciones]
     if len(set(skus)) != len(skus):
@@ -96,7 +97,7 @@ def _veredicto_sku(
     evaluacion: EvaluacionSku,
     seleccion: SeleccionCategoria,
     politica: PoliticaSeleccion,
-    datos_sinteticos: bool,
+    datos_sinteticos: bool | None,
 ) -> VeredictoSku:
     familia = seleccion.familia_campeona
     if familia == FAMILIA_LINEA_BASE:
@@ -147,7 +148,7 @@ def _veredicto_sku(
             else f"{n} ventanas validas (< n_min={politica.n_min})"
         )
     elif (
-        not datos_sinteticos
+        datos_sinteticos is False
         and razon is not None
         and razon < 1.0
         and not (comparacion_incompleta)
@@ -194,9 +195,11 @@ def _veredicto_sku(
 
 
 def _motivo_exploratorio(
-    datos_sinteticos: bool, razon: float | None, comparacion_incompleta: bool
+    datos_sinteticos: bool | None, razon: float | None, comparacion_incompleta: bool
 ) -> str:
     causas = []
+    if datos_sinteticos is None:
+        causas.append("origen de datos desconocido")
     if datos_sinteticos:
         causas.append("datos sinteticos o aumentados")
     if razon is None:
@@ -213,10 +216,12 @@ def _prueba_dm(
     linea_base: MetricasCandidato,
     familia: str,
     veredicto: Veredicto,
-    datos_sinteticos: bool,
+    datos_sinteticos: bool | None,
     politica: PoliticaSeleccion,
 ) -> PruebaDM:
     # ADR-03-011: nunca sobre datos sinteticos, que inflan el poder de la prueba.
+    if datos_sinteticos is None:
+        return PruebaDM(0, 0, causa="origen_desconocido")
     if datos_sinteticos:
         return PruebaDM(0, 0, causa="datos_sinteticos")
     if familia == FAMILIA_LINEA_BASE:

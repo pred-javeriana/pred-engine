@@ -119,7 +119,7 @@ seleccionar_categoria(sku_class, evaluaciones, politica) -> SeleccionCategoria
 emitir_veredictos(
     evaluaciones: Sequence[EvaluacionSku],
     *,
-    datos_sinteticos: bool,
+    datos_sinteticos: bool | None,
     politica: PoliticaSeleccion = POLITICA_INICIAL,
 ) -> ResultadoEvaluacion
 ```

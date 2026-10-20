@@ -14,17 +14,39 @@ if TYPE_CHECKING:
     from pred_engine.pipeline import IngestionArtifact
 
 
+def origen_registrado(conn: sqlite3.Connection, sha: str) -> bool | None:
+    """Solo una declaracion conocida puede fijar el origen de una ingesta."""
+    origenes = {
+        bool(r[0])
+        for r in conn.execute(
+            "SELECT datos_sinteticos FROM m3_ingestas "
+            "WHERE ingesta_sha256=?1 AND origen_declarado=1 "
+            "UNION SELECT datos_sinteticos FROM m3_corridas "
+            "WHERE ingesta_sha256=?1 AND origen_declarado=1",
+            (sha,),
+        )
+    }
+    if len(origenes) > 1:
+        raise ValueError("la ingesta tiene origenes incompatibles")
+    return next(iter(origenes), None)
+
+
 def buscar_ingesta(
     conn: sqlite3.Connection, parquet: Path, data_root: Path, ingesta_ref_m1: str
 ) -> tuple[str, bool | None] | None:
     """Reusa el CSV original; las rutas relativas pertenecen a data_root."""
     exactas = conn.execute(
-        "SELECT ingesta_sha256, datos_sinteticos FROM m3_ingestas "
+        "SELECT ingesta_sha256, datos_sinteticos, origen_declarado FROM m3_ingestas "
         "WHERE ingesta_ref_m1 = ?",
         (ingesta_ref_m1,),
     ).fetchall()
     if len(exactas) == 1:
-        return exactas[0][0], bool(exactas[0][1])
+        from pred_engine.comun.procedencia import resolver_origen
+        from pred_engine.ingesta.informe import origen_informe
+
+        sha = exactas[0][0]
+        conocida = origen_registrado(conn, sha)
+        return sha, resolver_origen(conocida, origen_informe(data_root, sha))
     destino = parquet.expanduser().resolve()
     candidatas = set()
     for sha, ruta in conn.execute(
@@ -38,28 +60,21 @@ def buscar_ingesta(
     if len(candidatas) > 1:
         raise ValueError("la ruta Parquet corresponde a varias ingestas sin huella M1")
     sha = next(iter(candidatas), None)
-    origenes = {
-        r[0]
-        for r in conn.execute(
-            "SELECT datos_sinteticos FROM m3_ingestas WHERE ingesta_sha256 = ?1 "
-            "UNION SELECT datos_sinteticos FROM m3_corridas WHERE ingesta_sha256 = ?1",
-            (sha,),
-        )
-    }
-    if len(origenes) > 1:
-        raise ValueError("la ingesta tiene origenes incompatibles")
-    if sha is not None and origenes:
-        return sha, bool(origenes.pop())
+    conocida = origen_registrado(conn, sha) if sha is not None else None
+    if sha is not None and conocida is not None:
+        return sha, conocida
     from pred_engine.ingesta.informe import IngestReportFile
 
     declaradas = set()
-    for path in (data_root / "ingestas").glob("*.json"):
+    # Un archivo ajeno no es un informe M1. Si ya se conoce la fuente, solo
+    # su informe canonico puede aportar procedencia y se valida estrictamente.
+    patron = f"{sha}.json" if sha is not None else "[0-9a-f]" * 64 + ".json"
+    for path in (data_root / "ingestas").glob(patron):
         report = IngestReportFile.model_validate_json(path.read_text())
         if (
             report.status == "accepted"
             and report.published is not None
             and report.published.sha256 == ingesta_ref_m1
-            and report.source_file.datos_sinteticos is not None
         ):
             if report.ingest_id != report.source_file.sha256:
                 raise ValueError("la procedencia M1 tiene identidades incompatibles")
@@ -137,7 +152,7 @@ def asegurar_referencias(
 
 def finalizar_referencia(
     conn: sqlite3.Connection,
-    run_id_m2: str,
+    ejecucion_id: int,
     *,
     hay_fallos: bool = False,
     error: Exception | None = None,
@@ -162,6 +177,6 @@ def finalizar_referencia(
     )
     with _transaccion(conn):
         conn.execute(
-            "UPDATE ejecuciones SET estado = ?, error_json = ? WHERE run_id = ?",
-            (estado, detalle, run_id_m2),
+            "UPDATE ejecuciones SET estado = ?, error_json = ? WHERE id = ?",
+            (estado, detalle, ejecucion_id),
         )

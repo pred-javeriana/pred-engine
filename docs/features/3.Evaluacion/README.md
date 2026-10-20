@@ -27,8 +27,11 @@ Para datos aumentados o sintéticos se debe indicar `--datos-sinteticos`.
 origen de los datos y rechaza cambiarlo para una misma ingesta. M1 publica
 `source_file.datos_sinteticos` y `published.sha256`; la importación conserva
 esa procedencia para el proceso que consume el Parquet. Un Parquet externo
-sin procedencia exige `--datos-sinteticos` o `--datos-reales`, nunca se presume
-real por omisión.
+sin procedencia mantiene origen desconocido. Las opciones `--datos-sinteticos`
+y `--datos-reales` declaran explícitamente su origen; nunca se presume
+real por omisión. El origen desconocido produce resultados exploratorios sin
+valores p; no habilita VALIDADO. Se reutiliza una declaración anterior por
+huella CSV o Parquet y un conflicto se rechaza antes de M1/HPO.
 
 - Salida 0: etapas completas y evidencia PUBLICADA.
 - Salida 8: publicación completa con fallos técnicos aislados en M2 o M3.
@@ -59,7 +62,7 @@ with abrir_base_plataforma("data/pred.db") as conn:
         EvaluationSettings(min_train=60, horizon=7, step=28),
         families=("classical", "ml"), validator=validator,
     )
-    result = pipeline.run(PipelineInput(csv_path="ventas.csv", data_root="data"))
+    result = pipeline.run(PipelineInput(csv_path="ventas.csv", data_root="data", datos_sinteticos=False))
 ```
 
 La conexión pertenece al llamador. La configuración y el identificador de la

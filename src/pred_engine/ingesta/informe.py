@@ -363,8 +363,35 @@ def _informe_conflicto(
     )
 
 
+def origen_informe(
+    data_root: str | Path | None, sha256: str, declarada: bool | None = None
+) -> bool | None:
+    """Lee solo el informe canonico de esa fuente, sin deducir un origen ausente."""
+    from pred_engine.comun.procedencia import resolver_origen
+
+    path = report_path(data_root, sha256)
+    conocida = None
+    if path.exists():
+        previa = IngestReportFile.model_validate_json(path.read_text())
+        if previa.ingest_id != sha256 or previa.source_file.sha256 != sha256:
+            raise ValueError("la procedencia M1 tiene identidades incompatibles")
+        conocida = previa.source_file.datos_sinteticos
+    return resolver_origen(conocida, declarada)
+
+
 def write_ingest_report(report: IngestReportFile, data_root: str | Path | None) -> Path:
     """Escribe el informe de forma atomica y devuelve su ruta."""
+    origen = origen_informe(
+        data_root, report.ingest_id, report.source_file.datos_sinteticos
+    )
+    if origen != report.source_file.datos_sinteticos:
+        report = report.model_copy(
+            update={
+                "source_file": report.source_file.model_copy(
+                    update={"datos_sinteticos": origen}
+                )
+            }
+        )
     destino = report_path(data_root, report.ingest_id)
     temporal = destino.with_name(f".{destino.name}.{os.getpid()}.part")
     try:
@@ -397,10 +424,11 @@ def ingest_csv_with_report(
     origen = Path(csv_path).expanduser().resolve()
     if not origen.is_file():
         raise FileNotFoundError(origen)
+    sha256 = hash_sha256_archivo(origen)
     fuente = SourceFileInfo(
-        datos_sinteticos=datos_sinteticos,
+        datos_sinteticos=origen_informe(layout.root, sha256, datos_sinteticos),
         name=origen.name,
-        sha256=hash_sha256_archivo(origen),
+        sha256=sha256,
         row_count=_contar_filas(origen),
     )
 
