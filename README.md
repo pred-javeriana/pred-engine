@@ -188,7 +188,7 @@ export_parquet(
 ```
 
 Structured JSON logs (timestamp, level, module, file hash, row count) go to
-stdout. See `docs/features/ingesta-almacenamiento-crudo/` for the API and
+stdout. See `docs/features/1.Ingesta/1.1-ingesta-almacenamiento-crudo/` for the API and
 session notes.
 
 ## L1.2 semantic alignment
@@ -213,7 +213,7 @@ uv run pred-engine ingest \
 The API key is read from `--api-key` or `PRED_LLM_API_KEY` / `GEMINI_API_KEY`
 (and equivalents for OpenAI and Anthropic). If the probe cannot map `sku_id`,
 `timestamp`, `demand_qty` and `lead_time_days` with confidence, ingestion stops.
-See `docs/features/1.2-alineacion-semantica-validacion/`.
+See `docs/features/1.Ingesta/1.2-alineacion-semantica-validacion/`.
 
 ## L1.3 SKU topology (Syntetos-Boylan)
 
@@ -227,7 +227,7 @@ Thresholds are 1.32 and 0.49. Original demand columns are not rewritten.
 uv run pred-engine classify --csv inventory_data.csv --data-root data
 ```
 
-No LLM key is required. See `docs/features/1.3-motor-enrutador-sku/`.
+No LLM key is required. See `docs/features/1.Ingesta/1.3-motor-enrutador-sku/`.
 
 ## L1.4 output contract (Parquet handoff)
 
@@ -241,7 +241,7 @@ uv run pred-engine classify --csv local_data/inventory_data.csv --data-root data
 uv run pred-engine verify --parquet data/processed/inventory_data.parquet
 ```
 
-See `docs/features/1.4-artefacto-salida/`.
+See `docs/features/1.Ingesta/1.4-artefacto-salida/`.
 
 ## Module 2 deep-learning selection
 
