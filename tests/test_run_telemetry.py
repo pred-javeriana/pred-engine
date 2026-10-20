@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
+import psutil
 import pytest
 
 from pred_engine.comun.ejecucion_paralela import ejecutar_unidades
@@ -58,6 +61,26 @@ def test_registra_cpu_y_memoria_del_proceso_principal_y_de_cada_worker(tmp_path)
     assert 0 <= resumen["sampler_cpu_s"] < 1
     assert resumen["sampler_ms_per_sample"] > 0
     assert resumen["error"] is None
+
+
+def test_no_registra_un_worker_zombi_que_ya_no_tiene_memoria(tmp_path):
+    ruta = tmp_path / "recursos.jsonl"
+    hijo = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        # El hijo termino y nadie lo ha recogido (sin poll): es zombi con rss 0.
+        limite = time.monotonic() + 10
+        while psutil.Process(hijo.pid).status() != psutil.STATUS_ZOMBIE:
+            assert time.monotonic() < limite
+            time.sleep(0.01)
+        with ResourceSampler(ruta, interval=0.05):
+            time.sleep(0.2)
+    finally:
+        hijo.wait()
+
+    filas = _filas(ruta)
+    assert any(f["pid"] == os.getpid() and f["mem_mb"] > 0 for f in filas)
+    assert hijo.pid not in {f["pid"] for f in filas}
+    assert all(f["mem_mb"] > 0 for f in filas)
 
 
 def test_un_error_de_muestreo_no_interrumpe_la_corrida(tmp_path, monkeypatch):
