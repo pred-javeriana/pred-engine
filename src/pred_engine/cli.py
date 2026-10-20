@@ -673,10 +673,8 @@ def _cmd_run_con_base(
     from pred_engine.comun.reserva import RESERVE_FRACTION
     from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
     from pred_engine.forecasting.persistencia_evidencia.referencias import (
-        buscar_ingesta,
-        origen_registrado,
+        origen_conocido,
     )
-    from pred_engine.ingesta.informe import origen_informe
     from pred_engine.optimizacion.router import PredictorFamily
     from pred_engine.pipeline import (
         EvaluationSettings,
@@ -726,16 +724,15 @@ def _cmd_run_con_base(
             if args.datos_sinteticos or args.seed_csv is not None
             else (False if args.datos_reales else None)
         )
-        if args.parquet is not None:
-            previa = buscar_ingesta(
-                conn, source, Path(args.data_root), inputs["source"]["sha256"]
-            )
-            conocida = previa[1] if previa else None
-        else:
-            conocida = resolver_origen(
-                origen_registrado(conn, inputs["source"]["sha256"]),
-                origen_informe(args.data_root, inputs["source"]["sha256"]),
-            )
+        conocida = origen_conocido(
+            conn,
+            fuente_sha256=None
+            if args.parquet is not None
+            else inputs["source"]["sha256"],
+            parquet=source,
+            data_root=Path(args.data_root),
+            ingesta_ref_m1=inputs["source"]["sha256"],
+        )[1]
         es_sintetico = resolver_origen(conocida, declarada)
         settings = {name: getattr(args, name) for name in _RUN_SETTINGS} | {
             "datos_sinteticos": es_sintetico,

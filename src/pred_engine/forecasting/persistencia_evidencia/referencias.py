@@ -8,10 +8,27 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pred_engine.comun.procedencia import resolver_origen
 from pred_engine.forecasting.persistencia_evidencia.repositorio import _transaccion
 
 if TYPE_CHECKING:
     from pred_engine.pipeline import IngestionArtifact
+
+# Ajustes que cambian resultados, comunes a la plataforma y al CLI. Los ajustes
+# de ejecucion (workers) y los sobres propios de cada representacion no cuentan.
+AJUSTES_RESULTADO = (
+    "families",
+    "trials",
+    "min_train",
+    "horizon",
+    "step",
+    "seasonality",
+    "metric",
+    "seed",
+    "provider",
+    "model",
+    "dm_min_origins",
+)
 
 
 def origen_registrado(conn: sqlite3.Connection, sha: str) -> bool | None:
@@ -41,7 +58,6 @@ def buscar_ingesta(
         (ingesta_ref_m1,),
     ).fetchall()
     if len(exactas) == 1:
-        from pred_engine.comun.procedencia import resolver_origen
         from pred_engine.ingesta.informe import origen_informe
 
         sha = exactas[0][0]
@@ -89,6 +105,33 @@ def buscar_ingesta(
     return (sha, None) if sha is not None else None
 
 
+def origen_conocido(
+    conn: sqlite3.Connection,
+    *,
+    fuente_sha256: str | None,
+    parquet: Path,
+    data_root: Path,
+    ingesta_ref_m1: str,
+) -> tuple[str, bool | None]:
+    """Fuente M1 y el origen que ya declararon la base o su informe canonico."""
+    from pred_engine.ingesta.informe import origen_informe
+
+    if fuente_sha256 is None:
+        previa = buscar_ingesta(conn, parquet, data_root, ingesta_ref_m1)
+        return previa if previa is not None else (ingesta_ref_m1, None)
+    return fuente_sha256, resolver_origen(
+        origen_registrado(conn, fuente_sha256), origen_informe(data_root, fuente_sha256)
+    )
+
+
+def _ajustes(parametros: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        k: json.loads(json.dumps(parametros[k]))
+        for k in AJUSTES_RESULTADO
+        if k in parametros
+    }
+
+
 def asegurar_referencias(
     conn: sqlite3.Connection,
     ingesta: IngestionArtifact,
@@ -98,15 +141,22 @@ def asegurar_referencias(
     directorio: Path,
     configuracion: Mapping[str, Any],
     data_root: Path,
-) -> tuple[str, int]:
-    """Conserva las referencias; nunca declara terminada una evaluacion pendiente."""
+    datos_sinteticos: bool | None,
+) -> tuple[str, int, bool | None]:
+    """Conserva las referencias; nunca declara terminada una evaluacion pendiente.
+
+    Devuelve el origen resuelto: la declaracion del llamador no sustituye el
+    origen que M1 ya registro, y un conflicto se rechaza antes de evaluar.
+    """
     panel = ingesta.panel
-    previa = (
-        buscar_ingesta(conn, ingesta.parquet_path, data_root, ingesta_ref_m1)
-        if ingesta.source_sha256 is None
-        else None
+    sha, conocida = origen_conocido(
+        conn,
+        fuente_sha256=ingesta.source_sha256,
+        parquet=ingesta.parquet_path,
+        data_root=data_root,
+        ingesta_ref_m1=ingesta_ref_m1,
     )
-    sha = ingesta.source_sha256 or (previa[0] if previa else ingesta_ref_m1)
+    origen = resolver_origen(conocida, datos_sinteticos)
     with _transaccion(conn):
         conn.execute(
             "INSERT INTO ingestas (sha256, nombre_archivo, filas, skus, ruta_parquet) "
@@ -123,12 +173,26 @@ def asegurar_referencias(
             "SELECT id FROM ingestas WHERE sha256 = ?", (sha,)
         ).fetchone()[0]
         existente = conn.execute(
-            "SELECT id, ingesta_id FROM ejecuciones WHERE run_id = ?", (run_id_m2,)
+            "SELECT e.id, e.ingesta_id, c.parametros FROM ejecuciones e "
+            "JOIN configuraciones c ON c.id = e.configuracion_id WHERE e.run_id = ?",
+            (run_id_m2,),
         ).fetchone()
         if existente is not None:
             if existente[1] != ingesta_id:
                 raise ValueError("run_id de M2 pertenece a otra ingesta de plataforma")
-            return sha, existente[0]
+            guardados, nuevos = (
+                _ajustes(json.loads(existente[2])),
+                _ajustes(configuracion),
+            )
+            distintos = sorted(
+                k for k in guardados.keys() & nuevos.keys() if guardados[k] != nuevos[k]
+            )
+            if distintos:
+                raise ValueError(
+                    "run_id de M2 pertenece a otra configuracion de resultados: "
+                    + ", ".join(distintos)
+                )
+            return sha, existente[0], origen
         configuracion_id = conn.execute(
             "INSERT INTO configuraciones (version, descripcion, parametros) "
             "VALUES (1, ?, ?)",
@@ -147,7 +211,7 @@ def asegurar_referencias(
             ),
         ).lastrowid
     assert ejecucion_id is not None
-    return sha, ejecucion_id
+    return sha, ejecucion_id, origen
 
 
 def finalizar_referencia(

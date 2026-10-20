@@ -32,6 +32,12 @@ y `--datos-reales` declaran explícitamente su origen; nunca se presume
 real por omisión. El origen desconocido produce resultados exploratorios sin
 valores p; no habilita VALIDADO. Se reutiliza una declaración anterior por
 huella CSV o Parquet y un conflicto se rechaza antes de M1/HPO.
+`ControladorEvaluacion` aplica la misma regla en la biblioteca: resuelve el
+origen registrado en la base o en el informe M1 con la declaración del
+llamador y rechaza un conflicto antes de registrar la ejecución. Un `run_id`
+de M2 ya registrado en la base solo se reutiliza con los mismos ajustes que
+cambian resultados (familias, ensayos, `min_train`, horizonte, paso,
+estacionalidad, métrica, semilla); `workers` puede cambiar.
 
 - Salida 0: etapas completas y evidencia PUBLICADA.
 - Salida 8: publicación completa con fallos técnicos aislados en M2 o M3.

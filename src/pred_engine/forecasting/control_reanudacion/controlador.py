@@ -136,18 +136,28 @@ class ControladorEvaluacion:
         ingesta_ref_m1 = sha256_file(ingesta.parquet_path)
         # La posesion pertenece a esta llamada: una colision rechazada no puede
         # finalizar una ejecucion ajena ni heredar la posesion de un intento previo.
-        ingesta_sha, ejecucion_id = asegurar_referencias(
+        ajustes = evaluation.settings
+        ingesta_sha, ejecucion_id, datos_sinteticos = asegurar_referencias(
             self.conn,
             ingesta,
             ingesta_ref_m1=ingesta_ref_m1,
             run_id_m2=self.run_id_m2,
             directorio=self.directorio,
-            configuracion=self.configuracion_m2,
+            # Los ajustes evaluados son los que cambian resultados en la base.
+            configuracion={
+                **self.configuracion_m2,
+                "min_train": ajustes.min_train,
+                "horizon": ajustes.horizon,
+                "step": ajustes.step,
+                "seasonality": ajustes.seasonality,
+                "metric": ajustes.metric,
+            },
             data_root=self.data_root,
+            datos_sinteticos=self.datos_sinteticos,
         )
         try:
             resultado = self._evaluar(
-                evaluation, ingesta_sha, ejecucion_id, ingesta_ref_m1
+                evaluation, ingesta_sha, ejecucion_id, ingesta_ref_m1, datos_sinteticos
             )
         except Exception as error:
             finalizar_referencia(self.conn, ejecucion_id, error=error)
@@ -167,6 +177,7 @@ class ControladorEvaluacion:
         ingesta_sha: str,
         ejecucion_id: int,
         ingesta_ref_m1: str,
+        datos_sinteticos: bool | None,
     ) -> ValidationArtifact:
         from pred_engine.run_artifacts import (
             library_versions,
@@ -198,7 +209,7 @@ class ControladorEvaluacion:
             "versiones": versiones,
             "pronosticos": asdict(config),
             "politica": politica_serializable(self.politica),
-            "datos_sinteticos": self.datos_sinteticos,
+            "datos_sinteticos": datos_sinteticos,
             "configuracion_m2": self.configuracion_m2,
         }
         # La identidad de configuracion no incorpora la hora de emision.
@@ -257,6 +268,7 @@ class ControladorEvaluacion:
                     exclusiones=guardado["procedencia"]["exclusiones_m3"],
                     exclusiones_datos=guardado["procedencia"]["exclusiones_datos"],
                     publicada_previamente=True,
+                    datos_sinteticos=datos_sinteticos,
                 )
             existente = json.loads(contenido)
             if existente.get("candidatos") != json.loads(nuevo)["candidatos"]:
@@ -275,7 +287,7 @@ class ControladorEvaluacion:
                 identidad,
                 error,
                 ingesta_sha256=ingesta_sha,
-                datos_sinteticos=self.datos_sinteticos,
+                datos_sinteticos=datos_sinteticos,
                 run_id_m2=self.run_id_m2,
             )
             raise
@@ -284,7 +296,7 @@ class ControladorEvaluacion:
             identidad,
             handoff,
             ingesta_sha256=ingesta_sha,
-            datos_sinteticos=self.datos_sinteticos,
+            datos_sinteticos=datos_sinteticos,
         )
         plan = ventanas_reserva(corte, config.horizonte)
         skus = sorted(
@@ -471,7 +483,7 @@ class ControladorEvaluacion:
             ]
             resultado = emitir_veredictos(
                 evaluaciones,
-                datos_sinteticos=self.datos_sinteticos,
+                datos_sinteticos=datos_sinteticos,
                 politica=self.politica,
             )
             guardar_evaluacion(self.conn, run_id, evaluaciones, resultado)
@@ -482,6 +494,7 @@ class ControladorEvaluacion:
             exclusiones=exclusiones,
             exclusiones_datos=exclusiones_datos,
             publicada_previamente=False,
+            datos_sinteticos=datos_sinteticos,
         )
 
     def _artefacto(
@@ -493,6 +506,7 @@ class ControladorEvaluacion:
         exclusiones: Mapping[str, Any],
         exclusiones_datos: Mapping[str, Any],
         publicada_previamente: bool,
+        datos_sinteticos: bool | None,
     ) -> ValidationArtifact:
         from pred_engine.pipeline import SkuVerdict, ValidationArtifact
 
@@ -507,7 +521,7 @@ class ControladorEvaluacion:
             audit_bundle={
                 "run_id_m3": run_id,
                 "estado": "PUBLICADA",
-                "datos_sinteticos": self.datos_sinteticos,
+                "datos_sinteticos": datos_sinteticos,
                 "horizonte": config.horizonte,
                 "n_unidades": n_previstas,
                 "n_fallos": n_fallos,
