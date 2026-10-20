@@ -141,7 +141,7 @@ def test_ejemplo_de_composicion_documentado_publica_m3(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     crear_base_plataforma(tmp_path / "data/pred.db")
     fuente(tmp_path).rename(tmp_path / "sales.csv")
-    espacio: dict[str, object] = {}
+    espacio: dict[str, object] = {"__name__": "__main__"}
     exec(compile(codigo, str(readme), "exec"), espacio)
     assert espacio["result"].validation.audit_bundle["estado"] == "PUBLICADA"
     with sqlite3.connect(tmp_path / "data/pred.db") as conn:

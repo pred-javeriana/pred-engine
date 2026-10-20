@@ -35,20 +35,22 @@ from pred_engine.pipeline import EvaluationSettings, PipelineInput
 from pred_engine.pipeline_setup import build_pipeline
 from pred_engine.run_artifacts import code_fingerprint
 
-with abrir_base_plataforma("data/pred.db") as conn:
-    validator = ControladorEvaluacion(
-        conn, "data/runs/sales", run_id_m2="sales",
-        codigo_version=code_fingerprint(), datos_sinteticos=False,
-        data_root="data",
-    )
-    pipeline = build_pipeline(
-        EvaluationSettings(min_train=60, horizon=7, step=28),
-        families=("classical", "ml"), n_trials=10, workers=4,
-        hpo_root="data/runs/sales/hpo", session="sales", validator=validator,
-    )
-    result = pipeline.run(
-        PipelineInput(csv_path="sales.csv", data_root="data", datos_sinteticos=False)
-    )
+# workers > 1 starts spawned processes, so a script needs this guard.
+if __name__ == "__main__":
+    with abrir_base_plataforma("data/pred.db") as conn:
+        validator = ControladorEvaluacion(
+            conn, "data/runs/sales", run_id_m2="sales",
+            codigo_version=code_fingerprint(), datos_sinteticos=False,
+            data_root="data",
+        )
+        pipeline = build_pipeline(
+            EvaluationSettings(min_train=60, horizon=7, step=28),
+            families=("classical", "ml"), n_trials=10, workers=4,
+            hpo_root="data/runs/sales/hpo", session="sales", validator=validator,
+        )
+        result = pipeline.run(
+            PipelineInput(csv_path="sales.csv", data_root="data", datos_sinteticos=False)
+        )
 ```
 
 The platform migrator creates the database first. The engine opens it in
