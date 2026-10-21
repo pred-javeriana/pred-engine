@@ -125,8 +125,11 @@ def registrar_corrida(
             "SELECT DISTINCT datos_sinteticos FROM m3_corridas "
             "WHERE ingesta_sha256 = ?1 AND origen_declarado=1 UNION "
             "SELECT datos_sinteticos FROM m3_ingestas "
-            "WHERE ingesta_sha256 = ?1 AND origen_declarado=1",
-            (ingesta_sha256,),
+            "WHERE ingesta_sha256 = ?1 AND origen_declarado=1 UNION "
+            # Los mismos bytes publicados por otra ingesta tampoco cambian de origen.
+            "SELECT datos_sinteticos FROM m3_ingestas "
+            "WHERE ingesta_ref_m1 = ?2 AND origen_declarado=1",
+            (ingesta_sha256, identidad.ingesta_ref_m1),
         ).fetchall()
         if any(bool(f[0]) != datos_sinteticos for f in origenes):
             raise _inconsistente(

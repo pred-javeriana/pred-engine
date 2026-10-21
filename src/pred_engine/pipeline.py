@@ -38,7 +38,7 @@ from pred_engine.comun.walkforward.protocolos import (
 )
 from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredicto
 from pred_engine.ingesta.informe import ingest_csv_with_report
-from pred_engine.ingesta.pipeline import run_verify_parquet
+from pred_engine.ingesta.pipeline import run_verify_parquet_with_sha256
 from pred_engine.ingesta.salida import validate_output_contract
 from pred_engine.optimizacion.optimizadores.HPO.poda import es_degenerada
 from pred_engine.optimizacion.router import SelectionRouter
@@ -145,6 +145,8 @@ class IngestionArtifact:
     source_sha256: str | None = None
     # Origen declarado en la entrada (CSV resuelto con su informe M1, o Parquet).
     datos_sinteticos: bool | None = None
+    # SHA-256 de los bytes Parquet de los que se cargo ``panel``.
+    parquet_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,10 +548,12 @@ class Pipeline:
         """L1: reuse current ingestion and consume its published 1.4 contract."""
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
+            panel, huella = run_verify_parquet_with_sha256(path)
             return IngestionArtifact(
                 path,
-                run_verify_parquet(path),
+                panel,
                 datos_sinteticos=request.datos_sinteticos,
+                parquet_sha256=huella,
             )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
@@ -563,12 +567,14 @@ class Pipeline:
             raise salida.error
         assert salida.result is not None
         path = salida.result.parquet_path
+        panel, huella = run_verify_parquet_with_sha256(path)
         return IngestionArtifact(
             path,
-            run_verify_parquet(path),
+            panel,
             topology=tuple(salida.result.topology.metrics),
             source_sha256=salida.report.ingest_id,
             datos_sinteticos=salida.report.source_file.datos_sinteticos,
+            parquet_sha256=huella,
         )
 
     def _exclusion_cause(

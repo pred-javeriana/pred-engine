@@ -133,33 +133,29 @@ class ControladorEvaluacion:
         from pred_engine.run_artifacts import sha256_file
 
         ingesta = evaluation.fitting.ingestion
-        ingesta_ref_m1 = sha256_file(ingesta.parquet_path)
+        # La huella de los bytes que L1 leyo, no la del archivo en este momento.
+        ingesta_ref_m1 = ingesta.parquet_sha256 or sha256_file(ingesta.parquet_path)
+        configuracion = self._configuracion_efectiva(evaluation)
         # La posesion pertenece a esta llamada: una colision rechazada no puede
         # finalizar una ejecucion ajena ni heredar la posesion de un intento previo.
-        ajustes = evaluation.settings
         ingesta_sha, ejecucion_id, datos_sinteticos = asegurar_referencias(
             self.conn,
             ingesta,
             ingesta_ref_m1=ingesta_ref_m1,
             run_id_m2=self.run_id_m2,
             directorio=self.directorio,
-            # Los ajustes efectivos de M2 y de la evaluacion son los que cambian
-            # resultados; prevalecen sobre la configuracion que declara el llamador.
-            configuracion={
-                **self.configuracion_m2,
-                **evaluation.fitting.m2_settings,
-                "min_train": ajustes.min_train,
-                "horizon": ajustes.horizon,
-                "step": ajustes.step,
-                "seasonality": ajustes.seasonality,
-                "metric": ajustes.metric,
-            },
+            configuracion=configuracion,
             data_root=self.data_root,
             datos_sinteticos=self.datos_sinteticos,
         )
         try:
             resultado = self._evaluar(
-                evaluation, ingesta_sha, ejecucion_id, ingesta_ref_m1, datos_sinteticos
+                evaluation,
+                ingesta_sha,
+                ejecucion_id,
+                ingesta_ref_m1,
+                datos_sinteticos,
+                configuracion,
             )
         except Exception as error:
             finalizar_referencia(self.conn, ejecucion_id, error=error)
@@ -173,6 +169,35 @@ class ControladorEvaluacion:
         )
         return resultado
 
+    def _configuracion_efectiva(self, evaluation: EvaluationArtifact) -> dict[str, Any]:
+        """Los ajustes de M2 y de la evaluacion que produjeron los resultados.
+
+        La configuracion del llamador puede agregar campos, pero no contradecir
+        un ajuste efectivo: un conflicto se rechaza antes de registrar nada.
+        """
+        ajustes = evaluation.settings
+        efectivos = {
+            **evaluation.fitting.m2_settings,
+            "min_train": ajustes.min_train,
+            "horizon": ajustes.horizon,
+            "step": ajustes.step,
+            "seasonality": ajustes.seasonality,
+            "metric": ajustes.metric,
+        }
+        distintos = sorted(
+            k
+            for k, v in efectivos.items()
+            if k in self.configuracion_m2
+            and json.loads(json.dumps(self.configuracion_m2[k]))
+            != json.loads(json.dumps(v))
+        )
+        if distintos:
+            raise ValueError(
+                "la configuracion M2 declarada difiere de la efectiva: "
+                + ", ".join(distintos)
+            )
+        return {**self.configuracion_m2, **efectivos}
+
     def _evaluar(
         self,
         evaluation: EvaluationArtifact,
@@ -180,6 +205,7 @@ class ControladorEvaluacion:
         ejecucion_id: int,
         ingesta_ref_m1: str,
         datos_sinteticos: bool | None,
+        configuracion_m2: Mapping[str, Any],
     ) -> ValidationArtifact:
         from pred_engine.run_artifacts import (
             library_versions,
@@ -212,7 +238,7 @@ class ControladorEvaluacion:
             "pronosticos": asdict(config),
             "politica": politica_serializable(self.politica),
             "datos_sinteticos": datos_sinteticos,
-            "configuracion_m2": self.configuracion_m2,
+            "configuracion_m2": configuracion_m2,
         }
         # La identidad de configuracion no incorpora la hora de emision.
         try:

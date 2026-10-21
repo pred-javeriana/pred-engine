@@ -41,8 +41,15 @@ La ejecución central guarda los ajustes efectivos de M2 que `build_pipeline`
 usó (familias, ensayos, semilla); un `Pipeline` compuesto a mano los declara
 con `m2_settings`. Un `run_id` de M2 ya registrado en la base solo se
 reutiliza con los mismos ajustes que cambian resultados (familias, ensayos,
-`min_train`, horizonte, paso, estacionalidad, métrica, semilla); `workers`
-puede cambiar.
+`min_train`, horizonte, paso, estacionalidad, métrica, semilla, y la versión
+de código cuando ambas partes la registran); `workers` puede cambiar.
+El origen declarado se asocia también a la huella de los bytes Parquet: otra
+ingesta que publica los mismos bytes no puede declarar el origen contrario, y
+una ruta registrada sin ninguna huella conocida no aporta procedencia. M3
+registra la huella de los bytes que L1 leyó, no la del archivo al llegar a
+L4. El protocolo congelado guarda la configuración M2 efectiva; una
+`configuracion_m2` del llamador que la contradiga se rechaza antes de
+registrar la ejecución.
 
 - Salida 0: etapas completas y evidencia PUBLICADA.
 - Salida 8: publicación completa con fallos técnicos aislados en M2 o M3.

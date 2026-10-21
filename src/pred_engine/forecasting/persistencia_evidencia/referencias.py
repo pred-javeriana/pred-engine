@@ -30,7 +30,7 @@ AJUSTES_RESULTADO = (
 )
 _POR_OMISION = {"families": ["classical", "ml", "dl"], "trials": None}
 # Opciones que solo el CLI registra; se comparan cuando ambas partes las tienen.
-AJUSTES_OPCIONALES = ("provider", "model", "dm_min_origins")
+AJUSTES_OPCIONALES = ("provider", "model", "dm_min_origins", "code")
 
 
 def origen_registrado(conn: sqlite3.Connection, sha: str) -> bool | None:
@@ -50,10 +50,39 @@ def origen_registrado(conn: sqlite3.Connection, sha: str) -> bool | None:
     return next(iter(origenes), None)
 
 
+def origen_huella(conn: sqlite3.Connection, ingesta_ref_m1: str) -> bool | None:
+    """Origen declarado de unos bytes Parquet, sea cual sea su ingesta."""
+    origenes = {
+        bool(r[0])
+        for r in conn.execute(
+            "SELECT datos_sinteticos FROM m3_ingestas "
+            "WHERE ingesta_ref_m1 = ? AND origen_declarado = 1",
+            (ingesta_ref_m1,),
+        )
+    }
+    if len(origenes) > 1:
+        raise ValueError("la ingesta tiene origenes incompatibles")
+    return next(iter(origenes), None)
+
+
 def buscar_ingesta(
     conn: sqlite3.Connection, parquet: Path, data_root: Path, ingesta_ref_m1: str
 ) -> tuple[str, bool | None] | None:
-    """Reusa el CSV original; las rutas relativas pertenecen a data_root."""
+    """Reusa el CSV original; las rutas relativas pertenecen a data_root.
+
+    El origen ya declarado para esos mismos bytes se conserva aunque varias
+    ingestas compartan la huella o ninguna se identifique por su ruta.
+    """
+    por_bytes = origen_huella(conn, ingesta_ref_m1)
+    previa = _buscar_ingesta(conn, parquet, data_root, ingesta_ref_m1)
+    if previa is None:
+        return None if por_bytes is None else (ingesta_ref_m1, por_bytes)
+    return previa[0], resolver_origen(previa[1], por_bytes)
+
+
+def _buscar_ingesta(
+    conn: sqlite3.Connection, parquet: Path, data_root: Path, ingesta_ref_m1: str
+) -> tuple[str, bool | None] | None:
     exactas = conn.execute(
         "SELECT ingesta_sha256, datos_sinteticos, origen_declarado FROM m3_ingestas "
         "WHERE ingesta_ref_m1 = ?",
@@ -78,8 +107,11 @@ def buscar_ingesta(
     if len(candidatas) > 1:
         raise ValueError("la ruta Parquet corresponde a varias ingestas sin huella M1")
     sha = next(iter(candidatas), None)
-    if sha is not None:
-        _verificar_contenido(conn, sha, data_root, ingesta_ref_m1, destino)
+    if sha is not None and not _verificar_contenido(
+        conn, sha, data_root, ingesta_ref_m1, destino
+    ):
+        # Sin ninguna huella, la ruta no prueba que estos bytes sean esa ingesta.
+        sha = None
     conocida = origen_registrado(conn, sha) if sha is not None else None
     if sha is not None and conocida is not None:
         return sha, conocida
@@ -123,9 +155,10 @@ def origen_conocido(
     if fuente_sha256 is None:
         previa = buscar_ingesta(conn, parquet, data_root, ingesta_ref_m1)
         return previa if previa is not None else (ingesta_ref_m1, None)
-    return fuente_sha256, resolver_origen(
+    conocida = resolver_origen(
         origen_registrado(conn, fuente_sha256), origen_informe(data_root, fuente_sha256)
     )
+    return fuente_sha256, resolver_origen(conocida, origen_huella(conn, ingesta_ref_m1))
 
 
 def _ajustes(parametros: Mapping[str, Any]) -> dict[str, Any]:
@@ -152,8 +185,11 @@ def _ajustes_distintos(
 
 def _verificar_contenido(
     conn: sqlite3.Connection, sha: str, data_root: Path, ingesta_ref_m1: str, ruta: Path
-) -> None:
-    """Una ruta registrada solo identifica la ingesta si conserva su contenido."""
+) -> bool:
+    """Una ruta registrada solo identifica la ingesta si conserva su contenido.
+
+    Devuelve si existe alguna huella con la que comparar.
+    """
     from pred_engine.ingesta.informe import IngestReportFile, report_path
 
     huellas = {
@@ -172,6 +208,7 @@ def _verificar_contenido(
             f"el Parquet registrado en {ruta} cambio de contenido: la procedencia "
             "de su ingesta ya no aplica; vuelva a clasificar el archivo"
         )
+    return bool(huellas)
 
 
 def asegurar_referencias(
