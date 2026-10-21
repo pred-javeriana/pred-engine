@@ -130,11 +130,15 @@ class ControladorEvaluacion:
         self.fabricas = fabricas
 
     def __call__(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
-        from pred_engine.run_artifacts import sha256_file
-
         ingesta = evaluation.fitting.ingestion
-        # La huella de los bytes que L1 leyo, no la del archivo en este momento.
-        ingesta_ref_m1 = ingesta.parquet_sha256 or sha256_file(ingesta.parquet_path)
+        # La huella de los bytes que L1 leyo; el archivo actual puede ser otro.
+        if ingesta.parquet_sha256 is None:
+            raise ValueError(
+                "la ingestion no declara parquet_sha256: use Pipeline.ingest o "
+                "run_verify_parquet_with_sha256 para conservar la huella de los "
+                "bytes leidos"
+            )
+        ingesta_ref_m1 = ingesta.parquet_sha256
         configuracion = self._configuracion_efectiva(evaluation)
         # La posesion pertenece a esta llamada: una colision rechazada no puede
         # finalizar una ejecucion ajena ni heredar la posesion de un intento previo.
@@ -178,6 +182,7 @@ class ControladorEvaluacion:
         ajustes = evaluation.settings
         efectivos = {
             **evaluation.fitting.m2_settings,
+            "code": self.codigo_version,
             "min_train": ajustes.min_train,
             "horizon": ajustes.horizon,
             "step": ajustes.step,
