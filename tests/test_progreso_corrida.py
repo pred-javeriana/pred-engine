@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from pred_engine.cli import main
+from tests._plataforma import crear_base_plataforma
 
 _ARGS = [
     "--trials", "1", "--min-train", "40", "--horizon", "2", "--step", "14",
@@ -40,6 +41,8 @@ def _correr(
     raiz: Path, capsys: pytest.CaptureFixture[str], **kw: Any
 ) -> dict[str, Any]:
     csv = _csv(raiz, **kw)
+    if not (raiz / "data" / "pred.db").exists():
+        crear_base_plataforma(raiz / "data" / "pred.db")
     main(["run", "--csv", str(csv), "--data-root", str(raiz / "data"), *_ARGS])
     return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
@@ -64,8 +67,9 @@ def test_la_corrida_deja_un_flujo_completo_y_coherente(
     assert eventos[0]["schema"] == "pred-engine.progreso/1"
     assert eventos[0]["attempt"] == 1 and eventos[0]["run_id"] == resumen["run_id"]
     assert eventos[-1]["event"] == "run_finished"
-    # L4 no existe: la corrida termina sin fallos y con el codigo de salida 7.
-    assert (eventos[-1]["state"], eventos[-1]["exit_code"]) == ("completed", 7)
+    # La evaluacion reservada queda publicada en la misma base de plataforma.
+    assert (eventos[-1]["state"], eventos[-1]["exit_code"]) == ("completed", 0)
+    assert resumen["m3"]["estado"] == "PUBLICADA"
 
     etapas = [
         (e["stage"], e["event"]) for e in eventos if e["event"].startswith("stage_")

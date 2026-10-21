@@ -65,6 +65,7 @@ def test_ingesta_aceptada_deja_el_informe_completo(tmp_path: Path) -> None:
     assert datos["ingest_id"] == _sha(origen)
     assert datos["status"] == "accepted"
     assert datos["source_file"] == {
+        "datos_sinteticos": None,
         "name": "ventas.csv",
         "sha256": _sha(origen),
         "row_count": 120,
@@ -81,6 +82,7 @@ def test_ingesta_aceptada_deja_el_informe_completo(tmp_path: Path) -> None:
         "n_skus": 2,
     }
     assert datos["published"]["parquet_path"] == "processed/ventas.parquet"
+    assert datos["published"]["sha256"] == _sha(raiz / "processed/ventas.parquet")
     assert datos["published"]["columns"][-1] == "sku_class"
     assert datos["error"] is None
     assert datos["quality_log"] == []

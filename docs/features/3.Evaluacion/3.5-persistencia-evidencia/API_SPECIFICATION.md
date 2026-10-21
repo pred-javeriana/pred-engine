@@ -1,107 +1,131 @@
-# API — Evaluacion 3.5 (Persistencia y publicacion de evidencia)
+# API: persistencia de evidencia M3
 
-Identificadores, comentarios y mensajes en espanol. Recibe una
-`sqlite3.Connection` ya abierta sobre la base de la plataforma (con la
-migracion 0002 aplicada); no crea tablas ni orquesta.
+Punto de entrada: `pred_engine.forecasting.persistencia_evidencia`.
+La conexión pertenece al llamador. Cada operación abre su propia transacción;
+no se debe entregar una conexión con trabajo ajeno pendiente.
 
-Punto de entrada: `pred_engine.forecasting.persistencia_evidencia`
-
-## Constantes
-
-| Nombre | Valor |
-| --- | --- |
-| `VENTANA_AGREGADA` | `"agregada"` (valor de `m3_metricas.ventana` para las metricas agregadas) |
-| `TABLAS` | las ocho tablas `m3_*`; `publicar` las exporta todas |
-| `TABLAS_POR_SKU` | las que tienen columna `sku`: `m3_skus`, `m3_fallos`, `m3_unidades`, `m3_pronosticos`, `m3_metricas`, `m3_veredictos` |
-
-## Tipos (`contratos.py`)
-
-### `EstadoCorrida`
-
-`Literal["EN_CURSO", "EVALUADA", "SELECCIONADA", "PUBLICADA", "RECHAZADA"]`.
-
-### `IdentidadCorrida` (Pydantic, estricto y congelado)
-
-| Campo | Tipo |
-| --- | --- |
-| `ingesta_ref_m1` | `str` (hash del Parquet de M1) |
-| `configuracion_id` | `str` |
-| `codigo_version` | `str` |
-| `t_corte_reserva` | `date` |
-| `version_politica` | `str` |
-| `version_metricas` | `str` |
-
-- `canonica() -> str`: JSON con claves ordenadas; es lo que se guarda en
-  `m3_corridas.identidad`.
-- `run_id -> str`: `"m3-"` + 16 hex del SHA-256 de `canonica()`.
-
-## Funciones (`repositorio.py`)
+## Base central y migraciones
 
 ```python
+abrir_base_plataforma(ruta: str | Path)  # context manager -> sqlite3.Connection
+aplicar_migraciones_m3(conn) -> tuple[int, ...]
+textos_migraciones_m3() -> tuple[tuple[int, str], ...]
 esquema_m3() -> str
+```
+
+`abrir_base_plataforma` usa modo `rw`, nunca crea un archivo ausente y aplica
+solo las migraciones M3 pendientes. La versión vigente es 9, con las migraciones 0005 a 0009. Se exige una base
+de plataforma de versión 4 o posterior conocida. Base ausente, transacción
+ajena o versión desconocida producen `BasePlataformaError` sin crear otra base.
+La migración y el cambio de versión son atómicos; una repetición no los duplica.
+
+## Identidad y registro
+
+`IdentidadCorrida` es Pydantic estricto e inmutable: `ingesta_ref_m1`,
+`configuracion_id`, `codigo_version`, `t_corte_reserva`, `version_politica` y
+`version_metricas`. `canonica()` produce JSON ordenado y `run_id` lo identifica
+como `m3-` seguido de 16 dígitos hexadecimales.
+
+```python
 registrar_corrida(
     conn, identidad: IdentidadCorrida,
     handoff: HandoffValidado | LoteRechazadoError,
-    *, ingesta_sha256: str, datos_sinteticos: bool,
+    *, ingesta_sha256: str, datos_sinteticos: bool | None, run_id_m2: str | None = None,
 ) -> str
-guardar_unidades(conn, run_id: str, sku: str, serie: SerieCandidato) -> int
-unidades_confirmadas(conn, run_id: str) -> frozenset[tuple[str, str, pd.Timestamp]]
-marcar_evaluada(conn, run_id: str) -> None
-guardar_evaluacion(
-    conn, run_id: str,
-    evaluaciones: Sequence[EvaluacionSku], resultado: ResultadoEvaluacion,
+```
+
+Un handoff válido crea EN_CURSO, sus SKU y sus fallos de candidato. Un rechazo
+crea RECHAZADA con causa o marca así la corrida incompleta existente. Una
+PUBLICADA conserva su estado y evidencia. Repetir un handoff compatible no
+cambia los datos.
+Referencias u origen de datos incompatibles producen
+`EvidenciaInconsistenteError`. El origen real o sintético queda ligado a la
+ingesta, no se cambia para obtener otro resultado estadístico. `None` es origen
+desconocido: no admite VALIDADO ni valores p. En SQLite, `origen_declarado=0`
+representa esa ausencia; el bit `datos_sinteticos=0` por sí solo no declara
+datos reales. Las declaraciones conocidas tienen `origen_declarado=1`.
+
+## Unidades
+
+```python
+guardar_unidades(
+    conn, run_id: str, sku: str, serie: SerieCandidato,
+    *, codigo_version: str | None = None, semilla: int | None = None,
+    emitido_en: datetime | None = None,
+    fallos: Mapping[pd.Timestamp, FalloPronostico] | None = None,
+) -> int
+unidades_confirmadas(conn, run_id) -> frozenset[tuple[str, str, pd.Timestamp]]
+marcar_evaluada(conn, run_id) -> None
+```
+
+Cada origen confirma marcador y sus H valores en la misma transacción. La
+función devuelve las unidades nuevas. Una unidad ya confirmada o fallida no
+se reescribe. Los fallos conservan estado `fallida` y causa estructurada; los
+valores inválidos se guardan como NULL. Si hay protocolo congelado, no se
+pasa a EVALUADA hasta confirmar el total previsto.
+
+## Recuperación
+
+Punto de entrada: `pred_engine.forecasting.persistencia_evidencia.recuperacion`.
+
+```python
+fijar_protocolo(
+    conn, run_id, *, protocolo, manifiesto, procedencia,
+    reserva_abierta_en, n_unidades_previstas, ejecucion_id=None,
 ) -> None
-publicar(conn, run_id: str, directorio: str | Path) -> dict[str, Path]
-estado_corrida(conn, run_id: str) -> EstadoCorrida | None
-consultar(conn, run_id: str, *, sku: str | None = None) -> dict[str, pd.DataFrame]
+guardar_unidad_generada(conn, run_id, unidad: UnidadPronostico) -> None
+cargar_unidades(conn, run_id, candidato) -> tuple[UnidadPronostico, ...]
+cargar_serie(conn, run_id, sku, candidato_id, familia, modelo) -> SerieCandidato
+candidatos_con_fallos(conn, run_id, sku) -> frozenset[str]
+protocolo_guardado(conn, run_id) -> dict | None
 ```
 
-| Funcion | Estados admitidos | Efecto |
+El protocolo, el handoff y el plan no se reemplazan. Las lecturas reconstruyen
+fechas, NaN para NULL y metadatos originales. Una secuencia H incompleta,
+fechas corruptas o trazabilidad incompatible se rechazan antes de reutilizar
+la unidad. Los candidatos con fallos parciales también limitan la comparación
+mediante `comparacion_incompleta`.
+
+## Evaluación y publicación
+
+```python
+guardar_evaluacion(conn, run_id, evaluaciones, resultado) -> None
+publicar(conn, run_id, directorio: str | Path) -> dict[str, Path]
+estado_corrida(conn, run_id) -> EstadoCorrida | None
+consultar(conn, run_id, *, sku: str | None = None) -> dict[str, pd.DataFrame]
+```
+
+| Operación | Estado admitido | Resultado |
 | --- | --- | --- |
-| `registrar_corrida` | no registrada | `EN_CURSO` con `m3_skus` (SKUs de candidatos y fallos) y `m3_fallos`, o `RECHAZADA` con `causa_rechazo = "motivo: detalle"`; si ya existe, no cambia nada |
-| `guardar_unidades` | `EN_CURSO` | una unidad por origen y sus pronosticos (`h` desde 1); devuelve las nuevas; las ya confirmadas no se tocan. Sirve tambien para Seasonal Naive (`pronosticar_linea_base` de 3.4) |
-| `marcar_evaluada` | `EN_CURSO`, `EVALUADA` | pasa a `EVALUADA` |
-| `guardar_evaluacion` | `EVALUADA`, `SELECCIONADA` | controla versiones, origen de datos y pronosticos confirmados; escribe metricas, categorias y veredictos (con Diebold-Mariano) y pasa a `SELECCIONADA`; en `SELECCIONADA` no escribe |
-| `publicar` | `SELECCIONADA`, `PUBLICADA` | exige veredicto para todo SKU de `m3_skus`, pasa a `PUBLICADA` y escribe `directorio/run_id/<tabla>.parquet` en la misma transaccion; en `PUBLICADA` solo devuelve las rutas |
+| `guardar_unidades` | EN_CURSO | Unidades y pronósticos nuevos |
+| `marcar_evaluada` | EN_CURSO, EVALUADA | EVALUADA |
+| `guardar_evaluacion` | EVALUADA, SELECCIONADA | Métricas, selección, veredictos y cartera; SELECCIONADA |
+| `publicar` | SELECCIONADA, PUBLICADA | Exportaciones completas y PUBLICADA |
 
-- Fechas como texto `AAAA-MM-DD`. Valores no finitos o de forma invalida se
-  guardan como NULL.
-- `m3_metricas` guarda `n_pares`, `mae`, `rmse`, `me`, `mase` y `razon_sn` por
-  ventana y agregadas, mas `n_ventanas_totales`, `n_ventanas_validas` y
-  `n_pronosticos_validos` en `agregada`.
-- `m3_categorias` guarda como JSON `medianas_r`, `skus_comparables`,
-  `excluidos`, `familias_excluidas`, `conteos` y `porcentajes`.
-- `m3_veredictos` guarda la prueba de `VeredictoSku.diebold_mariano` en
-  `dm_n_ventanas`, `dm_horizonte`, `dm_estadistico`, `dm_p_valor`,
-  `dm_p_ajustado`, `dm_alfa`, `dm_significativa` y `dm_causa`.
-- `consultar` lee en orden de insercion, con el tipo declarado en el esquema
-  para cada columna (`INTEGER` -> `Int64`, `REAL` -> `Float64`, `TEXT` ->
-  `string`); con `sku` devuelve solo `TABLAS_POR_SKU`. El Parquet es
-  exactamente ese `DataFrame`.
+`guardar_evaluacion` comprueba versiones, origen de datos y ventanas durables
+antes de escribir. Publica MAE, RMSE, MASE, ME y razón por candidato, ventana
+y agregadas. `m3_cartera` contiene media, mediana, percentiles 25 y 75 y
+conteos de SKU, instancias y valores no calculables por clase/familia/métrica.
 
-## Vista `evidencia_publicada`
+`publicar` devuelve las rutas Parquet por tabla. Cada ruta tiene su CSV
+hermano con extensión `.csv`. Ambos se derivan de SQLite dentro de la
+publicación. Los archivos se preparan antes del renombrado del directorio y
+la vista solo expone la corrida después del commit. Una corrida PUBLICADA no
+se modifica; otra evaluación exige identidad nueva.
 
-`m3_veredictos.*` mas `datos_sinteticos` e `identidad` de la corrida, solo para
-corridas `PUBLICADA`. Es lo que consume M4 (ADR-03-010).
+`consultar` conserva los tipos SQLite: INTEGER -> `Int64`, REAL -> `Float64`,
+TEXT -> `string`. Con `sku` devuelve solo tablas con esa columna. Los NULL
+conservan su causa en las métricas y fallos. CSV no codifica tipos por sí solo;
+SQLite y Parquet siguen siendo la referencia tipada.
 
-## Excepciones (`errores.py`)
+## Lectura de plataforma
 
-```
-PersistenciaEvidenciaError(Exception)
-├── EstadoCorridaError(run_id, estado, operacion)   # no registrada, fase equivocada o cerrada
-└── EvidenciaInconsistenteError                     # versiones u origen de datos distintos,
-                                                    # modelo sin pronosticos, SKU sin veredicto
-```
+`pred_platform.dal.evidencia.read_m3_evidence(db_path, run_id, sku=None)` acepta
+la identidad M2 o M3 y devuelve registros precalculados solo de corridas
+PUBLICADA. `m3_run_status` devuelve estado, causa y avance sin métricas
+parciales. Ambas funciones abren SQLite en modo de solo lectura.
 
-Los errores de SQLite (por ejemplo, `ingesta_sha256` que no esta en
-`ingestas`, evidencia de un SKU fuera de `m3_skus`, o un `CHECK` violado) se
-propagan como `sqlite3.IntegrityError` tras revertir la transaccion. Un error
-al escribir el Parquet tambien revierte la publicacion.
-
-## Logging
-
-- `INFO` al registrar (SKUs y fallos), por lote de unidades (nuevas de total)
-  y en cada cambio de estado.
-- `ERROR` antes de cada `EstadoCorridaError` o `EvidenciaInconsistenteError`
-  (`operacion`, `run_id`, `estado`) y al revertir por cualquier otro error.
-- Sin series de demanda ni PII en los mensajes.
+`EstadoCorridaError` rechaza escrituras en una fase incorrecta o cerrada.
+`EvidenciaInconsistenteError` rechaza incoherencias de datos. Un error SQLite
+o de exportación se propaga tras revertir la transacción. Los logs contienen
+operación, corrida, SKU y causa, no series completas de demanda.

@@ -1,195 +1,131 @@
 # Coordinated backend pipeline
 
-## Repository implementation state
+`pred_engine.pipeline.Pipeline` owns the fixed L1 -> L2 -> L3 -> L4 transition
+path. Library callers, the CLI and the bounded offline diagnostic use that
+same application service. Phase 0 is an optional input producer, not a fifth
+principal stage.
 
-- **L1, implemented:** `ingesta.pipeline` extracts/validates canonical CSVs,
-  optionally probes semantics through an injected LLM, resamples daily,
-  characterises SKUs and publishes the validated five-column Parquet contract.
-- **L2, implemented:** topology routing delegates to classical SARIMA, ML
-  LightGBM, DL NumPy MLP or frozen foundation selection. The first three use
-  shared HPO; foundation is zero-shot and requires optional dependencies and
-  pretrained weights for inference. All four have real forecasters.
-- **L3, partial:** `comun.walkforward.evaluar_walk_forward` performs causal
-  window refits and computes MAE/RMSE/sMAPE/MASE. The forecasting generators
-  namespace (3.3) is still empty. The pipeline runs the working walk-forward
-  capability and explicitly records L3's partial maturity; it does not invent
-  statistical comparison evidence.
-- **L4, absent from the pipeline:** M3's pieces exist as library code (3.2
-  candidate adapter, 3.4 reserve evaluation with verdicts and HLN
-  Diebold-Mariano, 3.5 evidence persistence; see `docs/features/3.Evaluacion/`),
-  but the pipeline does not call them yet: `RetrospectiveValidator` stays unset
-  until the 3.0/3.3 orchestration exists. The M4 analysis and report namespaces
-  are empty. The pipeline stops at L4 with no L4 output.
+## Stages
 
-Phase 0 augmentation is an input producer, not a fifth principal stage.
+- **L1:** canonical or semantic CSV ingestion, daily resampling, topology
+  classification and the five-column immutable Parquet contract. A classified
+  Parquet can enter directly without republishing raw data.
+- **L2:** topology routing, per-family HPO, fitting on history <= t* and the
+  forecast from t*. Each SKU/family is an isolated unit. Core families are
+  SARIMA, LightGBM and NumPy MLP. Chronos-2 is opt-in, CPU-only and requires
+  its optional dependencies and fixed local weights.
+- **L3:** causal walk-forward evaluation on the same admissible history used
+  by HPO. Each window has a new fit. `selection_scope="same_history"` makes
+  the limitation explicit. These diagnostic metrics are not a holdout verdict.
+- **L4:** native M3 through `ControladorEvaluacion`: strict M2 handoff,
+  complete daily reserved windows, category selection, five descriptive
+  verdicts, complementary HLN-DM/BH and durable publication to the central
+  platform database.
 
-> **Ejecución M0 → M1 → M2 (ADR-017, ADR-019).** M1 clasifica con la historia
-> hasta t* (ADR-019) y L2/L3 trabajan solo con esa misma historia anterior al
-> corte de la reserva del 20 % (ADR-03-003) y corren cada SKU × familia como
-> unidad aislada, en paralelo con `workers > 1`. `pred-engine run` persiste cada
-> corrida en `{data_root}/runs/{run_id}/` y reutiliza el control de reanudación
-> de 2.9 para los estudios HPO. Ver [EJECUCION_M0_M2.md](EJECUCION_M0_M2.md)
-> para comandos, artefactos y reanudación.
+L2/L3 retain independent process units with `workers > 1`. A unit failure
+preserves the rest of its stage; no successful unit means a stage error.
+M3 records forecast failures per origin without substituting zeros.
 
-## Application boundary
-
-`pred_engine.pipeline` contains the execution semantics. `Pipeline.run` is the
-only transition loop. No CLI, HTTP server, queue or workflow platform is needed.
-The existing CLI and `pred_engine.verify` are two callers of this service, not
-implementations of stage transitions.
+## Composition
 
 ```python
+from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
+from pred_engine.forecasting.persistencia_evidencia import abrir_base_plataforma
 from pred_engine.pipeline import EvaluationSettings, PipelineInput
 from pred_engine.pipeline_setup import build_pipeline
+from pred_engine.run_artifacts import code_fingerprint
 
-pipeline = build_pipeline(
-    EvaluationSettings(min_train=40, horizon=7, step=7, seasonality=7),
-    families=("classical", "ml", "dl"),
-    n_trials=4,
-    seed=42,
-)
-run = pipeline.run(PipelineInput(csv_path="sales.csv", data_root="data"))
+# workers > 1 starts spawned processes, so a script needs this guard.
+if __name__ == "__main__":
+    with abrir_base_plataforma("data/pred.db") as conn:
+        validator = ControladorEvaluacion(
+            conn, "data/runs/sales", run_id_m2="sales",
+            codigo_version=code_fingerprint(), datos_sinteticos=False,
+            data_root="data",
+        )
+        pipeline = build_pipeline(
+            EvaluationSettings(min_train=60, horizon=7, step=28),
+            families=("classical", "ml"), n_trials=10, workers=4,
+            hpo_root="data/runs/sales/hpo", session="sales", validator=validator,
+        )
+        result = pipeline.run(
+            PipelineInput(csv_path="sales.csv", data_root="data", datos_sinteticos=False)
+        )
 ```
 
-`n_trials=None` preserves the original per-profile strategy budgets. A run
-requires sufficient history for the configured search spaces and at least four
-HPO windows; it never silently reduces model capacity to accommodate short data.
-`ConfiguredTopologyPolicy` filters an explicitly configured subset of the
-existing initial matrix without changing that matrix. For example, it does not
-route DL for lumpy or intermittent SKUs. A subset with no permitted family for
-an encountered SKU fails at L2 rather than skipping that SKU. Foundation can be
-included explicitly. Si su dependencia opcional o sus pesos no están
-disponibles, cada unidad fundacional falla en L2 (al pronosticar desde t*) y
-queda registrada como falla aislada.
+The platform migrator creates the database first. The engine opens it in
+read/write-existing mode and applies pending M3 migrations, never another
+standalone database. The same database and schema version serve platform and
+CLI runs. Inputs select exactly one CSV or classified Parquet. Semantic
+probing remains an injected provider for CSV inputs only.
 
-Inputs select exactly one source:
+`ConfiguredTopologyPolicy` filters an explicit subset of the existing matrix.
+It never routes ML/DL for lumpy SKUs or DL for intermittent SKUs. A configured
+subset with no eligible family fails explicitly. `n_trials=None` preserves
+the original strategy budgets and never silently reduces model capacity.
 
-- `PipelineInput(csv_path=..., data_root=...)`: existing canonical CSV path.
-- Add `provider=...` and optionally `timeout=...`: existing semantic ingestion.
-- `PipelineInput(parquet_path=...)`: read and validate an already classified
-  artifact, without repeating raw extraction or characterisation.
-
-L1 always reads the published 1.4 Parquet contract before downstream use. L2
-calcula el corte t* (`ReserveCut`), recorta cada SKU a su historia admisible,
-excluye con causa registrada los SKU con huecos de calendario, demanda no
-finita, historia insuficiente o sin observaciones reservadas, construye
-`SelectionRequest`s tipados y ejecuta cada decisión del router como unidad
-independiente (`SelectionRouter.plan` y `execute`). Every native strategy now
-exposes `SelectionResult.forecast_config` in its model factory's format, plus
-`forecast_seed`. Evidence remains in the original `payload`; no caller must
-parse that evidence or reconstruct seasonal feature settings. Old custom
-strategies remain usable with the router alone; a strategy used in coordinated
-fitting must supply this new configuration boundary.
-
-L2 devuelve, por candidato, la configuración seleccionada, la historia
-admisible y el pronóstico de los días reservados desde t* (`FittedCandidate.forecast`).
-Un pronóstico degenerado hace fallar su unidad con la causa bajo la regla #3
-(ADR-020). El modelo ajustado no se conserva: se reconstruye con la fábrica, la
-configuración y la semilla. L3 creates fresh models for each causal window; it
-never evaluates using the full-history fitted instance. It preserves the existing walk-forward algorithm, metrics and
-seed derivation. Configuration search and L3 evaluation use the same history:
-`EvaluationArtifact.selection_scope` is `same_history`. These metrics are not an
-unbiased holdout or a retrospective verdict. Statistical comparison remains
-explicitly unavailable.
-
-## Results and independent stages
-
-A `PipelineResult` always represents exactly L1, L2, L3 and L4, with execution
-states `pending`, `completed`, `blocked` or `failed`. Execution completion means
-the configured working capability ran; repository maturity is a separate field.
-Thus L3 can have a completed walk-forward execution while still being partial.
-`complete` means all four configured stage operations returned artifacts, not
-that all planned PRED scientific capabilities have been implemented.
-
-With the repository's current default composition:
-
-- L1, L2 and the implemented L3 capability complete without caller handoffs.
-- `run.blocked_stage` is `L4`, `run.complete` is false, `run.validation` is None.
-- `run.ingestion`, `run.fitting` and `run.evaluation` retain actual outputs.
-
-Each operation is independently callable for diagnostics and integration:
+## Independent stages
 
 ```python
-ingestion = pipeline.ingest(PipelineInput(csv_path="sales.csv", data_root="data"))
+ingestion = pipeline.ingest(request)
 fitting = pipeline.fit(ingestion)
 evaluation = pipeline.evaluate(fitting)
-# pipeline.validate(evaluation) raises StageUnavailableError without real L4.
+validation = pipeline.validate(evaluation)
 ```
 
-This manual sequence is for isolating stages, not required by `run`. The existing
-`run_ingest`, `run_classify_csv`, router strategy `.select`, native `.fit` and
-`evaluar_walk_forward` APIs also remain available.
+`FittingArtifact` contains the reserve cut, selected recipes, admissible
+history, forecasts from t*, exclusions and unit records. `EvaluationArtifact`
+contains the causal L3 windows and settings. Native L4 consumes all M2 fitted
+candidates, not just those whose L3 reevaluation completed.
 
-Una unidad SKU × familia que falla en L2 o L3 no detiene su etapa: queda en
-`FittingArtifact.units` o `EvaluationArtifact.units` con su error, y
-`PipelineResult.failures` las reúne. Una etapa falla solo cuando ninguna unidad
-produce resultado. Stage failures raise `PipelineExecutionError` with `.stage`,
-`.result` and the original exception as `__cause__`. The partial result preserves completed-stage
-outputs, marks the failing stage and leaves subsequent stages pending. A
-missing L4 is instead an expected blocked result. Neither case fabricates a
-successful continuation.
+`ValidationArtifact` exposes one `SkuVerdict` per handed-off SKU and an
+`audit_bundle` with M3 identity, publication, coverage and export paths.
+Native verdicts are FALLO_TECNICO, NO_EVALUABLE, EVIDENCIA_INSUFICIENTE,
+VALIDADO and EXPLORATORIO. The legacy hold/partial/fail vocabulary remains
+accepted only for existing caller-provided validators; native M3 never uses it.
 
-## Future attachment points
+Applications can still inject their own router, factories and
+`RetrospectiveValidator`. A caller-provided validator is marked as such.
+A library pipeline without a validator leaves L4 blocked by missing database
+configuration; it does not claim evaluation occurred. The CLI always composes
+native M3 when its database prerequisite is satisfied.
 
-Applications with custom search spaces, budgets or existing recovery settings
-can register their current strategies in `StrategyRegistry`, compose a
-`SelectionRouter` and construct `Pipeline(router, evaluation, factories=...)`.
-`pipeline_setup.model_factories()` provides the native family factories. These
-contracts avoid coupling applications to the diagnostic CLI or its defaults.
+## Results and failures
 
-`RetrospectiveValidator` is the explicit future L4 boundary:
+`PipelineResult` contains exactly four stage records with pending, completed,
+blocked or failed states. `complete` means all configured operations completed,
+not that every model won or every SKU had sufficient evidence.
+`PipelineExecutionError` retains the failed stage, completed outputs and
+original cause. `PipelineResult.failures` retains isolated L2/L3 failures;
+native M3's audit bundle also reports technical forecast failures.
 
-```python
-from pred_engine.pipeline import Pipeline
+The CLI returns 0 for complete publication, 8 for publication with isolated
+technical failures and 1 for stage, identity or database failure. A rejected
+handoff is stored as RECHAZADA before reserved windows run. Statistical losses
+against the baseline are empirical results, not technical process failures.
 
-pipeline = Pipeline(
-    router,
-    evaluation_settings,
-    factories=factories,
-    validator=actual_retrospective_validator,
-)
-```
+## Recovery and publication
 
-The validator consumes `EvaluationArtifact`, including original selection,
-model and window evidence. It must return `ValidationArtifact` with exactly one
-`SkuVerdict` per evaluated SKU and a nonempty `audit_bundle`. Verdicts are
-`hold`, `partial` or `fail`. The adapter is marked `caller_provided`, never
-misrepresented as a repository implementation. Completing this boundary needs
-no changes to callers or the transition loop. No example validator is shipped.
-L3 statistical comparison can be added to `EvaluationArtifact` and `evaluate`
-without changing its input boundary or introducing another principal stage.
+M2 reuses its HPO manifests and completed trials. M3 freezes its protocol and
+handoff before reserved observations are used. It confirms result, marker and
+failure cause together for each origin. A restart loads confirmed forecasts
+and executes only pending origins, then resumes evaluation or publication from
+the durable run phase. The M2 handoff emission does not change on resume.
 
-## Technical proof and diagnostics
+The central database is authoritative. CSV and Parquet are complete derived
+exports prepared before the final directory rename. Platform readers expose
+only PUBLICADA evidence, so a stopped run never appears as a completed result.
+See [M3](../3.Evaluacion/README.md), its API pages and ADR-021 for exact contracts.
 
-After installation, run `python3 -m pred_engine.verify` (or
-`uv run python -m pred_engine.verify`). The proof creates temporary canonical
-input and exercises real bounded SARIMA HPO, model fitting and every causal
-window. It checks the four-stage catalog, automatic transitions, exact L4
-blockage, parity with native and independent stage entry points, and the
-separate CLI diagnostic adapter. It enforces an elapsed-time budget of 30
-seconds and requires no API key, foundation download or operator handoff.
+## Diagnostics and verification
 
-Exit `0` means these checks passed, not that L4 exists. The JSON report keeps
-`complete: false`, `blocked_stage: L4` and the explicit missing-stage message.
-There are no simulated unfinished-stage outputs in this proof.
+`python -m pred_engine.verify` remains a bounded offline L1-L3 diagnostic with
+real SARIMA fitting and no platform database. It explicitly leaves L4
+unconfigured. Its zero exit means its diagnostic checks passed, not that M3
+was executed. Full M3 verification requires a platform database and the real
+`pred-engine run` command, followed by independent SQLite/platform readback.
 
-The existing operator CLI gains a utilitarian `run` diagnostic:
-
-```bash
-pred-engine run --csv sales.csv --data-root data --trials 4
-pred-engine run --parquet data/processed/sales.parquet --families classical
-```
-
-It prints a JSON-safe stage summary and returns `7` on an unfinished-stage
-blocker, `8` cuando además hubo unidades fallidas aisladas, `1` on failure, or
-`0` only when all configured operations finish. La corrida queda persistida en
-`{data_root}/runs/{run_id}/`; `--seed-csv` antepone la Fase 0 y `--workers`
-fija la cantidad de procesos.
-Existing `ingest`, `classify`, `probe`, `models` and `verify --parquet` behavior is
-unchanged. This command is not the eventual human-facing UI.
-
-`tests/test_pipeline.py` covers native parity, multiple SKUs, both CSV adapters,
-classified-artifact entry, failure retention, core family configuration
-handoffs, and the L4 callback contract. Its test-only L4 adapter proves boundary
-wiring, not a scientific implementation, and is never used by the proof entry
-point.
+The tests cover input contracts, native model parity, reserve isolation,
+parallel units, checkpoints, native M3, interrupted commits, publication and
+caller-provided validators. Tests do not replace the coordinated live run of
+both installed repositories against a run-scoped platform database.

@@ -10,6 +10,7 @@ import pytest
 
 from pred_engine.cli import main
 from pred_engine.verify import representative_csv
+from tests._plataforma import crear_base_plataforma
 
 _ARGS = [
     "--trials",
@@ -30,6 +31,8 @@ _ARGS = [
 def _correr(
     csv: Path, raiz: Path, capsys: pytest.CaptureFixture[str], *extra: str
 ) -> tuple[int, dict[str, Any]]:
+    if not (raiz / "pred.db").exists():
+        crear_base_plataforma(raiz / "pred.db")
     codigo = main(["run", "--csv", str(csv), "--data-root", str(raiz), *_ARGS, *extra])
     ultima = capsys.readouterr().out.strip().splitlines()[-1]
     return codigo, json.loads(ultima)

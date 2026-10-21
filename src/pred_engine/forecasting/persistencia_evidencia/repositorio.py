@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
-from collections.abc import Collection, Iterable, Iterator, Sequence
+import tempfile
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict
+from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -34,6 +37,7 @@ from pred_engine.forecasting.evaluaciones.calculo_errores import (
     SerieCandidato,
 )
 from pred_engine.forecasting.evaluaciones.veredictos import ResultadoEvaluacion
+from pred_engine.forecasting.generador_pronosticos import FalloPronostico
 from pred_engine.forecasting.persistencia_evidencia.contratos import (
     EstadoCorrida,
     IdentidadCorrida,
@@ -55,7 +59,13 @@ TABLAS_POR_SKU = (
     "m3_metricas",
     "m3_veredictos",
 )
-TABLAS = ("m3_corridas", "m3_categorias", *TABLAS_POR_SKU)
+TABLAS = (
+    "m3_corridas",
+    "m3_protocolos",
+    "m3_categorias",
+    "m3_cartera",
+    *TABLAS_POR_SKU,
+)
 
 _METRICAS = ("n_pares", "mae", "rmse", "me", "mase", "razon_sn")
 _CONTEOS = ("n_ventanas_totales", "n_ventanas_validas", "n_pronosticos_validos")
@@ -64,7 +74,7 @@ _DTYPES = {"INTEGER": "Int64", "REAL": "Float64", "TEXT": "string"}
 
 
 def esquema_m3() -> str:
-    """DDL de las tablas `m3_*`; la plataforma lo aplica como su migracion 0002."""
+    """DDL inicial de las tablas `m3_*`, publicado como migracion 0005."""
     paquete = files("pred_engine.forecasting.persistencia_evidencia")
     return paquete.joinpath("esquema_m3.sql").read_text(encoding="utf-8")
 
@@ -75,7 +85,8 @@ def registrar_corrida(
     handoff: HandoffValidado | LoteRechazadoError,
     *,
     ingesta_sha256: str,
-    datos_sinteticos: bool,
+    datos_sinteticos: bool | None,
+    run_id_m2: str | None = None,
 ) -> str:
     """Registra la corrida con el resultado de 3.2 y devuelve su `run_id`.
 
@@ -89,11 +100,18 @@ def registrar_corrida(
         estado, causa, run_id_m2, fallos, skus = (
             "RECHAZADA",
             f"{handoff.motivo}: {handoff.detalle}",
-            None,
+            run_id_m2,
             (),
             set(),
         )
     else:
+        if run_id_m2 is not None and run_id_m2 != handoff.run_id_m2:
+            raise _inconsistente("referencia M2 incompatible con el handoff")
+        if (
+            handoff.contexto.ingesta_ref_m1 != identidad.ingesta_ref_m1
+            or handoff.contexto.t_corte_reserva != identidad.t_corte_reserva
+        ):
+            raise _inconsistente("identidad incompatible con la particion del handoff")
         estado, causa, run_id_m2, fallos = (
             "EN_CURSO",
             None,
@@ -103,20 +121,73 @@ def registrar_corrida(
         skus = {c.sku for c in handoff.candidatos} | {f.sku for f in fallos}
     run_id = identidad.run_id
     with _transaccion(conn):
+        origenes = conn.execute(
+            "SELECT DISTINCT datos_sinteticos FROM m3_corridas "
+            "WHERE ingesta_sha256 = ?1 AND origen_declarado=1 UNION "
+            "SELECT datos_sinteticos FROM m3_ingestas "
+            "WHERE ingesta_sha256 = ?1 AND origen_declarado=1 UNION "
+            # Los mismos bytes publicados por otra ingesta tampoco cambian de origen.
+            "SELECT datos_sinteticos FROM m3_ingestas "
+            "WHERE ingesta_ref_m1 = ?2 AND origen_declarado=1",
+            (ingesta_sha256, identidad.ingesta_ref_m1),
+        ).fetchall()
+        if any(bool(f[0]) != datos_sinteticos for f in origenes):
+            raise _inconsistente(
+                "el origen real o sintetico de una ingesta no puede cambiar"
+            )
+        conn.execute(
+            "INSERT INTO m3_ingestas "
+            "(ingesta_sha256, ingesta_ref_m1, datos_sinteticos, origen_declarado) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (ingesta_sha256, ingesta_ref_m1) "
+            "DO UPDATE SET datos_sinteticos=excluded.datos_sinteticos, "
+            "origen_declarado=excluded.origen_declarado "
+            "WHERE m3_ingestas.origen_declarado=0",
+            (
+                ingesta_sha256,
+                identidad.ingesta_ref_m1,
+                bool(datos_sinteticos),
+                datos_sinteticos is not None,
+            ),
+        )
         nueva = conn.execute(
             "INSERT INTO m3_corridas (run_id, ingesta_sha256, run_id_m2, identidad,"
-            " datos_sinteticos, estado, causa_rechazo) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " datos_sinteticos, estado, causa_rechazo, origen_declarado) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (run_id) DO NOTHING",
             (
                 run_id,
                 ingesta_sha256,
                 run_id_m2,
                 identidad.canonica(),
-                datos_sinteticos,
+                bool(datos_sinteticos),
                 estado,
                 causa,
+                datos_sinteticos is not None,
             ),
         ).rowcount
+        if not nueva:
+            previa = conn.execute(
+                "SELECT identidad, ingesta_sha256, run_id_m2, datos_sinteticos, "
+                "origen_declarado "
+                "FROM m3_corridas WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if previa != (
+                identidad.canonica(),
+                ingesta_sha256,
+                run_id_m2,
+                bool(datos_sinteticos),
+                datos_sinteticos is not None,
+            ):
+                raise _inconsistente(
+                    "referencias u origen de datos incompatibles con la corrida previa"
+                )
+        if not nueva and isinstance(handoff, LoteRechazadoError):
+            conn.execute(
+                "UPDATE m3_corridas SET estado='RECHAZADA', causa_rechazo=? "
+                "WHERE run_id=? AND estado!='PUBLICADA'",
+                (causa, run_id),
+            )
         if nueva:
             conn.executemany(
                 "INSERT INTO m3_skus (run_id, sku) VALUES (?, ?)",
@@ -152,7 +223,15 @@ def registrar_corrida(
 
 
 def guardar_unidades(
-    conn: sqlite3.Connection, run_id: str, sku: str, serie: SerieCandidato
+    conn: sqlite3.Connection,
+    run_id: str,
+    sku: str,
+    serie: SerieCandidato,
+    *,
+    codigo_version: str | None = None,
+    semilla: int | None = None,
+    emitido_en: datetime | None = None,
+    fallos: Mapping[pd.Timestamp, FalloPronostico] | None = None,
 ) -> int:
     """Confirma las ventanas de un candidato y devuelve cuantas eran nuevas.
 
@@ -165,10 +244,64 @@ def guardar_unidades(
         _exigir_estado(conn, run_id, ("EN_CURSO",), "guardar_unidades")
         for pronostico in serie.pronosticos:
             origen = _fecha(pronostico.origen)
+            if conn.execute(
+                "SELECT 1 FROM m3_unidades WHERE run_id = ? AND sku = ? "
+                "AND candidato_id = ? AND origen = ?",
+                (run_id, sku, serie.candidato_id, origen),
+            ).fetchone():
+                continue
+            if not len(pronostico.fechas) or not pronostico.fechas.equals(
+                pd.date_range(
+                    pronostico.origen + pd.Timedelta(days=1),
+                    periods=len(pronostico.fechas),
+                )
+            ):
+                raise _inconsistente("ventana sin horizonte diario completo")
+            valores = _valores(pronostico)
+            fallo = (fallos or {}).get(pronostico.origen)
+            fallo_explicito = fallo is not None
+            if fallo is None and any(v is None for v in valores):
+                fallo = FalloPronostico(
+                    sku,
+                    serie.candidato_id,
+                    serie.modelo,
+                    pronostico.origen,
+                    "valores",
+                    "pronostico_invalido",
+                    f"sku={sku} candidato_id={serie.candidato_id}: salida invalida",
+                )
+            if fallo is not None:
+                if (
+                    fallo.sku != sku
+                    or fallo.candidato_id != serie.candidato_id
+                    or fallo.origen != pronostico.origen
+                    or fallo.modelo != serie.modelo
+                ):
+                    raise _inconsistente("fallo incompatible con su unidad")
+                if fallo_explicito:
+                    valores = [None] * len(pronostico.fechas)
+            causa = (
+                None
+                if fallo is None
+                else _json({**asdict(fallo), "origen": _fecha(fallo.origen)})
+            )
             confirmada = conn.execute(
                 "INSERT INTO m3_unidades (run_id, sku, candidato_id, origen, familia,"
-                " modelo) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                (run_id, sku, serie.candidato_id, origen, serie.familia, serie.modelo),
+                " modelo, estado, causa, emitido_en, codigo_version, semilla)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                (
+                    run_id,
+                    sku,
+                    serie.candidato_id,
+                    origen,
+                    serie.familia,
+                    serie.modelo,
+                    "confirmada" if fallo is None else "fallida",
+                    causa,
+                    None if emitido_en is None else emitido_en.isoformat(),
+                    codigo_version,
+                    semilla,
+                ),
             ).rowcount
             if not confirmada:
                 continue
@@ -179,7 +312,7 @@ def guardar_unidades(
                 [
                     (run_id, sku, serie.candidato_id, origen, h, _fecha(fecha), valor)
                     for h, (fecha, valor) in enumerate(
-                        zip(pronostico.fechas, _valores(pronostico), strict=True),
+                        zip(pronostico.fechas, valores, strict=True),
                         start=1,
                     )
                 ],
@@ -215,6 +348,19 @@ def marcar_evaluada(conn: sqlite3.Connection, run_id: str) -> None:
             conn, run_id, ("EN_CURSO", "EVALUADA"), "marcar_evaluada"
         )
         if estado == "EN_CURSO":
+            protocolo = conn.execute(
+                "SELECT n_unidades_previstas FROM m3_protocolos WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if protocolo is not None:
+                confirmadas = conn.execute(
+                    "SELECT COUNT(*) FROM m3_unidades WHERE run_id = ?", (run_id,)
+                ).fetchone()[0]
+                if confirmadas != protocolo[0]:
+                    raise _inconsistente(
+                        f"corrida {run_id}: {confirmadas} unidades "
+                        f"de {protocolo[0]} previstas"
+                    )
             _cambiar_estado(conn, run_id, "EVALUADA")
 
 
@@ -238,8 +384,9 @@ def guardar_evaluacion(
         if estado == "SELECCIONADA":
             _logger.info("Evaluacion ya guardada run_id=%s; sin cambios", run_id)
             return
-        texto, datos_sinteticos = conn.execute(
-            "SELECT identidad, datos_sinteticos FROM m3_corridas WHERE run_id = ?",
+        texto, datos_sinteticos, origen_declarado = conn.execute(
+            "SELECT identidad, datos_sinteticos, origen_declarado "
+            "FROM m3_corridas WHERE run_id = ?",
             (run_id,),
         ).fetchone()
         identidad = json.loads(texto)
@@ -251,7 +398,9 @@ def guardar_evaluacion(
                 f"identidad {declaradas}"
             )
         # ADR-03-008: con datos sinteticos no hay VALIDADO ni Diebold-Mariano.
-        if resultado.datos_sinteticos != bool(datos_sinteticos):
+        if resultado.datos_sinteticos != (
+            bool(datos_sinteticos) if origen_declarado else None
+        ):
             raise _inconsistente(
                 f"corrida {run_id}: veredictos emitidos con datos_sinteticos="
                 f"{resultado.datos_sinteticos}, distinto del de la corrida"
@@ -273,6 +422,23 @@ def guardar_evaluacion(
                 f"corrida {run_id}: {len(sin_pronosticos)} modelos evaluados sin "
                 f"pronosticos confirmados, por ejemplo {sin_pronosticos[0]}"
             )
+        for e in evaluaciones:
+            for c in (e.linea_base, *e.candidatos):
+                origenes = {
+                    pd.Timestamp(f[0])
+                    for f in conn.execute(
+                        "SELECT origen FROM m3_unidades WHERE run_id = ? "
+                        "AND sku = ? AND candidato_id = ?",
+                        (run_id, e.sku, c.candidato_id),
+                    )
+                }
+                if len(origenes) != c.n_ventanas_totales or any(
+                    v.origen not in origenes for v in c.por_ventana
+                ):
+                    raise _inconsistente(
+                        f"corrida {run_id}: ventanas sin confirmar "
+                        f"para {e.sku}/{c.candidato_id}"
+                    )
         conn.executemany(
             "INSERT INTO m3_metricas (run_id, sku, candidato_id, ventana, metrica,"
             " valor, causa) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -337,6 +503,12 @@ def guardar_evaluacion(
                 for v in resultado.skus
             ],
         )
+        conn.executemany(
+            "INSERT INTO m3_cartera (run_id, sku_class, familia, metrica, n_skus, "
+            "n_instancias, n_calculables, n_no_calculables, media, mediana, p25, p75) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            _filas_cartera(run_id, evaluaciones),
+        )
         _cambiar_estado(conn, run_id, "SELECCIONADA")
 
 
@@ -372,11 +544,78 @@ def publicar(
                 f"por ejemplo {sin_veredicto[0]}"
             )
         _cambiar_estado(conn, run_id, "PUBLICADA")
-        destino.mkdir(parents=True, exist_ok=True)
+        destino.parent.mkdir(parents=True, exist_ok=True)
         evidencia = consultar(conn, run_id)
-        for tabla, ruta in rutas.items():
-            _escribir_parquet(evidencia[tabla], ruta)
+        # Ningun archivo final aparece hasta que termina la exportacion completa.
+        with tempfile.TemporaryDirectory(
+            prefix=f".{run_id}-", dir=destino.parent
+        ) as temporal:
+            preparado = Path(temporal)
+            for tabla, ruta in rutas.items():
+                _escribir_parquet(evidencia[tabla], preparado / ruta.name)
+                evidencia[tabla].to_csv(
+                    preparado / ruta.with_suffix(".csv").name, index=False
+                )
+            if destino.exists():
+                # Puede quedar una exportacion completa de una caida anterior al
+                # commit. Solo se reemplaza el directorio propio de esta corrida.
+                esperados = {
+                    p.name
+                    for ruta in rutas.values()
+                    for p in (ruta, ruta.with_suffix(".csv"))
+                }
+                if any(p.name not in esperados for p in destino.iterdir()):
+                    raise _inconsistente(
+                        "el destino de publicacion contiene archivos ajenos"
+                    )
+                shutil.rmtree(destino)
+            os.replace(preparado, destino)
     return rutas
+
+
+def veredictos_publicados(
+    conn: sqlite3.Connection, run_id: str
+) -> tuple[dict[str, Any], ...]:
+    """Consolida evidencia publicada por SKU, sin recalcular sus metricas."""
+    cursor = conn.execute(
+        "SELECT * FROM evidencia_publicada WHERE run_id = ? ORDER BY sku", (run_id,)
+    )
+    columnas = [c[0] for c in cursor.description]
+    resultado = []
+    for fila in cursor.fetchall():
+        datos = dict(zip(columnas, fila, strict=True))
+        sku = datos["sku"]
+        metricas = []
+        for cid in (datos["candidato_campeon"], f"{sku}/seasonal_naive/seasonal_naive"):
+            metricas.append(
+                {
+                    nombre: {"valor": valor, "causa": causa}
+                    for nombre, valor, causa in conn.execute(
+                        "SELECT metrica, valor, causa FROM m3_metricas "
+                        "WHERE run_id = ? AND sku = ? AND candidato_id = ? "
+                        "AND ventana = ? ORDER BY rowid",
+                        (run_id, sku, cid, VENTANA_AGREGADA),
+                    )
+                }
+            )
+        datos["modelos_evaluados"] = json.loads(datos["modelos_evaluados"])
+        resultado.append(
+            {
+                "metricas_campeon": metricas[0],
+                "metricas_linea_base": metricas[1],
+                **datos,
+            }
+        )
+    return tuple(resultado)
+
+
+def contar_fallos(conn: sqlite3.Connection, run_id: str) -> int:
+    """Fallos locales de adaptacion y de ventanas, sin resultados adversos."""
+    return conn.execute(
+        "SELECT (SELECT COUNT(*) FROM m3_fallos WHERE run_id = ?1) + "
+        "(SELECT COUNT(*) FROM m3_unidades WHERE run_id = ?1 AND estado = 'fallida')",
+        (run_id,),
+    ).fetchone()[0]
 
 
 def estado_corrida(conn: sqlite3.Connection, run_id: str) -> EstadoCorrida | None:
@@ -407,12 +646,12 @@ def _transaccion(conn: sqlite3.Connection) -> Iterator[None]:
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield
+        conn.commit()
     except BaseException as exc:
         conn.rollback()
         if not isinstance(exc, PersistenciaEvidenciaError):
             _logger.error("Escritura revertida: %s", exc)
         raise
-    conn.commit()
 
 
 def _exigir_estado(
@@ -465,6 +704,43 @@ def _filas(
         valor = getattr(metricas, nombre)
         causa = metricas.no_calculables.get(nombre)
         yield (*clave, ventana, nombre, None if valor is None else float(valor), causa)
+
+
+def _filas_cartera(
+    run_id: str, evaluaciones: Sequence[EvaluacionSku]
+) -> Iterable[tuple[Any, ...]]:
+    grupos: dict[tuple[str, str, str], list[tuple[str, float | None]]] = {}
+    for e in evaluaciones:
+        for c in (e.linea_base, *e.candidatos):
+            for metrica in ("mae", "rmse", "mase", "me", "razon_sn"):
+                valor = None if c.agregadas is None else getattr(c.agregadas, metrica)
+                grupos.setdefault((e.sku_class, c.familia, metrica), []).append(
+                    (e.sku, valor)
+                )
+    for (clase, familia, metrica), instancias in sorted(grupos.items()):
+        valores = [v for _, v in instancias if v is not None and np.isfinite(v)]
+        resumen: tuple[float | None, ...] = (None,) * 4
+        if valores:
+            resumen = tuple(
+                float(v)
+                for v in (
+                    np.mean(valores),
+                    np.median(valores),
+                    np.percentile(valores, 25),
+                    np.percentile(valores, 75),
+                )
+            )
+        yield (
+            run_id,
+            clase,
+            familia,
+            metrica,
+            len({s for s, _ in instancias}),
+            len(instancias),
+            len(valores),
+            len(instancias) - len(valores),
+            *resumen,
+        )
 
 
 def _valores(pronostico: PronosticoFechado) -> list[float | None]:

@@ -78,6 +78,27 @@ def test_contra_la_linea_base_usa_perdida_cuadratica_en_ventanas_comunes() -> No
     assert prueba.p_valor == pytest.approx(esperado.p_valor)
 
 
+def test_minimo_de_origenes_comunes_predeclarado_no_emite_p_valor_antes() -> None:
+    campeon = metricas_candidato("ml", 0.8, n=6, rmses=[0.5, 1.0, 0.2, 0.9, 0.4, 3.0])
+    base = metricas_candidato(FAMILIA_LINEA_BASE, 1.0, n=4, rmses=[1.0] * 4)
+    corta = probar_contra_linea_base(campeon, base, n_min_ventanas=5)
+    suficiente = probar_contra_linea_base(campeon, base, n_min_ventanas=4)
+    assert (corta.n_ventanas, corta.horizonte, corta.causa) == (4, 1, "pocas_ventanas")
+    assert corta.p_valor is None
+    assert suficiente.estadistico == pytest.approx(-2.0936083029259844)
+    assert suficiente.p_valor == pytest.approx(0.12733814363872983)
+
+
+@pytest.mark.parametrize("minimo", [1, 0, True, 2.5])
+def test_minimo_de_origenes_invalido_no_se_acepta(minimo) -> None:
+    with pytest.raises(ValueError, match="n_min_ventanas"):
+        probar_contra_linea_base(
+            metricas_candidato("ml", 0.8),
+            metricas_candidato(FAMILIA_LINEA_BASE, 1.0),
+            n_min_ventanas=minimo,
+        )
+
+
 def test_sin_ventanas_comunes_no_se_prueba() -> None:
     campeon = metricas_candidato("ml", None, n=0)
     base = metricas_candidato(FAMILIA_LINEA_BASE, 1.0)

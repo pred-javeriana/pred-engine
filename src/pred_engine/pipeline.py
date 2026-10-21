@@ -4,9 +4,9 @@ No requiere terminal, servidor, motor de workflows ni estado global de corrida.
 L2 trabaja solo con la historia admisible (hasta t*, ADR-03-003) y, junto con L3,
 ejecuta cada SKU x familia como unidad independiente: en paralelo cuando se
 piden varios procesos, y con fallos aislados por unidad (3.0). L3 entrega
-evidencia walk-forward, no comparacion estadistica; L4 no tiene implementacion
-en el repositorio y la corrida se detiene ahi salvo que el llamador inyecte un
-validador real.
+evidencia walk-forward sobre la historia admisible. L4 integra la evaluacion
+reservada de M3 mediante un validador que recibe la conexion de plataforma.
+Sin esa configuracion, la biblioteca conserva L4 bloqueada.
 """
 
 from __future__ import annotations
@@ -36,8 +36,9 @@ from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
+from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredicto
 from pred_engine.ingesta.informe import ingest_csv_with_report
-from pred_engine.ingesta.pipeline import run_verify_parquet
+from pred_engine.ingesta.pipeline import run_verify_parquet_with_sha256
 from pred_engine.ingesta.salida import validate_output_contract
 from pred_engine.optimizacion.optimizadores.HPO.poda import es_degenerada
 from pred_engine.optimizacion.router import SelectionRouter
@@ -84,8 +85,8 @@ PRINCIPAL_STAGES = (
     StageDefinition(
         "L4",
         "retrospective validation",
-        "absent",
-        "Verdicts and audit bundles are not implemented",
+        "implemented",
+        "M3 requiere una conexion a la base de plataforma para evaluar y publicar",
     ),
 )
 
@@ -100,6 +101,7 @@ class PipelineInput:
     # "keep_both" conserva el CSV nuevo bajo otro nombre si raw/ ya tiene uno
     # distinto con el mismo nombre; "reject" falla sin escribir nada.
     on_conflict: Literal["reject", "keep_both"] = "reject"
+    datos_sinteticos: bool | None = None
 
     def __post_init__(self) -> None:
         if (self.csv_path is None) == (self.parquet_path is None):
@@ -141,6 +143,10 @@ class IngestionArtifact:
     # ya clasificado, que no las lleva.
     topology: tuple[TopologyMetrics, ...] = ()
     source_sha256: str | None = None
+    # Origen declarado en la entrada (CSV resuelto con su informe M1, o Parquet).
+    datos_sinteticos: bool | None = None
+    # SHA-256 de los bytes Parquet de los que se cargo ``panel``.
+    parquet_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +195,8 @@ class FittingArtifact:
     exclusions: tuple[SkuExclusion, ...] = ()
     # Politica con la que se enruto: dice que familias corresponden a cada clase.
     policy: RoutingPolicy | None = None
+    # Ajustes de M2 que cambian resultados (familias, ensayos, semilla).
+    m2_settings: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -212,12 +220,17 @@ class EvaluationArtifact:
 @dataclass(frozen=True, slots=True)
 class SkuVerdict:
     sku_id: str
-    verdict: Literal["hold", "partial", "fail"]
+    verdict: Veredicto | Literal["hold", "partial", "fail"]
     evidence: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.sku_id.strip() or self.verdict not in ("hold", "partial", "fail"):
-            raise ValueError("A verdict requires a SKU and hold/partial/fail")
+        if not self.sku_id.strip() or self.verdict not in (
+            *VEREDICTOS,
+            "hold",
+            "partial",
+            "fail",
+        ):
+            raise ValueError("Un veredicto requiere SKU y una etiqueta reconocida")
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,7 +240,7 @@ class ValidationArtifact:
 
 
 class RetrospectiveValidator(Protocol):
-    """Future L4 boundary: consume actual L3 evidence, never a fabricated result."""
+    """L4 boundary for native M3 or a caller-provided retrospective validator."""
 
     def __call__(self, evaluation: EvaluationArtifact) -> ValidationArtifact: ...
 
@@ -317,6 +330,8 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
             for stage in result.stages
         ],
     }
+    if result.validation is not None:
+        summary["m3"] = dict(result.validation.audit_bundle)
     if fitting is None:
         return summary
     reserve = fitting.reserve
@@ -480,10 +495,14 @@ class Pipeline:
         validator: RetrospectiveValidator | None = None,
         workers: int = 1,
         progress: str | Path | None = None,
+        m2_settings: Mapping[str, Any] | None = None,
     ) -> None:
         if type(workers) is not int or workers < 1:
             raise ValueError("workers must be a positive integer")
         self.router = router
+        # Result-changing M2 settings the router was built with; the native
+        # validator records them, so a composition must declare them.
+        self.m2_settings = dict(m2_settings or {})
         self.settings = evaluation
         self.factories = dict(factories)
         self.validator = validator
@@ -516,8 +535,12 @@ class Pipeline:
         return PRINCIPAL_STAGES[:3] + (
             replace(
                 PRINCIPAL_STAGES[3],
-                maturity="caller_provided",
-                capability="Caller-supplied retrospective validator",
+                maturity="implemented"
+                if getattr(self.validator, "nativo", False)
+                else "caller_provided",
+                capability="Evaluacion retrospectiva nativa y publicacion de evidencia"
+                if getattr(self.validator, "nativo", False)
+                else "Caller-supplied retrospective validator",
             ),
         )
 
@@ -525,23 +548,33 @@ class Pipeline:
         """L1: reuse current ingestion and consume its published 1.4 contract."""
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
-            return IngestionArtifact(path, run_verify_parquet(path))
+            panel, huella = run_verify_parquet_with_sha256(path)
+            return IngestionArtifact(
+                path,
+                panel,
+                datos_sinteticos=request.datos_sinteticos,
+                parquet_sha256=huella,
+            )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
             data_root=request.data_root,
             provider=request.provider,
             timeout=request.timeout,
             on_conflict=request.on_conflict,
+            datos_sinteticos=request.datos_sinteticos,
         )
         if salida.error is not None:
             raise salida.error
         assert salida.result is not None
         path = salida.result.parquet_path
+        panel, huella = run_verify_parquet_with_sha256(path)
         return IngestionArtifact(
             path,
-            run_verify_parquet(path),
+            panel,
             topology=tuple(salida.result.topology.metrics),
             source_sha256=salida.report.ingest_id,
+            datos_sinteticos=salida.report.source_file.datos_sinteticos,
+            parquet_sha256=huella,
         )
 
     def _exclusion_cause(
@@ -624,6 +657,7 @@ class Pipeline:
             units,
             tuple(exclusions),
             getattr(self.router, "policy", None),
+            dict(self.m2_settings),
         )
 
     def evaluate(self, fitting: FittingArtifact) -> EvaluationArtifact:
@@ -668,14 +702,25 @@ class Pipeline:
         return EvaluationArtifact(fitting, self.settings, evaluated, units)
 
     def validate(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
-        """L4: an injected validator must cover every SKU; none is built in."""
+        """L4: native covers handoff SKUs; legacy covers evaluated SKUs.
+
+        A reused native publication covers its frozen handoff, not the SKUs a
+        later M2 retry happened to fit.
+        """
         if self.validator is None:
             raise StageUnavailableError(PRINCIPAL_STAGES[3].capability)
         result = self.validator(evaluation)
         if not isinstance(result, ValidationArtifact):
             raise TypeError("L4 must return ValidationArtifact")
-        expected = {c.fitted.selection.sku_id for c in evaluation.candidates}
         actual = [v.sku_id for v in result.verdicts]
+        nativo = getattr(self.validator, "nativo", False)
+        expected = (
+            set(actual)
+            if nativo and result.audit_bundle.get("publicada_previamente")
+            else {c.selection.sku_id for c in evaluation.fitting.candidates}
+            if nativo
+            else {c.fitted.selection.sku_id for c in evaluation.candidates}
+        )
         if not expected or set(actual) != expected or len(actual) != len(expected):
             raise ValueError("L4 must return exactly one verdict for every SKU")
         if not result.audit_bundle:

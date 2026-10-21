@@ -5,7 +5,7 @@
 Implementacion de la **evaluacion sobre la reserva** y la **seleccion
 definitiva** de M3 (tareas `TASK-EVAL-3.4-A1` y `TASK-EVAL-3.4-A2`), segun
 ADR-03-003, ADR-03-004, ADR-03-006, ADR-03-007 y ADR-03-008. Version de
-metricas `3.4.1`; politica `3.4.1-inicial`.
+metricas `3.4.1`; politica `3.4.2-inicial`.
 
 1. **Contratos de evaluacion** (`calculo_errores/contratos.py`): entrada
    `PronosticoFechado` -> `SerieCandidato` -> `EntradaSku`, y salida tipada
@@ -28,7 +28,7 @@ metricas `3.4.1`; politica `3.4.1-inicial`.
 ```
 3.1  ReserveCut.of(panel) ──► t*, reserva (20 % final del calendario)
 3.2  instanciar(candidato).fit(historia <= t*)
-3.3 (Derek) ──► PronosticoFechado por origen, para cada candidato
+3.3 ──► PronosticoFechado por origen, para cada candidato
                     │
                     ▼  evaluar_sku(EntradaSku, ReserveCut)              (3.4-A1)
                Seasonal Naive en las mismas ventanas (pronosticar_linea_base)
@@ -166,11 +166,10 @@ Chronos-2.
 
 ## Mejoras respecto al texto de Notion (y por que)
 
-- **Entrada por ventanas, de cualquier cantidad.** Hoy el pipeline entrega un
-  solo pronostico por candidato desde t\* para toda la reserva
-  (`pronosticos.parquet`): es una ventana. Las ventanas de la reserva que piden
-  ADR-03-003/004 son de 3.3 (Derek). 3.4 no depende de cuantas lleguen. Con
-  una sola ventana, todo SKU queda en `EVIDENCIA_INSUFICIENTE` (`n_min = 30`).
+- **Entrada por ventanas, de cualquier cantidad.** El generador 3.3 entrega
+  todas las ventanas diarias completas de H dias. La coordinacion 3.0 guarda
+  sus pronosticos antes de evaluar. Con menos de 30 ventanas validas se
+  conserva `EVIDENCIA_INSUFICIENTE`; nunca se acorta H para aumentar el conteo.
 - **3.4 no separa el 20 %.** El corte lo calcula `ReserveCut.of`
   (`comun/reserva.py`), el mismo que usan M1 y M2. 3.4 solo lee la reserva y
   rechaza con `EvaluacionRetrospectivaError` un pronostico con origen antes de
@@ -187,11 +186,11 @@ Chronos-2.
   `emitir_veredictos` y queda en `ResultadoEvaluacion.datos_sinteticos`; 3.5
   lo contrasta con el de la corrida. La tabla `ingestas` de la plataforma no
   lo guarda.
-- **Diebold-Mariano como evidencia, no como regla.** ADR-03-008 escogio
-  veredictos descriptivos y dejo HLN-DM con correccion entre SKUs, solo sobre
-  datos reales, para cuando se pida significancia. Se implementa esa
-  alternativa sin tocar las reglas del veredicto. El ADR pide registrarla en
-  un ADR nuevo.
+- **Diebold-Mariano como evidencia, no como regla.** La decision posterior
+  documentada en ADR-03-011 y ADR-021 mantiene HLN-DM con BH activada por defecto, solo
+  sobre datos reales. La politica fija `n_min_dm` (30 inicialmente) sobre
+  origenes comunes. Si faltan, publica `pocas_ventanas`, no un p-valor. El
+  horizonte es H y el resultado no cambia las reglas del veredicto.
 - **Todos los modelos evaluados por SKU con su r** (`modelos_evaluados`), como
   dato descriptivo: la seleccion definitiva sigue siendo por categoria.
 - **Contratos internos como dataclasses congeladas**, no Pydantic: 3.4 no
@@ -214,11 +213,10 @@ uv run pytest -m "not slow"
 
 ## Fuera de alcance y pendientes
 
-- Generar las ventanas de la reserva (3.3) y orquestar M3 en el pipeline
-  (3.0 y L4): Derek.
-- Persistir la evidencia (3.5).
+- Las ventanas 3.3, la coordinacion 3.0/L4 y la persistencia 3.5 ya estan
+  conectadas. La presentacion visual de M4 no pertenece a esta capacidad.
 - Holm entre familias y Model Confidence Set (Estado del Arte, capa 5): ningun
   ADR los pide.
-- Fallas de unidades de M2: no viajan en el manifiesto. Un SKU al que le falta
-  una familia elegible por una falla de M2 sale del conjunto comun con causa,
-  pero no queda con `comparacion_incompleta`. Decision pendiente.
+- Las fallas previas de M2 se conservan en la procedencia. M3 compara el
+  handoff recibido y no inventa configuraciones que M2 no entrego. Las fallas
+  de adaptacion o de cualquier ventana M3 marcan `comparacion_incompleta`.

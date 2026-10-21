@@ -7,9 +7,13 @@ ADR-019 y ADR-020.
 
 ## Comando
 
+La plataforma debe crear primero la base central mediante su migrador. El CLI
+actual también ejecuta M3 y aplica sus migraciones pendientes en esa base;
+los detalles de evaluación están en [M3](../3.Evaluacion/README.md).
+
 ```bash
-uv sync --extra dev
-uv run pred-engine run --seed-csv inventory_data.csv --data-root data \
+uv sync --frozen --extra dev
+uv run --frozen pred-engine run --seed-csv inventory_data.csv --data-root data --db-path data/pred.db \
   --m0-metodo mbb-directo \
   --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
   --m0-columna demand_qty=Avg_Usage_Per_Day \
@@ -130,23 +134,28 @@ unidades.
   `unidades.jsonl` y en `failures`; el resto de la etapa sigue.
 - Repetir el mismo comando retoma la corrida: los estudios HPO terminados se
   reconstruyen desde su manifiesto sin reentrenar, los interrumpidos continúan
-  desde su último checkpoint y solo los que faltan arrancan de cero. L3 y los
-  pronósticos se recalculan, porque son deterministas.
+  desde su último checkpoint y solo los que faltan arrancan de cero. L3 y el
+  pronóstico inicial de M2 se reconstruyen. Las ventanas M3 ya confirmadas se
+  leen de SQLite y no se recalculan.
 - Un estudio en estado `fallida` no se reabre (2.9); su unidad vuelve a fallar
   con ese motivo.
-- Si cambia el código, cambia el `run_id`. Para continuar una corrida anterior
-  hay que usar el mismo código o pasar `--run-id` de forma explícita.
+- Si cambia el código, cambia el `run_id`. La reanudación exige entrada,
+  configuración y código compatibles. `--run-id` permite nombrar una corrida,
+  no eludir esa comprobación.
 
 ## Códigos de salida
 
 | Código | Significado |
 | --- | --- |
-| 7 | L1-L3 completas sin fallas; L4 no existe en el repositorio. |
-| 8 | L1-L3 completas con unidades fallidas aisladas; L4 no existe. |
-| 1 | Error de entrada o de la Fase 0, o una etapa sin ningún resultado. |
-| 0 | Solo con un validador L4 inyectado por el llamador. |
+| 0 | L1-L4 completas y evaluación M3 PUBLICADA. |
+| 8 | Publicación completa con fallos técnicos aislados. |
+| 1 | Error de entrada, base, identidad o etapa sin resultados. |
+| 7 | Solo para un pipeline de biblioteca sin validador configurado; el CLI requiere base central. |
 
-## Referencia en la máquina de la tesis
+## Referencia histórica en la máquina de la tesis
+
+Las mediciones siguientes corresponden al cierre M0-M2 anterior a la
+integración de M3. No son mediciones de la evaluación reservada actual.
 
 24 núcleos, 30 GB de RAM y `--workers 22`. Semilla Kaggle con `mbb-directo` y
 presupuesto por defecto:
@@ -176,12 +185,14 @@ presupuesto por defecto:
 
 - Con la semilla Kaggle la política no enruta DL: DL solo aplica a SKU
   `smooth` y `erratic`.
-- La política 2.2 enruta los SKU `lumpy` solo a la familia clásica. Si esa
+- Con `foundation` deshabilitada, la política 2.2 enruta los SKU `lumpy`
+  solo a la familia clásica. Si esa
   unidad falla, el SKU queda sin candidato: 2 de 110 con la semilla Kaggle
   (`100::syn009` y `105::syn005`). Elegir el siguiente trial elegible cuando
   el ganador falla en L2 es una decisión pendiente (ADR-020).
 - La familia `foundation` queda fuera de las corridas de referencia: necesita
   el extra `foundation` y los pesos de Chronos-2, que no están instalados en
   la máquina de la tesis.
-- L4 (validación retrospectiva) y la evaluación de M3 sobre la reserva no
-  existen todavía; la corrida entrega lo que M3 necesita para hacerla.
+- La corrida actual ejecuta L4/M3 con ventanas reservadas, recuperación y
+  publicación en la base central. La interfaz visual M4 no forma parte de
+  esta ruta. Los resultados históricos anteriores no sustituyen esa prueba.

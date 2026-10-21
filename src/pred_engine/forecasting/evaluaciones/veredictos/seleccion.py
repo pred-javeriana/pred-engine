@@ -98,7 +98,8 @@ def seleccionar_categoria(
     empatadas = [
         f
         for f in familias
-        if medianas[f] - mejor < politica.tolerancia_empate and medianas[f] < 1.0
+        if medianas[f] < 1.0
+        and (medianas[f] == mejor or medianas[f] - mejor < politica.tolerancia_empate)
     ]
     ganadora = min(empatadas, key=lambda f: _simplicidad(f, politica))
     motivo: MotivoSeleccion = (
