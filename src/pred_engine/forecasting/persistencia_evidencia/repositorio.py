@@ -1,7 +1,7 @@
 """Escritura idempotente, publicacion y consulta de la evidencia de M3 (3.5-A1).
 
 ADR-03-009: la evidencia vive en las tablas `m3_*` de la base de la plataforma
-(`esquema_m3.sql`, su migracion 0002) y el Parquet solo se deriva al publicar.
+(`esquema_m3.sql`, su migracion 0005) y el Parquet solo se deriva al publicar.
 ADR-03-010: claves naturales, una unidad confirmada no se reescribe y cada
 transicion de estado va en la misma transaccion que el trabajo que la completa.
 La conexion la abre quien orquesta; aqui no se crean tablas.
