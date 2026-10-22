@@ -1,7 +1,7 @@
 # Tareas 2.4 — HPO (TPE Sampler + ASHA Resource Allocator)
 
 Fuente: Notion, pagina "2.4 HPO" (hija de "2. Seleccion de configuracion y
-modelo"), 9 tareas unicas asignadas a Tomas Ramirez Roa (`TASK-HPO-4.0-*`,
+modelo"), 9 tareas unicas asignadas a un integrante del equipo (`TASK-HPO-4.0-*`,
 `TASK-HPO-5.0-*`), todas `P1-Important`, estado `Backlog` al momento de
 escribir esto.
 
