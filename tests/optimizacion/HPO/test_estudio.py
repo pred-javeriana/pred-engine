@@ -6,6 +6,7 @@ import math
 from datetime import datetime
 
 import numpy as np
+import optuna
 import pytest
 from tests._dobles import (
     fabrica_falla_primeras_n,
@@ -49,6 +50,39 @@ def test_estudio_encuentra_el_optimo_conocido():
     )
     assert resultado.mejor is not None
     assert abs(resultado.mejor.configuracion["nivel"] - 50.0) < 5.0
+
+
+@pytest.mark.parametrize(
+    ("n_observaciones", "estado_segundo", "ventanas_segundo", "completados", "podados"),
+    [(24, "completado", 4, 2, 0), (28, "podado", 4, 1, 1)],
+)
+def test_asha_solo_poda_si_quedan_ventanas_por_evaluar(
+    n_observaciones, estado_segundo, ventanas_segundo, completados, podados
+):
+    # La semilla produce primero un nivel cercano a 50 y luego uno peor.
+    # Con cuatro ventanas, ASHA solo podria descartar tras evaluar todas.
+    resultado = ejecutar_estudio(
+        np.full(n_observaciones, 50.0),
+        _espacio(),
+        fabrica_nivel_constante,
+        n_trials=2,
+        min_train=20,
+        metrica_objetivo="mae",
+        estacionalidad=1,
+        muestreador=optuna.samplers.RandomSampler(seed=0),
+        reglas=ReglasPoda(min_ventanas=4),
+    )
+
+    primero, segundo = resultado.trials
+    assert primero.estado == "completado"
+    assert primero.n_ventanas == n_observaciones - 20
+    assert segundo.estado == estado_segundo
+    assert segundo.n_ventanas == ventanas_segundo
+    assert resultado.n_completados == completados
+    assert resultado.n_podados == podados
+    assert resultado.n_fallidos == 0
+    assert resultado.mejor is not None
+    assert resultado.mejor.id == primero.id
 
 
 def test_todos_los_trials_comparten_las_mismas_ventanas():

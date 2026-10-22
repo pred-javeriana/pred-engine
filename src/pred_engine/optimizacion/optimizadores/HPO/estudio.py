@@ -383,7 +383,7 @@ def _correr_trial(
                 )
                 return
 
-        if trial.should_prune():
+        if estado.n_evaluadas < estado.n_totales and trial.should_prune():
             motivo_completo = pruner.motivo_de(trial.number) or (
                 f"ventana={estado.n_evaluadas} valor={estado.valor_parcial:.6g} asha"
             )
