@@ -152,7 +152,6 @@ class MLSelectionStrategy:
                 "n_completados": resultado.estudio.n_completados,
                 "n_podados": resultado.estudio.n_podados,
                 "n_fallidos": resultado.estudio.n_fallidos,
-                "causas": dict(resultado.estudio.causas),
                 "seed": resultado.estudio.seed,
                 # Referencia al estudio persistido (2.9); None sin raiz_corrida.
                 "estudio_hpo": run_id,

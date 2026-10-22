@@ -112,7 +112,6 @@ class DLSelectionStrategy:
                 "n_completados": estudio.n_completados,
                 "n_podados": estudio.n_podados,
                 "n_fallidos": estudio.n_fallidos,
-                "causas": dict(estudio.causas),
                 "seed": estudio.seed,
                 # Referencia al estudio persistido (2.9); None sin raiz_corrida.
                 # El payload solo lleva datos serializables a JSON.
