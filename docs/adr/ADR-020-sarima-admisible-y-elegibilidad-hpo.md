@@ -76,8 +76,15 @@ HPO.
   cuando el pronóstico final del ganador es degenerado (código de salida 8).
   La guía de ejecución registra cuántas fallan en la corrida de referencia.
 - La política 2.2 enruta los SKU `lumpy` solo a la familia clásica; si esa
-  unidad falla, el SKU queda sin candidato para M3. Elegir el siguiente trial
-  elegible cuando el ganador falla en L2 queda como decisión pendiente.
+  unidad falla, el SKU queda sin candidato para M3. La política M3
+  `3.4.3-inicial` resuelve el caso distinto de un SKU con candidatos pero sin
+  instancia de la familia campeona de su clase: usa la siguiente familia
+  disponible en el orden de mediana r de la clase, nunca la mejor del SKU.
+  Solo considera familias presentes en ese ranking. En medianas idénticas
+  usa el nombre de familia para un orden determinista. Conserva la selección
+  de clase y registra en la justificación del veredicto el fallback, la familia
+  original y la utilizada. Si ninguna familia del ranking tiene instancia,
+  conserva `FALLO_TECNICO`. No reintenta trials ni cambia el HPO de L2.
 - Los trials fallidos se cierran en la primera ventana sin ajuste, así que el
   HPO clásico termina antes.
 
