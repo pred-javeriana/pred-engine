@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime
 
@@ -14,6 +15,11 @@ from tests._dobles import (
     fabrica_rota,
 )
 
+from pred_engine.comun.ensayos_hpo import leer_ensayos
+from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
+    crear_estudio_optuna,
+)
+from pred_engine.optimizacion.optimizadores.HPO.asha import DecisorASHA
 from pred_engine.optimizacion.optimizadores.HPO.contratos import InfoTrial
 from pred_engine.optimizacion.optimizadores.HPO.errores import EstudioError
 from pred_engine.optimizacion.optimizadores.HPO.espacio import (
@@ -22,6 +28,9 @@ from pred_engine.optimizacion.optimizadores.HPO.espacio import (
     Flotante,
 )
 from pred_engine.optimizacion.optimizadores.HPO.estudio import ejecutar_estudio
+from pred_engine.optimizacion.optimizadores.HPO.muestreadores import (
+    construir_muestreador_tpe,
+)
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 
 
@@ -83,6 +92,61 @@ def test_asha_solo_poda_si_quedan_ventanas_por_evaluar(
     assert resultado.n_fallidos == 0
     assert resultado.mejor is not None
     assert resultado.mejor.id == primero.id
+
+
+def test_etiqueta_del_motor_preserva_el_muestreo_tpe_y_ambos_lectores(tmp_path):
+    reglas = ReglasPoda(min_ventanas=4)
+    referencia, _ = crear_estudio_optuna(
+        muestreador=construir_muestreador_tpe(seed=0),
+        decisor_asha=DecisorASHA(reglas, n_ventanas_totales=4),
+    )
+    # Recorrido anterior: incluso en la cuarta ventana se conserva PRUNED
+    # para el backend. MAE del pronostico constante sobre demanda 50.
+    for _ in range(30):
+        trial = referencia.ask()
+        nivel = trial.suggest_float("nivel", 0.0, 100.0)
+        valor = abs(50.0 - nivel)
+        for ventana in range(1, 5):
+            trial.report(valor, step=ventana)
+            if trial.should_prune():
+                referencia.tell(trial, None, estado="podado")
+                break
+        else:
+            referencia.tell(trial, valor, estado="completado")
+
+    resultado = ejecutar_estudio(
+        np.full(24, 50.0),
+        _espacio(),
+        fabrica_nivel_constante,
+        n_trials=30,
+        min_train=20,
+        metrica_objetivo="mae",
+        estacionalidad=1,
+        seed=0,
+        reglas=reglas,
+        raiz_corrida=tmp_path,
+        run_id="tpe",
+    )
+    anteriores = referencia.trials_finalizados()
+    assert [t.configuracion for t in resultado.trials] == [
+        dict(t.parametros) for t in anteriores
+    ]
+    podados_backend = [t.numero for t in anteriores if t.estado == "podado"]
+    assert len(podados_backend) > 0
+    persistidos = leer_ensayos(tmp_path / "tpe")
+    backend = [
+        json.loads(linea)
+        for linea in (tmp_path / "tpe" / "backend.jsonl").read_text().splitlines()
+    ]
+    for indice in podados_backend:
+        assert backend[indice]["estado_optuna"] == "PRUNED"
+        assert backend[indice]["user_attrs"]["estado_motor"] == "completado"
+        for ensayo in (resultado.trials[indice], persistidos[indice]):
+            assert ensayo.estado == "completado"
+            assert ensayo.n_ventanas == 4
+            assert ensayo.motivo is None
+    assert resultado.n_completados == 30
+    assert resultado.n_podados == 0
 
 
 def test_todos_los_trials_comparten_las_mismas_ventanas():

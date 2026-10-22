@@ -383,10 +383,17 @@ def _correr_trial(
                 )
                 return
 
-        if estado.n_evaluadas < estado.n_totales and trial.should_prune():
-            motivo_completo = pruner.motivo_de(trial.number) or (
-                f"ventana={estado.n_evaluadas} valor={estado.valor_parcial:.6g} asha"
-            )
+        if trial.should_prune():
+            motivo_asha = pruner.motivo_de(trial.number)
+            if estado.n_evaluadas == estado.n_totales:
+                # El backend conserva PRUNED para no cambiar el muestreo TPE.
+                trial.set_user_attr("estado_motor", "completado")
+                motivo_completo = None
+            else:
+                motivo_completo = motivo_asha or (
+                    f"ventana={estado.n_evaluadas} "
+                    f"valor={estado.valor_parcial:.6g} asha"
+                )
             ejecutor.cerrar("asha")
             _cerrar_podado_o_fallido(
                 trial,
@@ -416,10 +423,11 @@ def _cerrar_podado_o_fallido(
     study: EstudioHPO,
     n_evaluadas: int,
     valor_parcial: float,
-    motivo: str,
+    motivo: str | None,
 ) -> None:
     trial.set_user_attr("n_ventanas", n_evaluadas)
-    trial.set_user_attr("motivo", motivo)
+    if motivo is not None:
+        trial.set_user_attr("motivo", motivo)
     if math.isfinite(valor_parcial):
         # No se pasa `valor_parcial` aqui: ya se reporto via `trial.report()`
         # en `_correr_trial` justo antes de esta llamada, y el backend
