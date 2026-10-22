@@ -21,7 +21,7 @@ from pred_engine.comun.dataclasses.hpo import ResultadoEstudio
 from pred_engine.comun.ejecucion_paralela import (
     CONTEXTO_MP,
     blas_de_una_hebra,
-    fijar_una_hebra_blas,
+    iniciar_proceso_del_pool,
 )
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.walkforward.protocolos import FabricaPronosticador
@@ -183,7 +183,7 @@ def _seleccionar_en_paralelo[R](
         ProcessPoolExecutor(
             max_workers=procesos,
             mp_context=CONTEXTO_MP,
-            initializer=fijar_una_hebra_blas,
+            initializer=iniciar_proceso_del_pool,
         ) as ejecutor,
     ):
         futuros = {

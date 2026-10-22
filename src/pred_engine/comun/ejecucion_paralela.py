@@ -15,9 +15,12 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections import deque
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -52,6 +55,24 @@ CONTEXTO_MP = multiprocessing.get_context("spawn")
 def fijar_una_hebra_blas() -> None:
     for variable in _VARS_HILOS_BLAS:
         os.environ[variable] = "1"
+
+
+def iniciar_proceso_del_pool() -> None:
+    """`initializer` de cada proceso del pool: BLAS de una hebra y fin con el padre.
+
+    Si el padre muere sin cerrar el pool (por ejemplo, lo mata el sistema por
+    falta de memoria), sus hijos quedarian esperando tareas para siempre con su
+    memoria tomada. Una hebra del hijo nota el cambio de padre y lo termina.
+    """
+    fijar_una_hebra_blas()
+    padre = os.getppid()
+
+    def vigilar_padre() -> None:
+        while os.getppid() == padre:
+            time.sleep(1.0)
+        os._exit(1)
+
+    threading.Thread(target=vigilar_padre, name="vigilar-padre", daemon=True).start()
 
 
 @contextmanager
@@ -237,63 +258,141 @@ def ejecutar_unidades[T, R](
     unidad anota ``unit_started`` y ``unit_finished`` mientras corre; sin ellos el
     comportamiento no cambia.
     """
-    if type(procesos) is not int or procesos < 1:
-        raise ValueError(f"procesos debe ser un entero >= 1; se recibio {procesos!r}")
+    _exigir_procesos(procesos)
     if etiquetas is not None and len(etiquetas) != len(tareas):
         raise ValueError("etiquetas debe tener una entrada por tarea")
-    seguimiento = etiquetas is not None and progreso is not None
-
-    def etiqueta_de(indice: int) -> EtiquetaUnidad | None:
-        return etiquetas[indice] if seguimiento and etiquetas is not None else None
-
-    ruta = progreso if seguimiento else None
-    if procesos == 1 or len(tareas) < 2:
-        return [
-            _ejecutar_aislada(funcion, tarea, etiqueta_de(indice), ruta)
-            for indice, tarea in enumerate(tareas)
-        ]
-
-    efectivos = min(procesos, len(tareas))
-    _logger.info(
-        "Ejecucion en paralelo | unidades=%d | procesos=%d", len(tareas), efectivos
+    efectivos = max(1, min(procesos, len(tareas)))
+    if efectivos > 1:
+        _logger.info(
+            "Ejecucion en paralelo | unidades=%d | procesos=%d", len(tareas), efectivos
+        )
+    return list(
+        iterar_unidades(
+            funcion,
+            tareas,
+            procesos=efectivos,
+            en_vuelo=max(1, len(tareas)),
+            etiquetas=etiquetas,
+            progreso=progreso,
+        )
     )
-    resultados: dict[int, ResultadoUnidad[R]] = {}
+
+
+def iterar_unidades[T, R](
+    funcion: Callable[[T], R],
+    tareas: Iterable[T],
+    *,
+    procesos: int = 1,
+    en_vuelo: int | None = None,
+    etiquetas: Sequence[EtiquetaUnidad] | None = None,
+    progreso: str | Path | None = None,
+) -> Generator[ResultadoUnidad[R]]:
+    """Como ``ejecutar_unidades``, pero entrega cada resultado apenas esta listo.
+
+    Los resultados salen en el orden de las tareas. Las tareas se leen de a
+    poco: a lo sumo ``en_vuelo`` (por defecto, dos por proceso) quedan enviadas
+    sin entregar, asi que ni las entradas ni los resultados de todas las tareas
+    tienen que caber a la vez en memoria. Quien consume puede, por ejemplo,
+    guardar cada resultado antes de pedir el siguiente. Si deja de consumir,
+    las tareas no iniciadas se cancelan.
+    """
+    _exigir_procesos(procesos)
+    limite = 2 * procesos if en_vuelo is None else en_vuelo
+    if type(limite) is not int or limite < 1:
+        raise ValueError(f"en_vuelo debe ser un entero >= 1; se recibio {en_vuelo!r}")
+    seguimiento = etiquetas is not None and progreso is not None
+    return _iterar(
+        funcion,
+        tareas,
+        procesos,
+        limite,
+        etiquetas if seguimiento else None,
+        progreso if seguimiento else None,
+    )
+
+
+def _exigir_procesos(procesos: int) -> None:
+    if type(procesos) is not int or procesos < 1:
+        raise ValueError(f"procesos debe ser un entero >= 1; se recibio {procesos!r}")
+
+
+def _iterar[T, R](
+    funcion: Callable[[T], R],
+    tareas: Iterable[T],
+    procesos: int,
+    limite: int,
+    etiquetas: Sequence[EtiquetaUnidad] | None,
+    ruta: str | Path | None,
+) -> Generator[ResultadoUnidad[R]]:
+    def etiqueta_de(indice: int) -> EtiquetaUnidad | None:
+        return None if etiquetas is None else etiquetas[indice]
+
+    if procesos == 1:
+        for indice, tarea in enumerate(tareas):
+            yield _ejecutar_aislada(funcion, tarea, etiqueta_de(indice), ruta)
+        return
+
     with (
         blas_de_una_hebra(),
         ProcessPoolExecutor(
-            max_workers=efectivos,
+            max_workers=procesos,
             mp_context=CONTEXTO_MP,
-            initializer=fijar_una_hebra_blas,
+            initializer=iniciar_proceso_del_pool,
         ) as ejecutor,
     ):
         envio = time.time()
-        futuros = {
-            ejecutor.submit(
-                _ejecutar_aislada, funcion, tarea, etiqueta_de(indice), ruta
-            ): indice
-            for indice, tarea in enumerate(tareas)
-        }
+        enviadas: deque[tuple[int, Future[ResultadoUnidad[R]]]] = deque()
+        pendientes = enumerate(tareas)
         try:
-            for futuro in as_completed(futuros):
-                indice = futuros[futuro]
+            while True:
+                for indice, tarea in pendientes:
+                    enviadas.append(
+                        (
+                            indice,
+                            _enviar(
+                                ejecutor, funcion, tarea, etiqueta_de(indice), ruta
+                            ),
+                        )
+                    )
+                    if len(enviadas) >= limite:
+                        break
+                if not enviadas:
+                    return
+                indice, futuro = enviadas.popleft()
                 try:
-                    resultados[indice] = futuro.result()
+                    resultado = futuro.result()
                 except Exception as exc:
                     _logger.error("Unidad %d sin resultado: %s", indice, exc)
                     registro = RegistroUnidad(
                         "fallida", 0, envio, time.time(), describir_error(exc)
                     )
-                    resultados[indice] = ResultadoUnidad(registro)
+                    resultado = ResultadoUnidad(registro)
                     etiqueta = etiqueta_de(indice)
                     if etiqueta is not None and ruta is not None:
                         # El hijo murio sin poder anotar su fin: lo anota el padre.
                         _evento_fin(ruta, etiqueta, registro)
+                yield resultado
         except BaseException:
             # Una interrupcion no debe dejar corriendo las unidades no iniciadas.
-            for pendiente in futuros:
+            for _, pendiente in enviadas:
                 pendiente.cancel()
             raise
-    return [resultados[indice] for indice in range(len(tareas))]
+
+
+def _enviar[T, R](
+    ejecutor: ProcessPoolExecutor,
+    funcion: Callable[[T], R],
+    tarea: T,
+    etiqueta: EtiquetaUnidad | None,
+    ruta: str | Path | None,
+) -> Future[ResultadoUnidad[R]]:
+    try:
+        return ejecutor.submit(_ejecutar_aislada, funcion, tarea, etiqueta, ruta)
+    except BrokenProcessPool as exc:
+        # Un hijo ya murio: la tarea queda fallida con esa causa, como las enviadas.
+        futuro: Future[ResultadoUnidad[R]] = Future()
+        futuro.set_exception(exc)
+        return futuro
 
 
 def resumen_paralelismo(registros: Sequence[RegistroUnidad]) -> dict[str, Any]:

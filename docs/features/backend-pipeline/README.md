@@ -24,6 +24,8 @@ principal stage.
 
 L2/L3 retain independent process units with `workers > 1`. A unit failure
 preserves the rest of its stage; no successful unit means a stage error.
+L4 forecasts each SKU in a pool of `procesos` processes; the main process
+stays the only SQLite writer and confirms the units in SKU order.
 M3 records forecast failures per origin without substituting zeros.
 
 ## Composition
@@ -41,7 +43,7 @@ if __name__ == "__main__":
         validator = ControladorEvaluacion(
             conn, "data/runs/sales", run_id_m2="sales",
             codigo_version=code_fingerprint(), datos_sinteticos=False,
-            data_root="data",
+            data_root="data", procesos=4,
         )
         pipeline = build_pipeline(
             EvaluationSettings(min_train=60, horizon=7, step=28),

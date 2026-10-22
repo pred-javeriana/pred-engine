@@ -53,7 +53,7 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
 | --- | --- | --- |
 | `--families` | `classical ml dl` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. |
 | `--trials` | presupuesto por perfil | Trials de HPO por estudio; con presupuestos chicos algunos SKU pueden quedar sin trial completo. |
-| `--workers` | núcleos - 1 | Procesos para las unidades de L2 y L3. |
+| `--workers` | núcleos - 1 | Procesos para las unidades de L2 y L3 y para los pronósticos por SKU de L4. |
 | `--min-train`, `--horizon`, `--step`, `--seasonality`, `--metric` | 40, 7, 7, 7, rmse | Ventanas walk-forward del HPO y de L3. |
 | `--seed` | 0 | Semilla del HPO y de los modelos. |
 | `--runs-dir`, `--run-id` | `data/runs`, derivado | Ubicación e identidad de la corrida. |
@@ -92,16 +92,21 @@ los procesos distintos, la concurrencia máxima observada y la aceleración
 procesos se crean con `spawn` y BLAS de una hebra, así que cada unidad usa un
 núcleo.
 
-La etapa L4 (evaluación de M3) no usa el pool: recorre los SKU en serie dentro
-del proceso principal y, fuera del pool, BLAS conserva sus hebras por defecto.
-Por eso `--workers` no la acelera.
+En L4 (evaluación de M3), cada SKU es una unidad del mismo tipo de pool: un
+proceso ajusta sus candidatos, genera sus pronósticos y su línea base, y
+devuelve las unidades sin tocar SQLite. El proceso principal es el único
+escritor: confirma las unidades de cada SKU con sus marcadores en una sola
+transacción, en el orden de los SKU, y después lee de SQLite un SKU a la vez
+para calcular sus métricas. Los resultados no cambian con `--workers`. La
+selección por categoría, la corrección BH y la publicación siguen en el
+proceso principal sobre toda la corrida.
 
 ## Recursos y traza de modelos
 
-Durante L1-L3 una hebra del proceso principal toma una muestra por segundo y
-la agrega a `recursos.jsonl` en el momento, así que si la corrida muere (por
-ejemplo, por falta de memoria) las muestras previas quedan en disco. Cada línea
-tiene `at`, `role`, `pid`, `cpu_cores` y `mem_mb`:
+Durante toda la corrida (L1-L4) una hebra del proceso principal toma una
+muestra por segundo y la agrega a `recursos.jsonl` en el momento, así que si
+la corrida muere (por ejemplo, por falta de memoria) las muestras previas
+quedan en disco. Cada línea tiene `at`, `role`, `pid`, `cpu_cores` y `mem_mb`:
 
 | `role` | `cpu_cores` | `mem_mb` |
 | --- | --- | --- |
