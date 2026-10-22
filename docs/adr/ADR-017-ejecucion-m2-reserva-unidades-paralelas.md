@@ -28,6 +28,12 @@ aunque un SKU falle y poder retomarse sin repetir el HPO ya terminado.
    reservados para M3. L2 y L3 solo leen observaciones con fecha ≤ t*. Un SKU
    sin historia admisible suficiente, con huecos de calendario, con demanda no
    finita o cuya serie termina antes de t* se excluye con su causa registrada.
+   La historia admisible mínima es `min_train + horizonte + 3 × paso`: las 4
+   ventanas walk-forward que exige `ReglasPoda.min_ventanas` (el HPO falla con
+   menos). La compuerta es una sola para todas las familias, también la
+   fundacional, que por sí sola podría pronosticar con menos historia: así todas
+   las familias compiten sobre los mismos productos y un producto con poca
+   historia queda excluido con causa de datos en lugar de fallar por familia.
 2. **Unidades aisladas (3.0).** Cada par SKU × familia es una unidad de L2
    (selección con HPO, ajuste final y pronóstico) y cada candidato es una
    unidad de L3 (walk-forward). `comun.ejecucion_paralela` corre las unidades

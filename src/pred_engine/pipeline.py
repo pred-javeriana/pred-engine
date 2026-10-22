@@ -40,7 +40,7 @@ from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredict
 from pred_engine.ingesta.informe import ingest_csv_with_report
 from pred_engine.ingesta.pipeline import run_verify_parquet_with_sha256
 from pred_engine.ingesta.salida import validate_output_contract
-from pred_engine.optimizacion.optimizadores.HPO.poda import es_degenerada
+from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degenerada
 from pred_engine.optimizacion.router import SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
@@ -590,11 +590,14 @@ class Pipeline:
             return "la serie termina antes de t*: no tiene observaciones reservadas"
         if not np.isfinite(admissible["demand_qty"].to_numpy(dtype=float)).all():
             return "demanda no finita en la historia admisible"
-        needed = self.settings.min_train + self.settings.horizon
+        pasos = ReglasPoda().min_ventanas - 1
+        needed = (
+            self.settings.min_train + self.settings.horizon + pasos * self.settings.step
+        )
         if len(admissible) < needed:
             return (
                 f"historia admisible insuficiente: {len(admissible)} dias, se "
-                f"requieren {needed} (min_train + horizonte)"
+                f"requieren {needed} (min_train + horizonte + {pasos} pasos)"
             )
         return None
 
