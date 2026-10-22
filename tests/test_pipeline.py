@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import replace
 from datetime import date
@@ -200,6 +201,65 @@ def test_l2_rejects_missing_daily_observation(tmp_path):
     with pytest.raises(ValueError, match="daily grid"):
         pipeline.fit(broken)
     assert ingestion.panel["demand_qty"].iloc[3] == 22.05
+
+
+def _panel_with_admissible_days(pipeline, root, days):
+    """Panel cuya historia admisible tiene `days` dias (reserva de ceil(20 %))."""
+    ingestion = pipeline.ingest(request_at(root))
+    total = next(
+        n for n in range(days + 1, days * 2) if n - math.ceil(round(0.2 * n, 9)) == days
+    )
+    stamps = pd.date_range("2024-01-01", periods=total)
+    panel = pd.DataFrame(
+        {
+            "sku_id": "proof-sku",
+            "timestamp": stamps,
+            "demand_qty": [20 + 0.35 * i + (i % 5 - 2) for i in range(len(stamps))],
+            "lead_time_days": 3,
+            "sku_class": ingestion.panel["sku_class"].iloc[0],
+        }
+    )[list(ingestion.panel.columns)]
+    return replace(ingestion, panel=panel)
+
+
+def test_l2_excludes_history_below_the_hpo_minimum_windows(tmp_path):
+    pipeline = Pipeline(
+        verification_pipeline().router,
+        EvaluationSettings(min_train=40),
+        factories={},
+    )
+    ingestion = _panel_with_admissible_days(pipeline, tmp_path, 60)
+    with pytest.raises(ValueError, match="1 SKU excluidos") as raised:
+        pipeline.fit(ingestion)
+    assert str(raised.value).endswith(
+        "proof-sku: historia admisible insuficiente: 60 dias, se requieren 68 "
+        "(min_train + horizonte + 3 pasos)"
+    )
+
+
+@pytest.mark.parametrize(
+    "families",
+    [
+        ("classical",),
+        ("ml",),
+        ("dl",),
+        ("foundation",),
+        ("classical", "ml", "dl", "foundation"),
+    ],
+)
+def test_l2_minimum_history_excludes_the_sku_for_every_family(tmp_path, families):
+    pipeline = build_pipeline(EvaluationSettings(min_train=40), families=families)
+    ingestion = _panel_with_admissible_days(pipeline, tmp_path, 60)
+    with pytest.raises(ValueError, match="60 dias, se requieren 68"):
+        pipeline.fit(ingestion)
+
+
+def test_l2_keeps_history_that_meets_the_hpo_minimum_windows(tmp_path):
+    pipeline = verification_pipeline()  # 16 + 2 + 3 * 3 = 27 dias
+    with pytest.raises(ValueError, match="26 dias, se requieren 27"):
+        pipeline.fit(_panel_with_admissible_days(pipeline, tmp_path, 26))
+    enough = pipeline.fit(_panel_with_admissible_days(pipeline, tmp_path, 27))
+    assert not enough.exclusions and enough.candidates
 
 
 def test_legacy_custom_strategy_must_supply_fitting_configuration(tmp_path):
