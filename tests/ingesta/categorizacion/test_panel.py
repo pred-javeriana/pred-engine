@@ -137,3 +137,10 @@ def test_un_sku_sin_demanda_antes_de_t_estrella_se_rechaza() -> None:
     )
     with pytest.raises(TopologyMathError, match="SKU B"):
         classify_panel(panel)
+
+
+def test_filas_de_skus_intercaladas_dan_las_mismas_metricas() -> None:
+    ordenado = _panel_cuatro_clases()
+    intercalado = ordenado.sort_values(["timestamp", "sku_id"], ignore_index=True)
+
+    assert classify_panel(intercalado).metrics == classify_panel(ordenado).metrics

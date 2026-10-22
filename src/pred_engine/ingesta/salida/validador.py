@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, NoReturn, cast
 
+import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
@@ -36,7 +37,11 @@ def _timestamp_python(crudo: object) -> datetime:
     return python_dt.replace(microsecond=0)
 
 
-def _contar_skus(serie: pd.Series) -> int:
+def contar_skus(serie: pd.Series) -> int:
+    """Numero de sku_id distintos (como texto), sin contar nulos."""
+    if isinstance(serie.dtype, pd.StringDtype):
+        # Sus valores ya son ``str``: contar distintos es contar sus textos.
+        return int(serie.nunique())
     return len({str(v) for v in serie.tolist() if pd.notna(v)})
 
 
@@ -51,6 +56,24 @@ def normalize_output_frame(frame: pd.DataFrame) -> pd.DataFrame:
     copia["lead_time_days"] = copia["lead_time_days"].astype("int64")
     copia["sku_class"] = copia["sku_class"].astype("string")
     return copia.reset_index(drop=True)
+
+
+def _filas_garantizadas(frame: pd.DataFrame) -> np.ndarray:
+    """Filas que ``ClassifiedObservation`` acepta sin tener que construirla."""
+    anios = frame["timestamp"].dt.year.to_numpy()
+    skus = cast(pd.Series, frame["sku_id"])
+    if isinstance(skus.dtype, pd.StringDtype):
+        # Valores ``str`` sin nulos: basta mirar cada texto distinto una vez.
+        codigos, distintos = pd.factorize(skus)
+        texto_ok = np.array([bool(sku.strip()) for sku in distintos], dtype=bool)
+        texto_ok = texto_ok[codigos]
+    else:
+        texto_ok = np.fromiter(
+            (type(sku) is str and bool(sku.strip()) for sku in skus.tolist()),
+            dtype=bool,
+            count=len(skus),
+        )
+    return texto_ok & (anios >= datetime.min.year) & (anios <= datetime.max.year)
 
 
 def validate_output_contract(frame: pd.DataFrame) -> None:
@@ -110,7 +133,11 @@ def validate_output_contract(frame: pd.DataFrame) -> None:
     if not bool((n_etiquetas == 1).all()):
         _fallar("sku_class no es constante dentro de cada sku_id", column="sku_class")
 
-    for posicion, (_, cruda) in enumerate(frame.iterrows()):
+    # Con las comprobaciones anteriores, Pydantic solo puede rechazar un sku_id que
+    # no es texto o queda vacio con ``str.strip`` de Python, o un timestamp que no
+    # cabe en ``datetime``; solo esas filas se construyen una a una.
+    for posicion in np.flatnonzero(~_filas_garantizadas(frame)):
+        cruda = frame.iloc[posicion]
         try:
             ClassifiedObservation(
                 sku_id=str(cruda["sku_id"]).strip(),
@@ -125,5 +152,5 @@ def validate_output_contract(frame: pd.DataFrame) -> None:
     _logger.info(
         "Contrato 1.4 superado (filas=%s skus=%s)",
         int(len(frame)),
-        _contar_skus(cast(pd.Series, frame["sku_id"])),
+        contar_skus(cast(pd.Series, frame["sku_id"])),
     )
