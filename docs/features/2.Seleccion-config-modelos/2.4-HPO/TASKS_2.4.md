@@ -172,8 +172,8 @@ alcance redefinido (no "Completada" en el sentido literal original, sino
 
 **Estado: satisfecho por codigo preexistente + tests adicionales de esta sesion.**
 
-- [x] Regla de >= 4 ventanas antes de podar (`ReglasPoda.min_ventanas`,
-  probado en `test_asha.py`).
+- [x] Regla de >= 4 ventanas antes de la poda por escalon (ASHA)
+  (`ReglasPoda.min_ventanas`, probado en `test_asha.py`).
 - [x] Metrica robusta a outliers (`agregacion="media_recortada"` por
   defecto).
 - [x] Poda semantica detecta modelos degenerados (`es_degenerada`).
