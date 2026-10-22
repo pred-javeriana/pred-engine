@@ -1,4 +1,4 @@
-"""Componente 5: la regla mas importante es 'nunca podar antes de min_ventanas'.
+"""Componente 5: la regla mas importante es 'nunca podar por escalon antes de min_ventanas'.
 
 `DecisorASHA` es el algoritmo puro (sin Optuna): recibe numeros y devuelve
 una `DecisionPoda`. Estas pruebas lo ejercitan directamente, sin construir
