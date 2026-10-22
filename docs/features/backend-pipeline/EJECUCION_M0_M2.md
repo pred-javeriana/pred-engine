@@ -60,7 +60,9 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
 | `--telemetry-interval` | 1 | Segundos entre muestras de CPU y memoria en `recursos.jsonl`; `0` desactiva el muestreo. No forma parte de la identidad de la corrida. |
 
 Las opciones de la Fase 0 son las de `pred-engine-fase0` con el prefijo
-`--m0-` (por ejemplo, `--m0-metodo`, `--m0-n-series`, `--m0-seed`).
+`--m0-` (por ejemplo, `--m0-metodo`, `--m0-n-series`, `--m0-seed`). Con
+`--m0-minimo-filas` (por defecto 50 000) la Fase 0 rechaza un panel con menos
+filas que ese mínimo; con una semilla chica hay que bajarlo o la corrida falla.
 
 ## Artefactos de la corrida
 
@@ -89,6 +91,10 @@ los procesos distintos, la concurrencia máxima observada y la aceleración
 (tiempo de cómputo sumado dividido por el tiempo de pared del tramo). Los
 procesos se crean con `spawn` y BLAS de una hebra, así que cada unidad usa un
 núcleo.
+
+La etapa L4 (evaluación de M3) no usa el pool: recorre los SKU en serie dentro
+del proceso principal y, fuera del pool, BLAS conserva sus hebras por defecto.
+Por eso `--workers` no la acelera.
 
 ## Recursos y traza de modelos
 
