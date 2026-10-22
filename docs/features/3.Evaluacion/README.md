@@ -156,6 +156,6 @@ catálogo CPU de este hito. La etapa L4 corre en serie en el proceso
 principal, con BLAS de varias hebras; `--workers` solo paraleliza L2 y L3, así
 que el tiempo de L4 crece con el número de SKU.
 
-La firma de Derek, la aprobación de otro fundador, la fusión y el cierre de
+La firma del líder de ingeniería, la aprobación de otro fundador, la fusión y el cierre de
 las tareas del Hub son actos posteriores de aceptación. Este documento no
 sustituye esas autorizaciones.
