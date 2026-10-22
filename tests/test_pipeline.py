@@ -189,6 +189,7 @@ def test_degenerate_final_forecast_fails_its_unit_under_rule_3(tmp_path):
         pipeline.run(request_at(tmp_path))
     assert raised.value.stage == "L2"
     assert "desde t*" in str(raised.value)
+    assert "configuracion={'p': 1, 'd': 0, 'q': 0" in str(raised.value)
 
 
 def test_l2_rejects_missing_daily_observation(tmp_path):

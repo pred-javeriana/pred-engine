@@ -93,7 +93,7 @@ class DLSelectionStrategy:
         if mejor is None or mejor.valor is None:
             raise SelectionContractError(
                 f"ningun trial de HPO completo para sku_id={request.sku_id!r} "
-                f"({estudio.n_fallidos} fallidos, {estudio.n_podados} podados)"
+                f"({estudio.resumen_causas})"
             )
         return SelectionResult(
             sku_id=request.sku_id,
@@ -112,6 +112,7 @@ class DLSelectionStrategy:
                 "n_completados": estudio.n_completados,
                 "n_podados": estudio.n_podados,
                 "n_fallidos": estudio.n_fallidos,
+                "causas": dict(estudio.causas),
                 "seed": estudio.seed,
                 # Referencia al estudio persistido (2.9); None sin raiz_corrida.
                 # El payload solo lleva datos serializables a JSON.

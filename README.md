@@ -188,6 +188,13 @@ for ensayo in leer_ensayos("data/runs/r-.../hpo/classical-FIL-0001-r-..."):
     print(ensayo.estado, ensayo.valor, ensayo.motivo)
 ```
 
+When no HPO trial completes, the L2 error includes cause counts and the recorded reasons in
+`unidades.jsonl`, `corrida.json` and `seleccion.jsonl` (when L2 has surviving candidates).
+Invalid draws name the first violated constraint. Fit failures retain the exception and window.
+Counts separate `configuracion_invalida`, `ajuste_fallido`, `poda_semantica` and `escalon`,
+without replacing the total failed and pruned counts or changing the search budget.
+A rejected final forecast also records the winning configuration.
+
 The foundation family has no study: it is not optimised, so it has neither trials nor counters.
 
 ```python

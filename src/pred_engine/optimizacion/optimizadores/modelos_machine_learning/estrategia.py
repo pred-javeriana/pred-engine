@@ -120,8 +120,7 @@ class MLSelectionStrategy:
         if seleccionada is None:
             raise SelectionContractError(
                 f"ningun trial de HPO completo para sku_id={request.sku_id!r} "
-                f"({resultado.estudio.n_fallidos} fallidos, "
-                f"{resultado.estudio.n_podados} podados)"
+                f"({resultado.estudio.resumen_causas})"
             )
 
         _logger.info(
@@ -153,6 +152,7 @@ class MLSelectionStrategy:
                 "n_completados": resultado.estudio.n_completados,
                 "n_podados": resultado.estudio.n_podados,
                 "n_fallidos": resultado.estudio.n_fallidos,
+                "causas": dict(resultado.estudio.causas),
                 "seed": resultado.estudio.seed,
                 # Referencia al estudio persistido (2.9); None sin raiz_corrida.
                 "estudio_hpo": run_id,
