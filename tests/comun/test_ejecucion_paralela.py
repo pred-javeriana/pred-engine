@@ -69,8 +69,8 @@ def test_rechaza_cantidad_de_procesos_invalida(procesos):
 
 
 def _ocupar(segundos: float) -> None:
-    fin = time.perf_counter() + segundos
-    while time.perf_counter() < fin:
+    fin = time.process_time() + segundos
+    while time.process_time() < fin:
         pass
 
 
