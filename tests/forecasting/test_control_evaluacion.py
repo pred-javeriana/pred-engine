@@ -316,6 +316,54 @@ def test_fallo_de_un_sku_es_visible_y_no_imputa_ceros_ni_detiene_otro(tmp_path):
     conn.close()
 
 
+@pytest.mark.parametrize("con_sku_sano", [False, True])
+def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
+    tmp_path, con_sku_sano
+):
+    class FalloL2(SeasonalNaiveStub):
+        def fit(self, y):
+            if y[0] < 50:
+                raise ValueError("causa concreta del ajuste L2")
+            return super().fit(y)
+
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    pipeline.factories = {"classical": lambda config, *, seed: FalloL2(1, seed)}
+    if con_sku_sano:
+        datos = pd.read_csv(request.csv_path)
+        pd.concat(
+            [datos, datos.assign(sku_id="segundo", demand_qty=datos.demand_qty + 100)]
+        ).to_csv(request.csv_path, index=False)
+    resultado = pipeline.run(request)
+    assert resultado.complete is True
+    esperados = [("proof-sku", "FALLO_TECNICO")]
+    if con_sku_sano:
+        esperados.append(("segundo", "EVIDENCIA_INSUFICIENTE"))
+    assert [(v.sku_id, v.verdict) for v in resultado.validation.verdicts] == esperados
+    assert (
+        "causa concreta del ajuste L2"
+        in resultado.validation.verdicts[0].evidence["justificacion"]
+    )
+    categorias = conn.execute(
+        "SELECT conteos, porcentajes FROM m3_categorias"
+    ).fetchall()
+    assert len(categorias) == 1
+    conteos, porcentajes = map(json.loads, categorias[0])
+    assert conteos["FALLO_TECNICO"] == 1
+    assert porcentajes["FALLO_TECNICO"] == (50.0 if con_sku_sano else 100.0)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM m3_unidades WHERE sku = 'proof-sku'"
+        ).fetchone()[0]
+        == 6
+    )
+    assert resultado.validation.audit_bundle["n_unidades"] == (
+        18 if con_sku_sano else 6
+    )
+    assert conn.execute("SELECT estado FROM m3_corridas").fetchall() == [("PUBLICADA",)]
+    conn.close()
+
+
 def test_fallo_parcial_marca_comparacion_incompleta_y_conserva_ventanas(tmp_path):
     class FalloInicial(SeasonalNaiveStub):
         def pronosticar(self, observadas, horizon):

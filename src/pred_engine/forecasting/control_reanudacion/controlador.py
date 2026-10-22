@@ -7,7 +7,7 @@ import json
 import sqlite3
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -324,16 +324,23 @@ class ControladorEvaluacion:
                 run_id_m2=self.run_id_m2,
             )
             raise
+        fallos_l2 = {}
+        for unidad in fitting.units:
+            if unidad.failed:
+                fallos_l2.setdefault(unidad.sku_id, []).append(unidad.record.error)
         run_id = registrar_corrida(
             self.conn,
             identidad,
             handoff,
+            skus_fallidos=tuple(fallos_l2),
             ingesta_sha256=ingesta_sha,
             datos_sinteticos=datos_sinteticos,
         )
         plan = ventanas_reserva(corte, config.horizonte)
         skus = sorted(
-            {c.sku for c in handoff.candidatos} | {f.sku for f in handoff.fallos}
+            {c.sku for c in handoff.candidatos}
+            | {f.sku for f in handoff.fallos}
+            | set(fallos_l2)
         )
         exclusiones = {}
         for sku in skus:
@@ -422,6 +429,9 @@ class ControladorEvaluacion:
         bases: dict[str, SerieCandidato] = {}
         if estado_corrida(self.conn, run_id) in ("EN_CURSO", "EVALUADA"):
             fallos_sku = Counter(f.sku for f in handoff.fallos)
+            sin_candidatos = set(fallos_l2) - {c.sku for c in handoff.candidatos}
+            for sku in sin_candidatos:
+                fallos_sku[sku] += len(fallos_l2[sku])
             for sku in skus:
                 plan_sku = planes[sku]
                 serie = series_sku[sku]
@@ -518,6 +528,21 @@ class ControladorEvaluacion:
                 evaluaciones,
                 datos_sinteticos=datos_sinteticos,
                 politica=self.politica,
+            )
+            resultado = replace(
+                resultado,
+                skus=tuple(
+                    replace(
+                        veredicto,
+                        justificacion=veredicto.justificacion
+                        + ": "
+                        + "; ".join(str(causa) for causa in fallos_l2[veredicto.sku]),
+                    )
+                    if veredicto.sku in sin_candidatos
+                    and veredicto.veredicto == "FALLO_TECNICO"
+                    else veredicto
+                    for veredicto in resultado.skus
+                ),
             )
             guardar_evaluacion(self.conn, run_id, evaluaciones, resultado)
         return self._artefacto(
