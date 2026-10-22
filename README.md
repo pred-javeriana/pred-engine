@@ -33,6 +33,41 @@ uv run pytest -m "not slow"    # fast suite with coverage gate (CI mode)
 uv run pytest -m slow --no-cov # slow tests (benchmarks / model fitting)
 ```
 
+### Equipos con pocos núcleos (4 núcleos, 8 GB)
+
+La sesión de pruebas ya limita la CPU: `tests/conftest.py` fija una hebra de
+BLAS/OpenMP por proceso, y las pruebas que corren la CLI pasan `--workers 1` o
+`2`. Medido con 4 núcleos visibles, `pytest -m "not slow"` usa como máximo
+unos 2 núcleos y `pytest -m slow` unos 2. Para no saturar el equipo:
+
+1. Corra un solo `pytest` a la vez.
+2. Mientras desarrolla, corra solo las pruebas del área que cambió, sin
+   cobertura. `tests/` replica la estructura de `src/pred_engine/`:
+
+   ```bash
+   uv run pytest -m "not slow" --no-cov tests/optimizacion/HPO
+   ```
+
+3. Antes de abrir el PR, corra la corrida de humo de CI (8 SKU, unos 35 s y
+   menos de 3 núcleos). Necesita una copia de `pred-platform` para crear la
+   base central:
+
+   ```bash
+   PYTHONPATH=../pred-platform/src uv run --no-sync python -m pred_platform.dal.migrate \
+     --db local_data/humo/pred.db
+   uv run pred-engine run --seed-csv tests/fixtures/semilla_inventario.csv \
+     --data-root local_data/humo --db-path local_data/humo/pred.db --run-id humo --workers 2 \
+     --m0-metodo mbb-directo --m0-n-series 1 --m0-minimo-filas 0 \
+     --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
+     --m0-columna demand_qty=Avg_Usage_Per_Day --m0-columna lead_time_days=Restock_Lead_Time
+   ```
+
+   El código de salida esperado es `0` u `8`. Pase siempre `--workers 2` en un
+   equipo pequeño: el valor por defecto (núcleos - 1) ocupa todos los núcleos.
+
+CI corre las suites completas en cada PR, así que no hace falta repetirlas
+localmente.
+
 ## Linting, formatting and type checking
 
 ```bash
