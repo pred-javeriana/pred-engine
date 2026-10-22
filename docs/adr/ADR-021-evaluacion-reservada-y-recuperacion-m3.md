@@ -79,5 +79,5 @@ futuro. `VALIDADO` conserva su significado descriptivo. Las ventanas diarias
 se solapan y HLN-DM usa su horizonte H para la corrección correspondiente.
 La corrección BH se aplica entre todos los SKU efectivamente probados.
 
-La aceptación personal de Derek, la revisión de otro fundador y la fusión
+La aceptación personal del líder de ingeniería, la revisión de otro fundador y la fusión
 son condiciones de cierre del proyecto, no estados que el motor pueda emitir.
