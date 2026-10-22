@@ -1,7 +1,7 @@
 # Tareas 2.5 — MLSelectionStrategy
 
 Fuente: Notion, pagina "6. MLSelectionStrategy" (hija de "Sprint 2: Modulo 2"),
-8 tareas `TASK-MLS-6.0-*` asignadas a un integrante del equipo, `P1-Important`, estado
+8 tareas `TASK-MLS-6.0-*` asignadas al Scrum Master del equipo, `P1-Important`, estado
 `Backlog` al momento de escribir esto. La pagina no traia tareas, subsecciones
 ni ADRs: las tareas se derivaron de su especificacion (2.5) y del patron de
 `classical_selection.py`. Todas pasan a `Completada` solo tras el PR aprobado.

@@ -3,7 +3,7 @@
 ## Que se hizo en esta sesion
 
 Reconciliacion de las tareas Notion del Modulo 2.4 (`TASK-HPO-4.0-*` y
-`TASK-HPO-5.0-*`, asignadas a un integrante del equipo) contra la implementacion
+`TASK-HPO-5.0-*`, asignadas al Scrum Master del equipo) contra la implementacion
 real del motor de HPO, que ya existia -- construida en sesiones anteriores
 bajo otra numeracion de tareas (`TASK-SEL-2.81-*`, `TASK-SEL-2.9-*`, ya
 mergeadas a `main`). El motor vive en
