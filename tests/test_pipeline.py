@@ -237,6 +237,23 @@ def test_l2_excludes_history_below_the_hpo_minimum_windows(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "families",
+    [
+        ("classical",),
+        ("ml",),
+        ("dl",),
+        ("foundation",),
+        ("classical", "ml", "dl", "foundation"),
+    ],
+)
+def test_l2_minimum_history_excludes_the_sku_for_every_family(tmp_path, families):
+    pipeline = build_pipeline(EvaluationSettings(min_train=40), families=families)
+    ingestion = _panel_with_admissible_days(pipeline, tmp_path, 60)
+    with pytest.raises(ValueError, match="60 dias, se requieren 68"):
+        pipeline.fit(ingestion)
+
+
 def test_l2_keeps_history_that_meets_the_hpo_minimum_windows(tmp_path):
     pipeline = verification_pipeline()  # 16 + 2 + 3 * 3 = 27 dias
     with pytest.raises(ValueError, match="26 dias, se requieren 27"):
