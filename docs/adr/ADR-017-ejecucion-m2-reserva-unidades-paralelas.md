@@ -29,7 +29,7 @@ aunque un SKU falle y poder retomarse sin repetir el HPO ya terminado.
    sin historia admisible suficiente, con huecos de calendario, con demanda no
    finita o cuya serie termina antes de t* se excluye con su causa registrada.
    La historia admisible mínima es `min_train + horizonte + 3 × paso`: las 4
-   ventanas walk-forward que exige `ReglasPoda.min_ventanas` (el HPO falla con
+   ventanas walk-forward que exige `ReglasPoda.min_ventanas` (reglas por defecto) (el HPO falla con
    menos). La compuerta es una sola para todas las familias, también la
    fundacional, que por sí sola podría pronosticar con menos historia: así todas
    las familias compiten sobre los mismos productos y un producto con poca

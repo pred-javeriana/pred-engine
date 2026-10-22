@@ -47,7 +47,7 @@ in valores`. El padre debe declararse antes en `EspacioBusqueda.parametros`.
 
 | Campo | Default | Rol |
 | --- | --- | --- |
-| `min_ventanas` | `4` | Regla de seguridad #1: sin poda antes de esto |
+| `min_ventanas` | `4` | Regla de seguridad #1: sin poda por escalon (ASHA) antes de esto |
 | `agregacion` | `"media_recortada"` | `"media"` \| `"mediana"` \| `"media_recortada"` |
 | `proporcion_recorte` | `0.1` | Solo si `agregacion="media_recortada"` |
 | `factor_reduccion` | `3` | Retiene el mejor `1/factor_reduccion` por escalon |
