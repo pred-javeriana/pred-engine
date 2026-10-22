@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos import (
     CANONICAL_FIELDS,
@@ -37,6 +38,7 @@ class TopologyArtifact:
 
     frame: pd.DataFrame
     metrics: tuple[TopologyMetrics, ...]
+    exclusions: tuple[SkuExclusion, ...] = ()
 
 
 def classify_panel(frame: pd.DataFrame) -> TopologyArtifact:

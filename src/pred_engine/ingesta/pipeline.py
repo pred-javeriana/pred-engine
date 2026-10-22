@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
 
+from pred_engine.comun.exclusiones import sin_demanda_admisible
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.logger import get_logger, log_ingestion_event
 from pred_engine.ingesta.categorizacion import (
@@ -75,8 +76,11 @@ def deposit_raw_csv(source: str | Path, *, data_root: str | Path | None = None) 
 
 def _clasificar_panel_diario(panel: pd.DataFrame) -> TopologyArtifact:
     """Gate de demanda positiva y clasificador real de 1.3 (sin stub)."""
-    require_positive_demand(panel)
-    return classify_daily_panel(panel)
+    excluidos = sin_demanda_admisible(panel)
+    admisible = panel.loc[~panel["sku_id"].isin([e.sku_id for e in excluidos])]
+    require_positive_demand(panel if admisible.empty else admisible)
+    topologia = classify_daily_panel(admisible)
+    return replace(topologia, exclusions=excluidos)
 
 
 def _publicar_handoff(
@@ -93,7 +97,9 @@ def _publicar_handoff(
         topologia.frame,
         destino,
         data_root=data_root,
-        daily_panel=panel_diario,
+        daily_panel=panel_diario.loc[
+            ~panel_diario["sku_id"].isin([e.sku_id for e in topologia.exclusions])
+        ],
     )
     log_ingestion_event(
         _logger,

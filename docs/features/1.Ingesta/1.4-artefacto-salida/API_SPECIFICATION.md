@@ -78,7 +78,16 @@ Alias de `classify_panel` (implementacion real de 1.3, no stub).
 ## `pred_engine.ingesta.pipeline`
 
 `run_ingest`, `run_classify_csv` y `run_classify_parquet` publican solo
-tras el handoff 1.4.
+tras el handoff 1.4. Antes de clasificar, excluyen cada SKU sin demanda positiva
+hasta t* con la causa `lanzado despues del corte`. El contrato de preservacion
+se aplica a todas las filas de los SKU admitidos, incluida su reserva. Si no
+queda ningun SKU admisible, la ingesta falla.
+
+`ingest_csv_with_report` registra en `ingestas/<sha>.json` la lista
+`exclusions` (`sku_id`, `cause`) y el total `excluded_count`. L2 incorpora esas
+exclusiones como `sin historia admisible`. El resumen de `run` expone el mismo
+total en `excluded_count`. La ruta Parquet recupera estas exclusiones cuando
+`data_root` contiene un informe M1 cuya huella coincide con el Parquet.
 
 ### `run_verify_parquet(parquet_path) -> DataFrame`
 

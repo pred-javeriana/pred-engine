@@ -28,6 +28,7 @@ from pred_engine.comun.ejecucion_paralela import (
     ejecutar_unidades,
     emitir_evento,
 )
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
@@ -37,7 +38,7 @@ from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
 from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredicto
-from pred_engine.ingesta.informe import ingest_csv_with_report
+from pred_engine.ingesta.informe import exclusiones_por_huella, ingest_csv_with_report
 from pred_engine.ingesta.pipeline import run_verify_parquet_with_sha256
 from pred_engine.ingesta.salida import validate_output_contract
 from pred_engine.optimizacion.optimizadores.HPO.poda import es_degenerada
@@ -147,14 +148,7 @@ class IngestionArtifact:
     datos_sinteticos: bool | None = None
     # SHA-256 de los bytes Parquet de los que se cargo ``panel``.
     parquet_sha256: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SkuExclusion:
-    """SKU descartado antes de L2 con su causa registrada (3.1)."""
-
-    sku_id: str
-    cause: str
+    exclusions: tuple[SkuExclusion, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +340,7 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     summary["units"] = {"L2": _unit_counts(fitting.units)}
     if evaluation is not None:
         summary["units"]["L3"] = _unit_counts(evaluation.units)
+    summary["excluded_count"] = len(fitting.exclusions)
     summary["exclusions"] = [
         {"sku_id": item.sku_id, "cause": item.cause} for item in fitting.exclusions
     ]
@@ -554,6 +549,7 @@ class Pipeline:
                 panel,
                 datos_sinteticos=request.datos_sinteticos,
                 parquet_sha256=huella,
+                exclusions=exclusiones_por_huella(request.data_root, huella),
             )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
@@ -575,6 +571,7 @@ class Pipeline:
             source_sha256=salida.report.ingest_id,
             datos_sinteticos=salida.report.source_file.datos_sinteticos,
             parquet_sha256=huella,
+            exclusions=tuple(salida.report.exclusions),
         )
 
     def _exclusion_cause(
@@ -582,6 +579,8 @@ class Pipeline:
     ) -> str | None:
         if admissible.empty:
             return "sin historia admisible: la serie comienza despues de t*"
+        if not bool((admissible["demand_qty"] > 0).any()):
+            return "sin historia admisible: lanzado despues del corte"
         timestamps = admissible["timestamp"]
         if not timestamps.diff().iloc[1:].eq(pd.Timedelta(days=1)).all():
             return "calendario diario con huecos (daily grid requerido)"
@@ -603,7 +602,12 @@ class Pipeline:
         validate_output_contract(panel)
         reserve = ReserveCut.of(panel)
         tasks: list[_FitTask] = []
-        exclusions: list[SkuExclusion] = []
+        exclusions = [
+            SkuExclusion(e.sku_id, f"sin historia admisible: {e.cause}")
+            for e in ingestion.exclusions
+        ]
+        for item in exclusions:
+            self._emit("excluded", sku_id=item.sku_id, cause=item.cause)
         for sku_id, group in panel.groupby("sku_id", sort=True):
             ordered = group.sort_values("timestamp")
             admissible = ordered.loc[ordered["timestamp"] <= reserve.t_star]

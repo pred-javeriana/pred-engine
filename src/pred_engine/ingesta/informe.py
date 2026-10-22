@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm.errores import LlmError, LlmProviderError, LlmTimeoutError
 from pred_engine.comun.llm.protocolo import LlmProvider
 from pred_engine.comun.modelos import (
@@ -154,6 +155,8 @@ class IngestReportFile(_Modelo):
     error: ErrorDetail | None = None
     reserve: ReserveInfo | None = None
     topology: TopologyInfo | None = None
+    exclusions: list[SkuExclusion] = Field(default_factory=list)
+    excluded_count: int = Field(default=0, ge=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +201,25 @@ def error_code(exc: BaseException) -> str:
 def report_path(data_root: str | Path | None, sha256: str) -> Path:
     """Ruta del informe de la ingesta cuyo CSV tiene ese SHA-256."""
     return ensure_data_layout(data_root).ingestas / f"{sha256}.json"
+
+
+def exclusiones_por_huella(
+    data_root: str | Path | None, huella: str
+) -> tuple[SkuExclusion, ...]:
+    """Recupera exclusiones M1 solo de informes ligados a los bytes publicados."""
+    if data_root is None:
+        return ()
+    excluidos: dict[str, SkuExclusion] = {}
+    for ruta in (Path(data_root) / REPORTS_DIR).glob("[0-9a-f]" * 64 + ".json"):
+        informe = IngestReportFile.model_validate_json(ruta.read_text())
+        if (
+            informe.status == "accepted"
+            and informe.published is not None
+            and informe.published.sha256 == huella
+        ):
+            for item in informe.exclusions:
+                excluidos[item.sku_id] = item
+    return tuple(excluidos[sku] for sku in sorted(excluidos))
 
 
 def _relativa(ruta: Path, raiz: Path) -> str:
@@ -283,6 +305,8 @@ def _informe_aceptado(
         ),
         reserve=reserva,
         topology=info,
+        exclusions=list(topologia.exclusions),
+        excluded_count=len(topologia.exclusions),
     )
 
 

@@ -23,10 +23,13 @@ decisión pendiente.
    `comun.reserva`. M1 y M2 lo derivan del calendario del panel con la misma
    función, así que coinciden sin intercambiar estado.
 2. `classify_panel` calcula ADI y CV² de cada SKU solo con las filas hasta
-   t*. El panel publicado conserva todas las filas: M3 necesita la reserva.
-3. La compuerta de demanda positiva previa a la clasificación revisa la misma
-   historia. Un SKU sin demanda positiva antes de t* se rechaza con su causa,
-   y un panel demasiado corto para dejar historia admisible también.
+   t*. El panel publicado conserva todas las filas de los SKU admitidos:
+   M3 necesita la reserva.
+3. La ingesta excluye cada SKU sin demanda positiva hasta t* con la causa
+   `lanzado despues del corte` y continúa con los demás. El informe M1 registra
+   `exclusions` y `excluded_count`. L2 los registra como `sin historia admisible`
+   y el resumen de corrida muestra el número excluido. Un panel sin ningún SKU
+   admisible o demasiado corto para dejar historia admisible se rechaza.
 4. `TopologyMetrics` cuenta los periodos y las demandas de la historia
    admisible.
 
