@@ -268,9 +268,10 @@ def validate_aligned_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         _fallar("el marco alineado no tiene filas")
 
-    # La via vectorizada solo conoce texto; cualquier otro valor va por fila.
+    # La via vectorizada solo conoce texto sin nulos; cualquier otro valor va por fila.
     solo_texto = all(
         pd.api.types.infer_dtype(frame[columna], skipna=False) == "string"
+        and not bool(frame[columna].isna().any())
         for columna in CANONICAL_FIELDS
     )
     tipado = _validar_vectorizado(frame) if solo_texto else _validar_por_filas(frame)

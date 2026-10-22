@@ -138,3 +138,36 @@ def test_un_marco_no_textual_se_valida_fila_a_fila() -> None:
     )
     assert marco.iloc[0]["demand_qty"] == 2.0
     assert marco.iloc[0]["lead_time_days"] == 4
+
+
+@pytest.mark.parametrize("dtype", ["string", "str"])
+@pytest.mark.parametrize(
+    ("columna", "columna_error"),
+    [
+        ("timestamp", "timestamp"),
+        # La demanda nula llega como NaN y la rechaza Pydantic, sin columna.
+        ("demand_qty", None),
+        ("lead_time_days", "lead_time_days"),
+    ],
+)
+def test_un_nulo_en_columna_de_texto_se_rechaza_en_su_fila(
+    columna: str, columna_error: str | None, dtype: str
+) -> None:
+    marco = _marco(
+        [("105", "2024-10-01", "1", "3"), ("105", "2024-10-02", "2", "4")]
+    ).astype(dtype)
+    marco.loc[1, columna] = None
+    with pytest.raises(SchemaBarrierError) as captured:
+        validate_aligned_frame(marco)
+    assert (captured.value.row_index, captured.value.column) == (1, columna_error)
+
+
+@pytest.mark.parametrize("dtype", ["string", "str"])
+def test_una_columna_de_texto_toda_nula_se_rechaza(dtype: str) -> None:
+    marco = _marco(
+        [("105", "2024-10-01", "1", "3"), ("106", "2024-10-02", "2", "4")]
+    ).astype(dtype)
+    marco["timestamp"] = pd.Series([None, None], dtype=dtype)
+    with pytest.raises(SchemaBarrierError, match="timestamp invalido") as captured:
+        validate_aligned_frame(marco)
+    assert (captured.value.row_index, captured.value.column) == (0, "timestamp")
