@@ -155,7 +155,12 @@ class IngestionArtifact:
 
     def cut(self) -> ReserveCut:
         """Corte de M1 o, sin informe, el del calendario del panel."""
-        return self.reserve if self.reserve is not None else ReserveCut.of(self.panel)
+        if self.reserve is None:
+            return ReserveCut.of(self.panel)
+        dias = pd.to_datetime(self.panel["timestamp"]).dt.normalize()
+        if dias.max() > self.reserve.last_observed or dias.min() > self.reserve.t_star:
+            raise ValueError("el corte de M1 no cubre el calendario del panel")
+        return self.reserve
 
 
 @dataclass(frozen=True, slots=True)
@@ -561,7 +566,7 @@ class Pipeline:
                 exclusions=() if informe is None else tuple(informe.exclusions),
                 reserve=None
                 if informe is None or informe.reserve is None
-                else informe.reserve.cut(panel),
+                else informe.reserve.cut(),
             )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
@@ -584,7 +589,7 @@ class Pipeline:
             datos_sinteticos=salida.report.source_file.datos_sinteticos,
             parquet_sha256=huella,
             exclusions=tuple(salida.report.exclusions),
-            reserve=salida.report.reserve.cut(panel),
+            reserve=salida.report.reserve.cut(),
         )
 
     def _exclusion_cause(

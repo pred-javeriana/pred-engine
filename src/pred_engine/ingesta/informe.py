@@ -142,8 +142,8 @@ class ReserveInfo(_Modelo):
             fraction=corte.fraction,
         )
 
-    def cut(self, panel: pd.DataFrame) -> ReserveCut:
-        """Corte publicado por M1; debe cubrir el calendario de ``panel``."""
+    def cut(self) -> ReserveCut:
+        """Corte publicado por M1, validado al releer el informe."""
         corte = ReserveCut(
             t_star=pd.Timestamp(self.t_star),
             first_reserved=pd.Timestamp(self.first_reserved),
@@ -157,9 +157,6 @@ class ReserveInfo(_Modelo):
             or corte.reserved_dates[-1] != corte.last_observed
         ):
             raise ValueError("el corte del informe M1 no es coherente")
-        dias = pd.to_datetime(panel["timestamp"]).dt.normalize()
-        if dias.max() > corte.last_observed or dias.min() > corte.t_star:
-            raise ValueError("el corte del informe M1 no cubre el panel publicado")
         return corte
 
 

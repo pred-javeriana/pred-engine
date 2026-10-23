@@ -259,7 +259,8 @@ def _panel_with_admissible_days(pipeline, root, days):
             "sku_class": ingestion.panel["sku_class"].iloc[0],
         }
     )[list(ingestion.panel.columns)]
-    return replace(ingestion, panel=panel)
+    # Panel sintetico: su corte sale de su propio calendario, no del informe M1.
+    return replace(ingestion, panel=panel, reserve=None)
 
 
 def test_l2_excludes_history_below_the_hpo_minimum_windows(tmp_path):

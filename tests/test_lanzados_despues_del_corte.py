@@ -8,6 +8,7 @@ clasificacion, el reingreso por Parquet y L2 usan ese mismo corte.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -324,3 +325,19 @@ def test_raiz_por_omision_recupera_exclusiones_sin_crear_directorios(
         == ()
     )
     assert not otra.exists()
+
+
+def test_l2_rechaza_un_panel_fuera_del_corte_de_m1(tmp_path: Path) -> None:
+    pipeline = verification_pipeline()
+    ingesta = pipeline.ingest(
+        PipelineInput(
+            csv_path=_csv(tmp_path / "panel.csv", FIN_DEL_CALENDARIO),
+            data_root=tmp_path / "data",
+        )
+    )
+    posterior = ingesta.panel.assign(
+        timestamp=ingesta.panel["timestamp"] + pd.Timedelta(days=30)
+    )
+
+    with pytest.raises(ValueError, match="no cubre el calendario"):
+        pipeline.fit(replace(ingesta, panel=posterior))
