@@ -172,8 +172,15 @@ class EspacioBusqueda:
             "intentos (las restricciones descartan casi todo el espacio)"
         )
 
+    def restriccion_violada(self, configuracion: Mapping[str, Any]) -> str | None:
+        """Nombre de la primera restriccion que descarta la configuracion."""
+        for restriccion in self.restricciones:
+            if not restriccion(configuracion):
+                return _etiqueta_restriccion(restriccion)
+        return None
+
     def es_valida(self, configuracion: Mapping[str, Any]) -> bool:
-        return all(restriccion(configuracion) for restriccion in self.restricciones)
+        return self.restriccion_violada(configuracion) is None
 
     def descripcion_canonica(self) -> dict[str, Any]:
         return descripcion_canonica(self)

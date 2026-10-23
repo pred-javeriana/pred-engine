@@ -30,13 +30,14 @@ Se adopta la implementacion existente como version definitiva del Modulo
    adaptador (`PodadorASHAOptuna` en `adaptador_optuna.py`) es quien lo
    conecta a `optuna.pruners.BasePruner`.
 2. **Reglas de seguridad (`ReglasPoda`), ya implementadas:**
-   - `min_ventanas=4`: ninguna poda antes de completar 4 ventanas.
+   - `min_ventanas=4`: ninguna poda por escalon (ASHA) antes de completar 4 ventanas.
    - `agregacion="media_recortada"` (`proporcion_recorte=0.1`): la metrica
      de comparacion es una agregacion robusta de las ventanas evaluadas, no
      una ventana aislada.
    - `habilitar_poda_semantica=True` (`poda.py::es_degenerada`): descarta
      configuraciones que producen predicciones no finitas, negativas, o
-     nulas cuando el entrenamiento no lo era.
+     nulas cuando el entrenamiento no lo era. Puede descartar un trial en
+     cualquier ventana, incluso antes de la cuarta.
    - Toda poda registra `motivo` (config, escalon, valor, motivo) --
      `Trial.motivo` nunca es `None` para un trial podado (auditable).
 3. **Criterio de "promesa" (orden de merito):** en cada escalon geometrico

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pandas as pd
 
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos import CANONICAL_FIELDS
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.salida.errores import HandoffPreconditionError
+from pred_engine.ingesta.salida.validador import contar_skus
 
 _logger = get_logger(__name__)
 
@@ -37,7 +40,9 @@ def require_positive_demand(panel: pd.DataFrame) -> None:
     admisible = panel.loc[dias <= corte.t_star]
     positivos = admisible.loc[admisible["demand_qty"] > 0.0, "sku_id"].astype("string")
     todos = panel["sku_id"].astype("string")
-    sin_demanda = sorted(set(todos.dropna()) - set(positivos.dropna()))
+    sin_demanda = sorted(
+        set(todos.dropna().unique()) - set(positivos.dropna().unique())
+    )
     if sin_demanda:
         # Solo identificadores de SKU, nunca magnitudes de demanda.
         _logger.error(
@@ -50,6 +55,6 @@ def require_positive_demand(panel: pd.DataFrame) -> None:
         )
     _logger.info(
         "Precondicion de demanda positiva superada (skus=%s filas=%s)",
-        int(len({str(v) for v in todos.tolist() if pd.notna(v)})),
+        contar_skus(cast(pd.Series, todos)),
         int(len(panel)),
     )
