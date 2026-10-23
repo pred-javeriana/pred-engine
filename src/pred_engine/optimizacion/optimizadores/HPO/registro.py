@@ -26,6 +26,7 @@ from collections.abc import Sequence
 
 from pred_engine.comun.dataclasses.hpo import ResultadoEstudio, Trial
 from pred_engine.comun.dataclasses.validacion_temporal import VentanaTemporal
+from pred_engine.comun.estado_trial import estado_del_motor
 from pred_engine.optimizacion.optimizadores.HPO.contratos import InfoTrial
 
 
@@ -56,7 +57,7 @@ def instantanea_desde_estudio(
         Trial(
             id=str(t.atributos.get("trial_id", t.numero)),
             configuracion=dict(t.parametros),
-            estado=t.estado,
+            estado=estado_del_motor(t.estado, t.atributos),
             valor=t.valor,
             n_ventanas=int(t.atributos.get("n_ventanas", 0)),
             motivo=t.atributos.get("motivo"),
