@@ -6,8 +6,9 @@ import hashlib
 import json
 import sqlite3
 from collections import Counter
-from collections.abc import Mapping
-from dataclasses import asdict
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import closing
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,17 +16,27 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
+from pred_engine.comun.ejecucion_paralela import iterar_unidades
 from pred_engine.comun.logger import get_logger
-from pred_engine.comun.modelos.manifiesto_candidatos import ContextoParticion
+from pred_engine.comun.modelos import SkuClass
+from pred_engine.comun.modelos.manifiesto_candidatos import (
+    Candidato,
+    ContextoParticion,
+)
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.forecasting.adaptador_candidatos import (
     FABRICAS,
     FabricaAdaptador,
+    HandoffValidado,
     LoteRechazadoError,
     validar_manifiesto,
 )
 from pred_engine.forecasting.evaluaciones.calculo_errores import (
+    FAMILIA_LINEA_BASE,
+    MODELO_LINEA_BASE,
     VERSION_METRICAS,
     EntradaSku,
+    PronosticoFechado,
     SerieCandidato,
     evaluar_sku,
     pronosticar_linea_base,
@@ -40,6 +51,8 @@ from pred_engine.forecasting.generador_pronosticos import (
     ConfiguracionPronosticos,
     FalloPronostico,
     SerieNoElegibleError,
+    UnidadPronostico,
+    VentanaReserva,
     generar_pronosticos,
     separar_serie,
     ventanas_reserva,
@@ -65,7 +78,7 @@ from pred_engine.forecasting.persistencia_evidencia.recuperacion import (
     cargar_serie,
     cargar_unidades,
     fijar_protocolo,
-    guardar_unidad_generada,
+    guardar_unidades_generadas,
     protocolo_guardado,
     restaurar_handoff,
 )
@@ -102,6 +115,8 @@ class ControladorEvaluacion:
 
     La base de plataforma ya existe y tiene las migraciones M3 aplicadas.
     Todo resultado, tambien un lote rechazado, queda en esa misma base.
+    ``procesos`` es la cantidad de procesos que pronostican los SKU; con 1
+    todo corre en el proceso actual. Solo este proceso escribe en la base.
     """
 
     nativo = True
@@ -118,7 +133,10 @@ class ControladorEvaluacion:
         politica: PoliticaSeleccion = POLITICA_INICIAL,
         configuracion_m2: Mapping[str, Any] | None = None,
         fabricas: Mapping[str, FabricaAdaptador] = FABRICAS,
+        procesos: int = 1,
     ) -> None:
+        if type(procesos) is not int or procesos < 1:
+            raise ValueError("procesos debe ser un entero positivo")
         self.conn = conn
         self.directorio = Path(directorio)
         self.data_root = Path(data_root)
@@ -128,6 +146,7 @@ class ControladorEvaluacion:
         self.politica = politica
         self.configuracion_m2 = dict(configuracion_m2 or {})
         self.fabricas = fabricas
+        self.procesos = procesos
 
     def __call__(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
         ingesta = evaluation.fitting.ingestion
@@ -324,16 +343,23 @@ class ControladorEvaluacion:
                 run_id_m2=self.run_id_m2,
             )
             raise
+        fallos_l2 = {}
+        for unidad in fitting.units:
+            if unidad.failed:
+                fallos_l2.setdefault(unidad.sku_id, []).append(unidad.record.error)
         run_id = registrar_corrida(
             self.conn,
             identidad,
             handoff,
+            skus_fallidos=tuple(fallos_l2),
             ingesta_sha256=ingesta_sha,
             datos_sinteticos=datos_sinteticos,
         )
         plan = ventanas_reserva(corte, config.horizonte)
         skus = sorted(
-            {c.sku for c in handoff.candidatos} | {f.sku for f in handoff.fallos}
+            {c.sku for c in handoff.candidatos}
+            | {f.sku for f in handoff.fallos}
+            | set(fallos_l2)
         )
         exclusiones = {}
         for sku in skus:
@@ -418,36 +444,31 @@ class ControladorEvaluacion:
             ejecucion_id=ejecucion_id,
         )
         # La reserva solo se lee despues del handoff validado y protocolo durable.
-        entradas: list[EntradaSku] = []
-        bases: dict[str, SerieCandidato] = {}
         if estado_corrida(self.conn, run_id) in ("EN_CURSO", "EVALUADA"):
+            self._pronosticar(
+                run_id, handoff, skus, clases, series_sku, planes, corte, config
+            )
+            if estado_corrida(self.conn, run_id) == "EN_CURSO":
+                marcar_evaluada(self.conn, run_id)
+            # Cada SKU se lee de SQLite al evaluarlo: en memoria quedan sus
+            # metricas, no sus pronosticos.
             fallos_sku = Counter(f.sku for f in handoff.fallos)
+            # Solo los SKU sin ningun ajuste L2 exitoso; un candidato que 3.2
+            # rechaza ya cuenta como fallo del handoff.
+            sin_candidatos = set(fallos_l2) - {
+                c.selection.sku_id for c in fitting.candidates
+            }
+            for sku in sin_candidatos:
+                fallos_sku[sku] += len(fallos_l2[sku])
+            evaluaciones = []
             for sku in skus:
-                plan_sku = planes[sku]
-                serie = series_sku[sku]
-                historia, reserva = separar_reserva(serie, corte)
-                series = []
-                for candidato in (c for c in handoff.candidatos if c.sku == sku):
-                    if plan_sku:
-                        confirmadas = cargar_unidades(self.conn, run_id, candidato)
-                        if estado_corrida(self.conn, run_id) == "EVALUADA" and len(
-                            confirmadas
-                        ) != len(plan_sku):
-                            raise EvidenciaInconsistenteError(
-                                "faltan unidades en una corrida EVALUADA"
-                            )
-                        generar_pronosticos(
-                            candidato,
-                            serie,
-                            corte,
-                            config,
-                            fabricas=self.fabricas,
-                            confirmadas=confirmadas,
-                            confirmar=lambda unidad: guardar_unidad_generada(
-                                self.conn, run_id, unidad
-                            ),
-                        )
-                    series.append(
+                historia, reserva = separar_reserva(series_sku[sku], corte)
+                entrada = EntradaSku(
+                    sku,
+                    clases[sku],
+                    historia,
+                    reserva,
+                    tuple(
                         cargar_serie(
                             self.conn,
                             run_id,
@@ -456,68 +477,40 @@ class ControladorEvaluacion:
                             candidato.familia,
                             candidato.modelo,
                         )
-                    )
-                entrada = EntradaSku(
-                    sku,
-                    clases[sku],
-                    historia,
-                    reserva,
-                    tuple(series),
+                        for candidato in handoff.candidatos
+                        if candidato.sku == sku
+                    ),
                     fallos_sku[sku]
                     + len(candidatos_con_fallos(self.conn, run_id, sku)),
                 )
-                id_base = f"{sku}/seasonal_naive/seasonal_naive"
-                guardada = cargar_serie(
-                    self.conn, run_id, sku, id_base, "seasonal_naive", "seasonal_naive"
+                base = cargar_serie(
+                    self.conn,
+                    run_id,
+                    sku,
+                    _id_linea_base(sku),
+                    FAMILIA_LINEA_BASE,
+                    MODELO_LINEA_BASE,
                 )
-                if estado_corrida(self.conn, run_id) == "EN_CURSO":
-                    base = pronosticar_linea_base(
-                        entrada,
-                        corte,
-                        ventanas_planeadas={v.origen: v.fechas for v in plan_sku},
-                        confirmados=guardada.pronosticos,
-                    )
-                    guardar_unidades(
-                        self.conn,
-                        run_id,
-                        sku,
-                        base,
-                        codigo_version=self.codigo_version,
-                        semilla=0,
-                        emitido_en=datetime.now(UTC),
-                        fallos={
-                            p.origen: FalloPronostico(
-                                sku,
-                                id_base,
-                                "seasonal_naive",
-                                p.origen,
-                                "valores",
-                                "pronostico_invalido",
-                                f"sku={sku} linea base sin pronostico valido",
-                            )
-                            for p in base.pronosticos
-                            if not np.isfinite(p.valores).all()
-                        },
-                    )
-                    guardada = cargar_serie(
-                        self.conn,
-                        run_id,
-                        sku,
-                        id_base,
-                        "seasonal_naive",
-                        "seasonal_naive",
-                    )
-                entradas.append(entrada)
-                bases[sku] = guardada
-            if estado_corrida(self.conn, run_id) == "EN_CURSO":
-                marcar_evaluada(self.conn, run_id)
-            evaluaciones = [
-                evaluar_sku(e, corte, linea_base=bases[e.sku]) for e in entradas
-            ]
+                evaluaciones.append(evaluar_sku(entrada, corte, linea_base=base))
             resultado = emitir_veredictos(
                 evaluaciones,
                 datos_sinteticos=datos_sinteticos,
                 politica=self.politica,
+            )
+            resultado = replace(
+                resultado,
+                skus=tuple(
+                    replace(
+                        veredicto,
+                        justificacion=veredicto.justificacion
+                        + ": "
+                        + "; ".join(str(causa) for causa in fallos_l2[veredicto.sku]),
+                    )
+                    if veredicto.sku in sin_candidatos
+                    and veredicto.veredicto == "FALLO_TECNICO"
+                    else veredicto
+                    for veredicto in resultado.skus
+                ),
             )
             guardar_evaluacion(self.conn, run_id, evaluaciones, resultado)
         return self._artefacto(
@@ -529,6 +522,98 @@ class ControladorEvaluacion:
             publicada_previamente=False,
             datos_sinteticos=datos_sinteticos,
         )
+
+    def _pronosticar(
+        self,
+        run_id: str,
+        handoff: HandoffValidado,
+        skus: Sequence[str],
+        clases: Mapping[str, SkuClass],
+        series: Mapping[str, pd.Series],
+        planes: Mapping[str, tuple[VentanaReserva, ...]],
+        corte: ReserveCut,
+        config: ConfiguracionPronosticos,
+    ) -> None:
+        """Pronosticos de cada SKU en el pool; este proceso es el unico escritor.
+
+        Las unidades nuevas de los candidatos de un SKU se confirman con sus
+        marcadores en una sola transaccion, y su linea base en otra: un commit
+        por ventana haria de esta escritura el cuello de botella. Los SKU se
+        confirman en orden: tras una caida quedan durables los SKU previos y la
+        reanudacion parte de sus marcadores.
+        """
+        en_curso = estado_corrida(self.conn, run_id) == "EN_CURSO"
+        fabricas = dict(self.fabricas)
+
+        def tareas() -> Iterator[_TareaSku]:
+            for sku in skus:
+                plan = planes[sku]
+                candidatos = []
+                for candidato in (c for c in handoff.candidatos if c.sku == sku):
+                    confirmadas: tuple[UnidadPronostico, ...] = ()
+                    if plan:
+                        confirmadas = cargar_unidades(self.conn, run_id, candidato)
+                        if not en_curso and len(confirmadas) != len(plan):
+                            raise EvidenciaInconsistenteError(
+                                "faltan unidades en una corrida EVALUADA"
+                            )
+                    candidatos.append((candidato, confirmadas))
+                base = None
+                if en_curso:
+                    base = cargar_serie(
+                        self.conn,
+                        run_id,
+                        sku,
+                        _id_linea_base(sku),
+                        FAMILIA_LINEA_BASE,
+                        MODELO_LINEA_BASE,
+                    ).pronosticos
+                yield _TareaSku(
+                    sku,
+                    clases[sku],
+                    series[sku],
+                    corte,
+                    config,
+                    fabricas,
+                    tuple(candidatos),
+                    plan,
+                    base,
+                )
+
+        with closing(
+            iterar_unidades(_pronosticar_sku, tareas(), procesos=self.procesos)
+        ) as resultados:
+            for sku, resultado in zip(skus, resultados, strict=True):
+                generado = resultado.valor
+                if generado is None:
+                    raise RuntimeError(
+                        f"L4 sin pronosticos sku={sku}: {resultado.registro.error}"
+                    )
+                guardar_unidades_generadas(self.conn, run_id, generado.nuevas)
+                if generado.linea_base is not None:
+                    id_base = _id_linea_base(sku)
+                    guardar_unidades(
+                        self.conn,
+                        run_id,
+                        sku,
+                        generado.linea_base,
+                        codigo_version=self.codigo_version,
+                        semilla=0,
+                        emitido_en=datetime.now(UTC),
+                        fallos={
+                            p.origen: FalloPronostico(
+                                sku,
+                                id_base,
+                                MODELO_LINEA_BASE,
+                                p.origen,
+                                "valores",
+                                "pronostico_invalido",
+                                f"sku={sku} linea base sin pronostico valido",
+                            )
+                            for p in generado.linea_base.pronosticos
+                            if not np.isfinite(p.valores).all()
+                        },
+                    )
 
     def _artefacto(
         self,
@@ -575,3 +660,66 @@ def _serie(panel: pd.DataFrame, sku: str) -> pd.Series:
     return pd.Series(
         grupo["demand_qty"].to_numpy(), index=pd.DatetimeIndex(grupo["timestamp"])
     )
+
+
+def _id_linea_base(sku: str) -> str:
+    return f"{sku}/{FAMILIA_LINEA_BASE}/{MODELO_LINEA_BASE}"
+
+
+@dataclass(frozen=True, slots=True)
+class _TareaSku:
+    """Lo que un proceso del pool necesita para pronosticar un SKU sin SQLite.
+
+    ``base_confirmada`` es ``None`` cuando la linea base ya no se genera
+    (corrida EVALUADA).
+    """
+
+    sku: str
+    sku_class: SkuClass
+    serie: pd.Series
+    corte: ReserveCut
+    configuracion: ConfiguracionPronosticos
+    fabricas: Mapping[str, FabricaAdaptador]
+    candidatos: tuple[tuple[Candidato, tuple[UnidadPronostico, ...]], ...]
+    plan: tuple[VentanaReserva, ...]
+    base_confirmada: tuple[PronosticoFechado, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PronosticosSku:
+    nuevas: tuple[UnidadPronostico, ...]
+    linea_base: SerieCandidato | None
+
+
+def _pronosticar_sku(tarea: _TareaSku) -> _PronosticosSku:
+    """Unidad del pool: pronosticos nuevos de un SKU, sin escribir en SQLite."""
+    nuevas: list[UnidadPronostico] = []
+    series = []
+    for candidato, confirmadas in tarea.candidatos:
+        pronosticos: tuple[PronosticoFechado, ...] = ()
+        if tarea.plan:
+            generado = generar_pronosticos(
+                candidato,
+                tarea.serie,
+                tarea.corte,
+                tarea.configuracion,
+                fabricas=tarea.fabricas,
+                confirmadas=confirmadas,
+                confirmar=nuevas.append,
+            )
+            pronosticos = tuple(u.pronostico for u in generado.unidades)
+        series.append(
+            SerieCandidato(
+                candidato.candidato_id, candidato.familia, candidato.modelo, pronosticos
+            )
+        )
+    if tarea.base_confirmada is None:
+        return _PronosticosSku(tuple(nuevas), None)
+    historia, reserva = separar_reserva(tarea.serie, tarea.corte)
+    base = pronosticar_linea_base(
+        EntradaSku(tarea.sku, tarea.sku_class, historia, reserva, tuple(series)),
+        tarea.corte,
+        ventanas_planeadas={v.origen: v.fechas for v in tarea.plan},
+        confirmados=tarea.base_confirmada,
+    )
+    return _PronosticosSku(tuple(nuevas), base)

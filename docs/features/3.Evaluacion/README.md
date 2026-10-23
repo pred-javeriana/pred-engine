@@ -3,7 +3,10 @@
 M3 recibe el Parquet inmutable de M1 y los candidatos completos de M2. Evalúa
 cada configuración sobre todas las ventanas completas de la reserva final del
 20 %, compara con Seasonal Naive, selecciona por categoría y publica los
-resultados de cada SKU entregado en el handoff. Las exclusiones previas de M2
+resultados de cada SKU entregado en el handoff y de cada SKU cuyos ajustes L2
+fallaron todos. Estos últimos reciben FALLO_TECNICO con la causa registrada
+por L2 y cuentan en los conteos y porcentajes de su clase. Sus unidades de
+línea base se incluyen en el total previsto. Las exclusiones previas de M2
 se consultan por separado en la procedencia. M3 no ejecuta HPO, no retunea y
 no desarrolla la interfaz de M4.
 
@@ -152,9 +155,10 @@ la compatibilidad de las migraciones de ambos paquetes y una corrida conjunta
 con base central temporal, múltiples SKU, reanudación, actualización de una
 versión pendiente y rechazo de una base ausente. También debe medir tiempo,
 CPU, memoria y costo de reinicio en el equipo efectivo. No se usa VRAM en el
-catálogo CPU de este hito. La etapa L4 corre en serie en el proceso
-principal, con BLAS de varias hebras; `--workers` solo paraleliza L2 y L3, así
-que el tiempo de L4 crece con el número de SKU.
+catálogo CPU de este hito. Los pronósticos de L4 corren por SKU en el pool de
+`--workers`, con BLAS de una hebra; la evaluación, la selección y la
+publicación corren en el proceso principal, que es el único escritor de
+SQLite.
 
 La firma del líder de ingeniería, la aprobación de otro fundador, la fusión y el cierre de
 las tareas del Hub son actos posteriores de aceptación. Este documento no

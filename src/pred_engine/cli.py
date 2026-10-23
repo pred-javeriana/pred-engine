@@ -300,7 +300,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--workers",
         type=int,
         default=max(1, (os.cpu_count() or 2) - 1),
-        help="Procesos para las unidades SKU x familia (por defecto, nucleos - 1)",
+        help=(
+            "Procesos para las unidades SKU x familia de L2 y L3 y los "
+            "pronosticos por SKU de L4 (por defecto, nucleos - 1)"
+        ),
     )
     run.add_argument(
         "--runs-dir",
@@ -585,10 +588,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 def _exit_code(result: PipelineResult) -> int:
     if result.complete:
-        fallos_m3 = (
-            0
-            if result.validation is None
-            else result.validation.audit_bundle.get("n_fallos", 0)
+        validacion = result.validation
+        # Una publicacion congelada conserva sus FALLO_TECNICO aunque el reintento
+        # ya no falle; solo un run_id nuevo produce resultados nuevos.
+        fallos_m3 = validacion is not None and (
+            bool(validacion.audit_bundle.get("n_fallos", 0))
+            or any(v.verdict == "FALLO_TECNICO" for v in validacion.verdicts)
         )
         return 8 if result.failures or fallos_m3 else 0
     return 8 if result.failures else 7
@@ -780,6 +785,7 @@ def _cmd_run_con_base(
                 data_root=args.data_root,
                 politica=politica,
                 configuracion_m2=settings,
+                procesos=args.workers,
             ),
         )
         request = PipelineInput(

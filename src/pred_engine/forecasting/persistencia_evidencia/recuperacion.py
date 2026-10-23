@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -11,6 +12,7 @@ import numpy as np
 import pandas as pd
 from pydantic import TypeAdapter
 
+from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos.manifiesto_candidatos import (
     VERSION_ESQUEMA_MANIFIESTO,
     Candidato,
@@ -28,9 +30,11 @@ from pred_engine.forecasting.generador_pronosticos import (
 from pred_engine.forecasting.persistencia_evidencia.repositorio import (
     _exigir_estado,
     _inconsistente,
+    _insertar_unidades,
     _transaccion,
-    guardar_unidades,
 )
+
+_logger = get_logger(__name__)
 
 
 def fijar_protocolo(
@@ -119,21 +123,39 @@ def restaurar_handoff(
     )
 
 
-def guardar_unidad_generada(
-    conn: sqlite3.Connection, run_id: str, unidad: UnidadPronostico
-) -> None:
-    """Resultado, fallo y marcador de una ventana en la misma transaccion."""
-    c = unidad.candidato
-    guardar_unidades(
-        conn,
-        run_id,
-        c.sku,
-        SerieCandidato(c.candidato_id, c.familia, c.modelo, (unidad.pronostico,)),
-        codigo_version=unidad.codigo_version,
-        semilla=c.semilla,
-        emitido_en=unidad.emitido_en,
-        fallos={} if unidad.fallo is None else {unidad.pronostico.origen: unidad.fallo},
+def guardar_unidades_generadas(
+    conn: sqlite3.Connection, run_id: str, unidades: Sequence[UnidadPronostico]
+) -> int:
+    """Resultados, fallos y marcadores de varias ventanas en una sola transaccion.
+
+    Ninguna unidad queda durable sin las demas, y una ya confirmada no se toca.
+    Devuelve cuantas eran nuevas.
+    """
+    if not unidades:
+        return 0
+    nuevas = 0
+    with _transaccion(conn):
+        _exigir_estado(conn, run_id, ("EN_CURSO",), "guardar_unidades_generadas")
+        for unidad in unidades:
+            c = unidad.candidato
+            nuevas += _insertar_unidades(
+                conn,
+                run_id,
+                c.sku,
+                SerieCandidato(
+                    c.candidato_id, c.familia, c.modelo, (unidad.pronostico,)
+                ),
+                codigo_version=unidad.codigo_version,
+                semilla=c.semilla,
+                emitido_en=unidad.emitido_en,
+                fallos={}
+                if unidad.fallo is None
+                else {unidad.pronostico.origen: unidad.fallo},
+            )
+    _logger.info(
+        "Unidades generadas run_id=%s nuevas=%d de %d", run_id, nuevas, len(unidades)
     )
+    return nuevas
 
 
 def cargar_serie(

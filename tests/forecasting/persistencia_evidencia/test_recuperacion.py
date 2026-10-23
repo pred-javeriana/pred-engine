@@ -23,7 +23,7 @@ from pred_engine.forecasting.persistencia_evidencia.recuperacion import (
     candidatos_con_fallos,
     cargar_unidades,
     fijar_protocolo,
-    guardar_unidad_generada,
+    guardar_unidades_generadas,
 )
 
 
@@ -66,7 +66,7 @@ def test_pronosticos_y_metadatos_se_restauran_sin_recalcular():
         corte,
         cfg,
         fabricas={"classical": lambda config, *, seed: SeasonalNaiveStub(1, seed)},
-        confirmar=lambda u: guardar_unidad_generada(conn, rid, u),
+        confirmar=lambda u: guardar_unidades_generadas(conn, rid, [u]),
     )
     confirmadas = cargar_unidades(conn, rid, c)
     assert [u.pronostico.valores.tolist() for u in confirmadas] == [
@@ -99,7 +99,7 @@ def test_fallo_parcial_durable_cuenta_como_comparacion_incompleta():
         corte,
         cfg,
         fabricas={"classical": lambda config, *, seed: FallaInicial(1, seed)},
-        confirmar=lambda u: guardar_unidad_generada(conn, rid, u),
+        confirmar=lambda u: guardar_unidades_generadas(conn, rid, [u]),
     )
     restauradas = cargar_unidades(conn, rid, c)
     assert candidatos_con_fallos(conn, rid, "S1") == frozenset({"S1/classical/sarima"})
@@ -126,7 +126,7 @@ def test_fila_de_pronostico_perdida_se_rechaza_sin_inventar_reemplazo():
         corte,
         cfg,
         fabricas={"classical": lambda config, *, seed: SeasonalNaiveStub(1, seed)},
-        confirmar=lambda u: guardar_unidad_generada(conn, rid, u),
+        confirmar=lambda u: guardar_unidades_generadas(conn, rid, [u]),
     )
     conn.execute("DELETE FROM m3_pronosticos WHERE origen = '2024-01-14' AND h = 2")
     conn.commit()

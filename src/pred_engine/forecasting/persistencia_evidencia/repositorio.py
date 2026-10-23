@@ -87,11 +87,13 @@ def registrar_corrida(
     ingesta_sha256: str,
     datos_sinteticos: bool | None,
     run_id_m2: str | None = None,
+    skus_fallidos: tuple[str, ...] = (),
 ) -> str:
     """Registra la corrida con el resultado de 3.2 y devuelve su `run_id`.
 
     Un lote rechazado queda en RECHAZADA con su causa; uno valido, en EN_CURSO
-    con los SKUs de su manifiesto y sus fallos de candidato. Registrar otra vez
+    con los SKUs de su manifiesto, sus fallos de candidato y los fallidos en L2.
+    Registrar otra vez
     la misma identidad no cambia nada. `ingesta_sha256` es la clave de
     `ingestas` (archivo fuente de M1); la identidad lleva `ingesta_ref_m1`, que
     es el Parquet publicado.
@@ -118,7 +120,11 @@ def registrar_corrida(
             handoff.run_id_m2,
             handoff.fallos,
         )
-        skus = {c.sku for c in handoff.candidatos} | {f.sku for f in fallos}
+        skus = (
+            {c.sku for c in handoff.candidatos}
+            | {f.sku for f in fallos}
+            | set(skus_fallidos)
+        )
     run_id = identidad.run_id
     with _transaccion(conn):
         origenes = conn.execute(
@@ -239,84 +245,18 @@ def guardar_unidades(
     pronosticos van en la misma transaccion; una unidad ya confirmada no se
     toca aunque llegue con otros valores.
     """
-    nuevas = 0
     with _transaccion(conn):
         _exigir_estado(conn, run_id, ("EN_CURSO",), "guardar_unidades")
-        for pronostico in serie.pronosticos:
-            origen = _fecha(pronostico.origen)
-            if conn.execute(
-                "SELECT 1 FROM m3_unidades WHERE run_id = ? AND sku = ? "
-                "AND candidato_id = ? AND origen = ?",
-                (run_id, sku, serie.candidato_id, origen),
-            ).fetchone():
-                continue
-            if not len(pronostico.fechas) or not pronostico.fechas.equals(
-                pd.date_range(
-                    pronostico.origen + pd.Timedelta(days=1),
-                    periods=len(pronostico.fechas),
-                )
-            ):
-                raise _inconsistente("ventana sin horizonte diario completo")
-            valores = _valores(pronostico)
-            fallo = (fallos or {}).get(pronostico.origen)
-            fallo_explicito = fallo is not None
-            if fallo is None and any(v is None for v in valores):
-                fallo = FalloPronostico(
-                    sku,
-                    serie.candidato_id,
-                    serie.modelo,
-                    pronostico.origen,
-                    "valores",
-                    "pronostico_invalido",
-                    f"sku={sku} candidato_id={serie.candidato_id}: salida invalida",
-                )
-            if fallo is not None:
-                if (
-                    fallo.sku != sku
-                    or fallo.candidato_id != serie.candidato_id
-                    or fallo.origen != pronostico.origen
-                    or fallo.modelo != serie.modelo
-                ):
-                    raise _inconsistente("fallo incompatible con su unidad")
-                if fallo_explicito:
-                    valores = [None] * len(pronostico.fechas)
-            causa = (
-                None
-                if fallo is None
-                else _json({**asdict(fallo), "origen": _fecha(fallo.origen)})
-            )
-            confirmada = conn.execute(
-                "INSERT INTO m3_unidades (run_id, sku, candidato_id, origen, familia,"
-                " modelo, estado, causa, emitido_en, codigo_version, semilla)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                (
-                    run_id,
-                    sku,
-                    serie.candidato_id,
-                    origen,
-                    serie.familia,
-                    serie.modelo,
-                    "confirmada" if fallo is None else "fallida",
-                    causa,
-                    None if emitido_en is None else emitido_en.isoformat(),
-                    codigo_version,
-                    semilla,
-                ),
-            ).rowcount
-            if not confirmada:
-                continue
-            nuevas += 1
-            conn.executemany(
-                "INSERT INTO m3_pronosticos (run_id, sku, candidato_id, origen, h,"
-                " fecha, valor) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (run_id, sku, serie.candidato_id, origen, h, _fecha(fecha), valor)
-                    for h, (fecha, valor) in enumerate(
-                        zip(pronostico.fechas, valores, strict=True),
-                        start=1,
-                    )
-                ],
-            )
+        nuevas = _insertar_unidades(
+            conn,
+            run_id,
+            sku,
+            serie,
+            codigo_version=codigo_version,
+            semilla=semilla,
+            emitido_en=emitido_en,
+            fallos=fallos,
+        )
     _logger.info(
         "Unidades run_id=%s sku=%s candidato_id=%s nuevas=%d de %d",
         run_id,
@@ -325,6 +265,100 @@ def guardar_unidades(
         nuevas,
         len(serie.pronosticos),
     )
+    return nuevas
+
+
+def _insertar_unidades(
+    conn: sqlite3.Connection,
+    run_id: str,
+    sku: str,
+    serie: SerieCandidato,
+    *,
+    codigo_version: str | None = None,
+    semilla: int | None = None,
+    emitido_en: datetime | None = None,
+    fallos: Mapping[pd.Timestamp, FalloPronostico] | None = None,
+) -> int:
+    """Escritura de ``guardar_unidades`` dentro de una transaccion del llamador.
+
+    El llamador abre la transaccion y exige la corrida EN_CURSO.
+    """
+    nuevas = 0
+    for pronostico in serie.pronosticos:
+        origen = _fecha(pronostico.origen)
+        if conn.execute(
+            "SELECT 1 FROM m3_unidades WHERE run_id = ? AND sku = ? "
+            "AND candidato_id = ? AND origen = ?",
+            (run_id, sku, serie.candidato_id, origen),
+        ).fetchone():
+            continue
+        if not len(pronostico.fechas) or not pronostico.fechas.equals(
+            pd.date_range(
+                pronostico.origen + pd.Timedelta(days=1),
+                periods=len(pronostico.fechas),
+            )
+        ):
+            raise _inconsistente("ventana sin horizonte diario completo")
+        valores = _valores(pronostico)
+        fallo = (fallos or {}).get(pronostico.origen)
+        fallo_explicito = fallo is not None
+        if fallo is None and any(v is None for v in valores):
+            fallo = FalloPronostico(
+                sku,
+                serie.candidato_id,
+                serie.modelo,
+                pronostico.origen,
+                "valores",
+                "pronostico_invalido",
+                f"sku={sku} candidato_id={serie.candidato_id}: salida invalida",
+            )
+        if fallo is not None:
+            if (
+                fallo.sku != sku
+                or fallo.candidato_id != serie.candidato_id
+                or fallo.origen != pronostico.origen
+                or fallo.modelo != serie.modelo
+            ):
+                raise _inconsistente("fallo incompatible con su unidad")
+            if fallo_explicito:
+                valores = [None] * len(pronostico.fechas)
+        causa = (
+            None
+            if fallo is None
+            else _json({**asdict(fallo), "origen": _fecha(fallo.origen)})
+        )
+        confirmada = conn.execute(
+            "INSERT INTO m3_unidades (run_id, sku, candidato_id, origen, familia,"
+            " modelo, estado, causa, emitido_en, codigo_version, semilla)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            (
+                run_id,
+                sku,
+                serie.candidato_id,
+                origen,
+                serie.familia,
+                serie.modelo,
+                "confirmada" if fallo is None else "fallida",
+                causa,
+                None if emitido_en is None else emitido_en.isoformat(),
+                codigo_version,
+                semilla,
+            ),
+        ).rowcount
+        if not confirmada:
+            continue
+        nuevas += 1
+        conn.executemany(
+            "INSERT INTO m3_pronosticos (run_id, sku, candidato_id, origen, h,"
+            " fecha, valor) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (run_id, sku, serie.candidato_id, origen, h, _fecha(fecha), valor)
+                for h, (fecha, valor) in enumerate(
+                    zip(pronostico.fechas, valores, strict=True),
+                    start=1,
+                )
+            ],
+        )
     return nuevas
 
 
