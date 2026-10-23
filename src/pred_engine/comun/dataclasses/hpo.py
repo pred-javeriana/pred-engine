@@ -5,8 +5,9 @@ Compartidos por las tres familias (clasicos/ML/DL)
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pred_engine.comun.dataclasses.validacion_temporal import VentanaTemporal
@@ -38,3 +39,14 @@ class ResultadoEstudio:
     ventanas: tuple[VentanaTemporal, ...]
     metrica_objetivo: str
     seed: int
+    causas: Mapping[str, int] = field(default_factory=dict)
+
+    @property
+    def resumen_causas(self) -> str:
+        """Conteos y motivos originales para explicar un estudio sin ganador."""
+        motivos = Counter(
+            t.motivo or "sin_motivo_registrado"
+            for t in self.trials
+            if t.estado in ("fallido", "podado")
+        )
+        return f"causas={dict(self.causas)}; motivos={dict(motivos)}"

@@ -63,9 +63,16 @@ def classify_panel(frame: pd.DataFrame) -> TopologyArtifact:
     metricas: list[TopologyMetrics] = []
     clases: dict[str, str] = {}
 
+    claves = admisible["sku_id"].astype("string")
+    # Posiciones de cada SKU en un solo recorrido, en el orden de sus filas.
+    posiciones = claves.groupby(claves, sort=False).indices
+    demanda_admisible = admisible["demand_qty"]
     for sku in sorted(frame["sku_id"].astype("string").unique()):
-        grupo = admisible.loc[admisible["sku_id"].astype("string") == sku]
-        demanda = grupo["demand_qty"].to_numpy(dtype="float64", copy=True)
+        if pd.isna(sku):
+            grupo = demanda_admisible.loc[claves == sku]
+        else:
+            grupo = demanda_admisible.iloc[posiciones.get(sku, [])]
+        demanda = grupo.to_numpy(dtype="float64", copy=True)
         try:
             adi = compute_adi(demanda)
             cv2 = compute_cv2(demanda)

@@ -229,6 +229,7 @@ def test_degenerate_final_forecast_fails_its_unit_under_rule_3(tmp_path):
         pipeline.run(request_at(tmp_path))
     assert raised.value.stage == "L2"
     assert "desde t*" in str(raised.value)
+    assert "configuracion={'p': 1, 'd': 0, 'q': 0" in str(raised.value)
 
 
 def test_l2_rejects_missing_daily_observation(tmp_path):
@@ -468,6 +469,8 @@ def test_real_cli_default_composition_publishes_m3(tmp_path, capsys):
             "mae",
             "--seed",
             "17",
+            "--workers",
+            "2",
         ]
     )
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -490,7 +493,15 @@ def test_cli_reports_same_honest_blocker(tmp_path, monkeypatch, capsys):
     )
     request = request_at(tmp_path)
     code = main(
-        ["run", "--csv", str(request.csv_path), "--data-root", str(request.data_root)]
+        [
+            "run",
+            "--csv",
+            str(request.csv_path),
+            "--data-root",
+            str(request.data_root),
+            "--workers",
+            "2",
+        ]
     )
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert code == 7
@@ -966,7 +977,15 @@ def test_cli_reports_isolated_unit_failures_with_exit_code_8(
         request.csv_path, index=False
     )
     code = main(
-        ["run", "--csv", str(request.csv_path), "--data-root", str(request.data_root)]
+        [
+            "run",
+            "--csv",
+            str(request.csv_path),
+            "--data-root",
+            str(request.data_root),
+            "--workers",
+            "2",
+        ]
     )
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert code == 8
@@ -995,6 +1014,8 @@ def test_cli_resource_sampling_can_be_disabled(tmp_path, monkeypatch, capsys):
         str(request.csv_path),
         "--data-root",
         str(request.data_root),
+        "--workers",
+        "2",
     ]
 
     assert main([*args, "--telemetry-interval", "-1"]) == 1

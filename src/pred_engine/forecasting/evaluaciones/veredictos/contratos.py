@@ -49,7 +49,7 @@ FAMILIAS_ELEGIBLES_INICIALES: Mapping[SkuClass, tuple[str, ...]] = FAMILIES_BY_S
 class PoliticaSeleccion:
     """Se congela y versiona antes de abrir la reserva (ADR-03-003/007/008)."""
 
-    version: str = "3.4.2-inicial"
+    version: str = "3.4.3-inicial"
     n_min: int = 30
     tolerancia_empate: float = 0.01
     orden_simplicidad: tuple[str, ...] = ("classical", "ml", "dl", "foundation")

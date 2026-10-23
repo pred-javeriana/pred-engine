@@ -119,3 +119,33 @@ def test_roundtrip_parquet_vuelve_a_validar(tmp_path: Path) -> None:
     leido = read_classified_parquet(destino)
     assert list(leido.columns) == list(PANEL_FIELDS)
     assert set(leido["sku_class"].astype(str)) == {"intermittent"}
+
+
+def test_rechaza_publicar_y_releer_sku_class_binaria(tmp_path: Path) -> None:
+    layout = ensure_data_layout(tmp_path / "data")
+    diario = _diario_mini()
+    clasificado = classify_daily_panel(diario).frame
+    binario = clasificado.copy()
+    binario["sku_class"] = pd.Series(
+        [str(clase).encode() for clase in clasificado["sku_class"]], dtype=object
+    )
+    with pytest.raises(OutputContractError, match="violacion Pydantic en fila 0"):
+        publish_classified_panel(
+            binario,
+            layout.processed / "binario.parquet",
+            data_root=layout.root,
+            daily_panel=diario,
+        )
+
+    externo = tmp_path / "externo.parquet"
+    binario.to_parquet(externo)
+    with pytest.raises(OutputContractError, match="violacion Pydantic en fila 0"):
+        read_classified_parquet(externo)
+
+    texto = publish_classified_panel(
+        clasificado,
+        layout.processed / "texto.parquet",
+        data_root=layout.root,
+        daily_panel=diario,
+    )
+    assert read_classified_parquet(texto)["sku_class"].tolist() == ["intermittent"] * 4

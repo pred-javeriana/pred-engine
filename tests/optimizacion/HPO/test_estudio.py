@@ -176,8 +176,16 @@ def test_configuracion_invalida_no_quema_presupuesto_de_trials_reales():
         estacionalidad=1,
         seed=3,
     )
-    reales = [t for t in resultado.trials if t.motivo != "configuracion_invalida"]
-    invalidos = [t for t in resultado.trials if t.motivo == "configuracion_invalida"]
+    reales = [
+        t
+        for t in resultado.trials
+        if not (t.motivo or "").startswith("configuracion_invalida:")
+    ]
+    invalidos = [
+        t
+        for t in resultado.trials
+        if (t.motivo or "").startswith("configuracion_invalida:")
+    ]
     assert len(reales) == 5
     assert len(invalidos) > 0
 

@@ -100,6 +100,20 @@ def _veredicto_sku(
     datos_sinteticos: bool | None,
 ) -> VeredictoSku:
     familia = seleccion.familia_campeona
+    fallback_desde = None
+    if familia != FAMILIA_LINEA_BASE and not any(
+        c.familia == familia for c in evaluacion.candidatos
+    ):
+        # La reserva del SKU no ordena familias: se conserva el ranking de clase.
+        for siguiente in sorted(
+            seleccion.medianas_r, key=lambda f: (seleccion.medianas_r[f], f)
+        ):
+            if siguiente != familia and any(
+                c.familia == siguiente for c in evaluacion.candidatos
+            ):
+                fallback_desde = familia
+                familia = siguiente
+                break
     if familia == FAMILIA_LINEA_BASE:
         instancias = [evaluacion.linea_base]
         campeon: MetricasCandidato | None = evaluacion.linea_base
@@ -158,6 +172,12 @@ def _veredicto_sku(
     else:
         veredicto = "EXPLORATORIO"
         motivo = _motivo_exploratorio(datos_sinteticos, razon, comparacion_incompleta)
+
+    if fallback_desde is not None:
+        motivo += (
+            f"; fallback de familia {fallback_desde} a {familia}: "
+            "sin instancia de la campeona de clase"
+        )
 
     return VeredictoSku(
         sku=evaluacion.sku,

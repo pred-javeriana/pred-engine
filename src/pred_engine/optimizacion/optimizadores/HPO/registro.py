@@ -20,11 +20,28 @@ optuna` en estas lineas, la frontera se volvio a cruzar.
 
 from __future__ import annotations
 
+import re
+from collections import Counter
 from collections.abc import Sequence
 
 from pred_engine.comun.dataclasses.hpo import ResultadoEstudio, Trial
 from pred_engine.comun.dataclasses.validacion_temporal import VentanaTemporal
 from pred_engine.optimizacion.optimizadores.HPO.contratos import InfoTrial
+
+
+def _causa(motivo: str | None) -> str:
+    if not motivo:
+        return "sin_motivo_registrado"
+    # Los registros previos anteponen ventana/valor a la causa del descarte.
+    prefijo = re.search(
+        r"\b(configuracion_invalida|ajuste_fallido|poda_semantica|escalon)\b",
+        motivo,
+    )
+    if prefijo is not None:
+        return prefijo.group(1)
+    if "asha" in motivo:
+        return "escalon"
+    return motivo.split(":", 1)[0]
 
 
 def instantanea_desde_estudio(
@@ -64,4 +81,9 @@ def instantanea_desde_estudio(
         ventanas=ventanas,
         metrica_objetivo=metrica_objetivo,
         seed=seed,
+        causas=dict(
+            Counter(
+                _causa(t.motivo) for t in trials if t.estado in ("fallido", "podado")
+            )
+        ),
     )

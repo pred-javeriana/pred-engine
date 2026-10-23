@@ -397,7 +397,8 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
     if degenerado:
         raise ValueError(
             f"pronostico degenerado para {selection.sku_id}/{selection.family} "
-            f"desde t*: {motivo} (regla #3)"
+            f"desde t*: {motivo} (regla #3); "
+            f"configuracion={dict(selection.forecast_config)}"
         )
     return FittedCandidate(selection, y, forecast)
 
