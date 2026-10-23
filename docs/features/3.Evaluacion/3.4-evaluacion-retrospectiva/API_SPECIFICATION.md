@@ -99,7 +99,7 @@ propiedad `cobertura = n_ventanas_validas / n_ventanas_totales`.
 
 | Campo | Default |
 | --- | --- |
-| `version` | `"3.4.2-inicial"` |
+| `version` | `"3.4.3-inicial"` |
 | `n_min` | `30` |
 | `tolerancia_empate` | `0.01` |
 | `orden_simplicidad` | `("classical", "ml", "dl", "foundation")` |
