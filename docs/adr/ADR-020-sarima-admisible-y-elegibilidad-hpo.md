@@ -85,6 +85,11 @@ HPO.
   de clase y registra en la justificación del veredicto el fallback, la familia
   original y la utilizada. Si ninguna familia del ranking tiene instancia,
   conserva `FALLO_TECNICO`. No reintenta trials ni cambia el HPO de L2.
+  Elegir el siguiente trial elegible cuando el ganador falla en L2 sigue como
+  decisión pendiente. Un producto con fallback entra en la familia de pruebas
+  de Benjamini-Hochberg de toda la corrida, por lo que el `dm_p_ajustado` de
+  otros productos puede cambiar; su veredicto, familia, candidato y banderas
+  no cambian.
 - Los trials fallidos se cierran en la primera ventana sin ajuste, así que el
   HPO clásico termina antes.
 
