@@ -60,6 +60,10 @@ def normalize_output_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _filas_garantizadas(frame: pd.DataFrame) -> np.ndarray:
     """Filas que ``ClassifiedObservation`` acepta sin tener que construirla."""
+    if not isinstance(frame["sku_class"].dtype, pd.StringDtype):
+        # Las comprobaciones de clase leen el texto convertido; valores como
+        # bytes solo los rechaza Pydantic, fila a fila.
+        return np.zeros(len(frame), dtype=bool)
     anios = frame["timestamp"].dt.year.to_numpy()
     skus = cast(pd.Series, frame["sku_id"])
     if isinstance(skus.dtype, pd.StringDtype):

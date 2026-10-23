@@ -115,3 +115,16 @@ def test_rechaza_timestamp_fuera_del_rango_de_datetime() -> None:
     )
     with pytest.raises(OutputContractError, match="violacion Pydantic en fila 2"):
         validate_output_contract(marco)
+
+
+def test_rechaza_sku_class_binaria_en_su_fila() -> None:
+    marco = _clasificado_valido()
+    marco["sku_class"] = pd.Series([b"intermittent"] * 4, dtype=object)
+    with pytest.raises(OutputContractError, match="violacion Pydantic en fila 0"):
+        validate_output_contract(marco)
+
+
+def test_acepta_sku_class_de_texto_en_columna_object() -> None:
+    marco = _clasificado_valido()
+    marco["sku_class"] = pd.Series(["intermittent"] * 4, dtype=object)
+    validate_output_contract(marco)
