@@ -12,10 +12,9 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pandas as pd
-import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field
 
 from pred_engine.comun.exclusiones import SkuExclusion
@@ -145,9 +144,9 @@ class ReserveInfo(_Modelo):
     def cut(self) -> ReserveCut:
         """Corte publicado por M1, validado al releer el informe."""
         corte = ReserveCut(
-            t_star=pd.Timestamp(self.t_star),
-            first_reserved=pd.Timestamp(self.first_reserved),
-            last_observed=pd.Timestamp(self.last_observed),
+            t_star=cast(pd.Timestamp, pd.Timestamp(self.t_star)),
+            first_reserved=cast(pd.Timestamp, pd.Timestamp(self.first_reserved)),
+            last_observed=cast(pd.Timestamp, pd.Timestamp(self.last_observed)),
             reserved_days=self.reserved_days,
             fraction=self.fraction,
         )
@@ -188,6 +187,7 @@ class IngestReportFile(_Modelo):
     topology: TopologyInfo | None = None
     exclusions: list[SkuExclusion] = Field(default_factory=list)
     excluded_count: int = Field(default=0, ge=0)
+    publications: list[PublishedInfo] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +234,38 @@ def report_path(data_root: str | Path | None, sha256: str) -> Path:
     return ensure_data_layout(data_root).ingestas / f"{sha256}.json"
 
 
+def son_informes_equivalentes(a: IngestReportFile, b: IngestReportFile) -> bool:
+    """Comprueba si dos informes representan publicaciones equivalentes.
+
+    Dos informes son equivalentes si ambos fueron aceptados y coinciden en:
+    - Procedencia/origen (datos_sinteticos).
+    - Corte publicado (reserve).
+    - Exclusiones y conteo de exclusiones (exclusions, excluded_count).
+    - Huella del Parquet publicado.
+    """
+    if a.status != "accepted" or b.status != "accepted":
+        return False
+    if a.source_file.datos_sinteticos != b.source_file.datos_sinteticos:
+        return False
+    if a.reserve != b.reserve:
+        return False
+    if a.exclusions != b.exclusions or a.excluded_count != b.excluded_count:
+        return False
+    pubs_a = {
+        p.sha256
+        for p in ([a.published] if a.published is not None else []) + a.publications
+        if p is not None and p.sha256 is not None
+    }
+    pubs_b = {
+        p.sha256
+        for p in ([b.published] if b.published is not None else []) + b.publications
+        if p is not None and p.sha256 is not None
+    }
+    if not (pubs_a & pubs_b):
+        return False
+    return True
+
+
 def informe_publicado(
     data_root: str | Path | None, parquet_path: str | Path, huella: str
 ) -> IngestReportFile | None:
@@ -241,24 +273,32 @@ def informe_publicado(
 
     No crea directorios. Unos bytes iguales en otra ruta no bastan: son otra
     publicacion. Si varias ingestas publicaron la misma ruta y huella, la
-    procedencia es ambigua y se rechaza.
+    procedencia es ambigua y se rechaza salvo que sean publicaciones equivalentes.
     """
     raiz = Path(data_root) if data_root is not None else default_data_root()
     destino = Path(parquet_path).expanduser().resolve()
     ligados: dict[str, IngestReportFile] = {}
     for ruta in (raiz / REPORTS_DIR).glob("[0-9a-f]" * 64 + ".json"):
         informe = IngestReportFile.model_validate_json(ruta.read_text())
-        publicado = informe.published
-        if (
-            informe.status != "accepted"
-            or publicado is None
-            or publicado.sha256 != huella
-        ):
+        if informe.status != "accepted":
             continue
-        origen = Path(publicado.parquet_path)
-        if (origen if origen.is_absolute() else raiz / origen).resolve() == destino:
+        publicaciones = (
+            [informe.published] if informe.published is not None else []
+        ) + informe.publications
+        coincide = False
+        for publicado in publicaciones:
+            if publicado is None or publicado.sha256 != huella:
+                continue
+            origen = Path(publicado.parquet_path)
+            if (origen if origen.is_absolute() else raiz / origen).resolve() == destino:
+                coincide = True
+                break
+        if coincide:
             ligados[informe.ingest_id] = informe
     if len(ligados) > 1:
+        informes = list(ligados.values())
+        if all(son_informes_equivalentes(informes[0], otro) for otro in informes[1:]):
+            return min(informes, key=lambda r: r.ingest_id)
         raise ValueError(
             f"el Parquet {destino} tiene varias procedencias M1: "
             + ", ".join(sorted(ligados))
@@ -321,6 +361,13 @@ def _informe_aceptado(
 ) -> IngestReportFile:
     reserva, info = _topologia(topologia)
     n_skus = len(topologia.metrics)
+    publicado = PublishedInfo(
+        sha256=hash_sha256_archivo(parquet),
+        parquet_path=_relativa(parquet, raiz),
+        rows=len(topologia.frame),
+        n_skus=n_skus,
+        columns=[str(c) for c in topologia.frame.columns],
+    )
     return IngestReportFile(
         written_at=_ahora(),
         ingest_id=fuente.sha256,
@@ -333,17 +380,12 @@ def _informe_aceptado(
             rows_daily_panel=len(topologia.frame),
             n_skus=n_skus,
         ),
-        published=PublishedInfo(
-            sha256=hash_sha256_archivo(parquet),
-            parquet_path=_relativa(parquet, raiz),
-            rows=len(topologia.frame),
-            n_skus=n_skus,
-            columns=[str(c) for c in topologia.frame.columns],
-        ),
+        published=publicado,
         reserve=reserva,
         topology=info,
         exclusions=list(topologia.exclusions),
         excluded_count=len(topologia.exclusions),
+        publications=[publicado],
     )
 
 
@@ -454,6 +496,27 @@ def write_ingest_report(report: IngestReportFile, data_root: str | Path | None) 
             }
         )
     destino = report_path(data_root, report.ingest_id)
+    if destino.exists():
+        try:
+            previa = IngestReportFile.model_validate_json(destino.read_text())
+        except Exception:
+            previa = None
+        if previa is not None and previa.status == "accepted":
+            viejas = (
+                [previa.published] if previa.published is not None else []
+            ) + previa.publications
+            nuevas = (
+                [report.published] if report.published is not None else []
+            ) + report.publications
+            todas: dict[str, PublishedInfo] = {}
+            for p in viejas + nuevas:
+                if p is not None:
+                    todas[p.parquet_path] = p
+            report = report.model_copy(
+                update={"publications": list(todas.values())}
+            )
+    elif report.published is not None and not report.publications:
+        report = report.model_copy(update={"publications": [report.published]})
     temporal = destino.with_name(f".{destino.name}.{os.getpid()}.part")
     try:
         temporal.write_text(
@@ -500,39 +563,34 @@ def ingest_csv_with_report(
         deposito = deposit_raw(origen, data_root=layout.root, on_conflict=on_conflict)
         # Ya esta en raw/: las rutas de ingesta lo reconocen sin copiarlo de nuevo.
         if provider is None:
-            resultado = ingest_canonical_csv(deposito.path, data_root=layout.root)
+            resultado = ingest_canonical_csv(
+                deposito.path,
+                data_root=layout.root,
+                datos_sinteticos=datos_sinteticos,
+                deposito=deposito,
+            )
         else:
             resultado = run_ingest(
-                deposito.path, provider, data_root=layout.root, timeout=timeout
+                deposito.path,
+                provider,
+                data_root=layout.root,
+                timeout=timeout,
+                datos_sinteticos=datos_sinteticos,
+                deposito=deposito,
             )
     except Exception as exc:  # noqa: BLE001 - se registra en el informe y se devuelve
         error = exc
 
-    if isinstance(resultado, IngestResult) and deposito is not None:
-        informe = _informe_aceptado(
-            fuente,
-            deposito,
-            resultado.topology,
-            resultado.parquet_path,
-            layout.root,
-            validadas=len(resultado.validated),
-            cabecera=_cabecera(resultado.diagnostic.diagnostic),
-        )
-    elif resultado is not None and deposito is not None:
-        informe = _informe_aceptado(
-            fuente,
-            deposito,
-            resultado.topology,
-            resultado.parquet_path,
-            layout.root,
-            validadas=resultado.validated_rows,
-        )
+    if resultado is not None:
+        ruta = report_path(layout.root, sha256)
+        informe = IngestReportFile.model_validate_json(ruta.read_text())
     elif isinstance(error, RawConflictError):
         informe = _informe_conflicto(fuente, error, layout.root)
+        ruta = write_ingest_report(informe, layout.root)
     else:
         assert error is not None
         informe = _informe_fallido(fuente, deposito, error, layout.root)
-    ruta = write_ingest_report(informe, layout.root)
+        ruta = write_ingest_report(informe, layout.root)
     return ReportedIngest(report=informe, path=ruta, result=resultado, error=error)
 
 
@@ -553,17 +611,11 @@ def classify_parquet_with_report(
     origen = Path(parquet_path).expanduser().resolve()
     if not origen.is_file():
         raise FileNotFoundError(origen)
-    # Antes de publicar: el destino puede ser la misma ruta que el origen.
     sha256 = hash_sha256_archivo(origen)
-    filas = pq.read_metadata(origen).num_rows
-    topologia, destino = run_classify_parquet(origen, data_root=layout.root)
-    fuente = SourceFileInfo(
-        datos_sinteticos=origen_informe(layout.root, sha256, datos_sinteticos),
-        name=origen.name,
-        sha256=sha256,
-        row_count=filas,
+    # Validar origen ANTES de run_classify_parquet (S4)
+    origen_resuelto = origen_informe(layout.root, sha256, datos_sinteticos)
+    topologia, destino = run_classify_parquet(
+        origen, data_root=layout.root, datos_sinteticos=origen_resuelto
     )
-    informe = _informe_aceptado(
-        fuente, None, topologia, destino, layout.root, validadas=filas
-    )
-    return topologia, destino, write_ingest_report(informe, layout.root)
+    ruta = report_path(layout.root, sha256)
+    return topologia, destino, ruta

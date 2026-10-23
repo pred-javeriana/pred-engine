@@ -115,26 +115,39 @@ def _buscar_ingesta(
     conocida = origen_registrado(conn, sha) if sha is not None else None
     if sha is not None and conocida is not None:
         return sha, conocida
-    from pred_engine.ingesta.informe import IngestReportFile
+    from pred_engine.ingesta.informe import IngestReportFile, son_informes_equivalentes
 
-    declaradas = set()
+    coincidentes: list[IngestReportFile] = []
     # Un archivo ajeno no es un informe M1. Si ya se conoce la fuente, solo
     # su informe canonico puede aportar procedencia y se valida estrictamente.
     patron = f"{sha}.json" if sha is not None else "[0-9a-f]" * 64 + ".json"
     for path in (data_root / "ingestas").glob(patron):
         report = IngestReportFile.model_validate_json(path.read_text())
-        if (
-            report.status == "accepted"
-            and report.published is not None
-            and report.published.sha256 == ingesta_ref_m1
-        ):
+        if report.status != "accepted":
+            continue
+        publicaciones = (
+            [report.published] if report.published is not None else []
+        ) + report.publications
+        if any(p is not None and p.sha256 == ingesta_ref_m1 for p in publicaciones):
             if report.ingest_id != report.source_file.sha256:
                 raise ValueError("la procedencia M1 tiene identidades incompatibles")
-            declaradas.add((report.ingest_id, report.source_file.datos_sinteticos))
-    if len(declaradas) > 1:
+            coincidentes.append(report)
+    if len(coincidentes) > 1:
+        if all(
+            son_informes_equivalentes(coincidentes[0], otro)
+            for otro in coincidentes[1:]
+        ):
+            canonical = min(coincidentes, key=lambda r: r.ingest_id)
+            declarada = (canonical.ingest_id, canonical.source_file.datos_sinteticos)
+            if sha is not None and sha not in {r.ingest_id for r in coincidentes}:
+                raise ValueError(
+                    "la referencia de plataforma difiere de la procedencia M1"
+                )
+            return declarada
         raise ValueError("el Parquet tiene varias procedencias M1 declaradas")
-    if declaradas:
-        declarada = declaradas.pop()
+    if coincidentes:
+        report = coincidentes[0]
+        declarada = (report.ingest_id, report.source_file.datos_sinteticos)
         if sha is not None and sha != declarada[0]:
             raise ValueError("la referencia de plataforma difiere de la procedencia M1")
         return declarada
@@ -201,8 +214,12 @@ def _verificar_contenido(
     informe = report_path(data_root, sha)
     if informe.exists():
         report = IngestReportFile.model_validate_json(informe.read_text())
-        if report.published is not None and report.published.sha256 is not None:
-            huellas.add(report.published.sha256)
+        publicaciones = (
+            [report.published] if report.published is not None else []
+        ) + report.publications
+        for p in publicaciones:
+            if p is not None and p.sha256 is not None:
+                huellas.add(p.sha256)
     if huellas and ingesta_ref_m1 not in huellas:
         raise ValueError(
             f"el Parquet registrado en {ruta} cambio de contenido: la procedencia "

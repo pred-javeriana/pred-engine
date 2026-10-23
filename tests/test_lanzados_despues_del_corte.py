@@ -18,6 +18,8 @@ import pytest
 
 from pred_engine import cli
 from pred_engine.comun.reserva import ReserveCut
+from pred_engine.ingesta import pipeline as ip
+from pred_engine.ingesta.informe import classify_parquet_with_report
 from pred_engine.pipeline import PipelineInput, summarize_run
 from pred_engine.verify import representative_csv, verification_pipeline
 
@@ -147,6 +149,7 @@ def test_l2_y_el_resumen_usan_el_corte_publicado_por_m1(tmp_path: Path) -> None:
 
     informe = json.loads(next((raiz / "ingestas").glob("*.json")).read_text())
     assert informe["reserve"]["t_star"] == "2024-01-31"
+    assert result.ingestion is not None
     assert ReserveCut.of(result.ingestion.panel).t_star != pd.Timestamp("2024-01-31")
     summary = summarize_run(result)
     assert summary["reserve"]["t_star"] == "2024-01-31"
@@ -341,3 +344,232 @@ def test_l2_rechaza_un_panel_fuera_del_corte_de_m1(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="no cubre el calendario"):
         pipeline.fit(replace(ingesta, panel=posterior))
+
+
+def test_fuente_renombrada_conserva_corte_y_exclusiones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """S1: Un archivo renombrado conserva el corte y las exclusiones."""
+    raiz = tmp_path / "data"
+    pipeline = verification_pipeline()
+    origen_a = _csv(tmp_path / "primero.csv", INICIO_DEL_CALENDARIO)
+    origen_b = _csv(tmp_path / "segundo.csv", INICIO_DEL_CALENDARIO)
+
+    assert (
+        cli.main(["classify", "--csv", str(origen_a), "--data-root", str(raiz)]) == 0
+    )
+    salida_a = capsys.readouterr().out
+    assert "excluded_count: 1" in salida_a
+    informe_a = _informe(salida_a)
+    first_parquet = _parquet_publicado(raiz, informe_a)
+
+    reingreso_antes = pipeline.ingest(
+        PipelineInput(parquet_path=first_parquet, data_root=raiz)
+    )
+    assert [e.sku_id for e in reingreso_antes.exclusions] == ["X"]
+    assert reingreso_antes.cut().t_star == pd.Timestamp("2026-04-06")
+    ajuste_antes = pipeline.fit(reingreso_antes)
+    assert ajuste_antes.reserve.t_star == pd.Timestamp("2026-04-06")
+    assert len(ajuste_antes.candidates[0].series) == 75
+    assert len(ajuste_antes.candidates[0].series) != 80
+
+    assert (
+        cli.main(["classify", "--csv", str(origen_b), "--data-root", str(raiz)]) == 0
+    )
+    capsys.readouterr()
+
+    reingreso_despues = pipeline.ingest(
+        PipelineInput(parquet_path=first_parquet, data_root=raiz)
+    )
+    assert [e.sku_id for e in reingreso_despues.exclusions] == ["X"]
+    assert reingreso_despues.cut().t_star == pd.Timestamp("2026-04-06")
+    ajuste_despues = pipeline.fit(reingreso_despues)
+    assert ajuste_despues.reserve.t_star == pd.Timestamp("2026-04-06")
+    assert len(ajuste_despues.candidates[0].series) == 75
+    assert len(ajuste_despues.candidates[0].series) != 80
+
+    resumen = summarize_run(
+        pipeline.run(PipelineInput(parquet_path=first_parquet, data_root=raiz))
+    )
+    assert resumen["excluded_count"] == 1
+    assert resumen["reserve"]["t_star"] == "2026-04-06"
+
+
+@pytest.mark.parametrize(
+    "publicador",
+    ["ingest_canonical_csv", "run_classify_csv", "run_classify_parquet", "run_ingest"],
+)
+def test_publicadores_publicos_persisten_corte_y_exclusiones_durables(
+    tmp_path: Path, publicador: str
+) -> None:
+    """S2: Cada publicador persiste corte M1 y exclusiones recuperables."""
+    raiz = tmp_path / "data"
+    pipeline = verification_pipeline()
+    csv = _csv(tmp_path / "start.csv", INICIO_DEL_CALENDARIO)
+    pq_origen = _parquet_1_2(tmp_path / "start.parquet", INICIO_DEL_CALENDARIO)
+
+    if publicador == "ingest_canonical_csv":
+        resultado = ip.ingest_canonical_csv(csv, data_root=raiz)
+        salida_pq = resultado.parquet_path
+    elif publicador == "run_classify_csv":
+        _, salida_pq = ip.run_classify_csv(csv, data_root=raiz)
+    elif publicador == "run_classify_parquet":
+        _, salida_pq = ip.run_classify_parquet(pq_origen, data_root=raiz)
+    else:
+        resultado_ingest = ip.run_ingest(
+            csv, _ProveedorAceptado(), data_root=raiz
+        )
+        salida_pq = resultado_ingest.parquet_path
+
+    reingreso = pipeline.ingest(PipelineInput(parquet_path=salida_pq, data_root=raiz))
+    assert [e.sku_id for e in reingreso.exclusions] == ["X"]
+    assert reingreso.cut().t_star == pd.Timestamp("2026-04-06")
+    ajuste = pipeline.fit(reingreso)
+    assert ajuste.reserve.t_star == pd.Timestamp("2026-04-06")
+    assert len(ajuste.candidates[0].series) == 75
+
+    resumen = summarize_run(
+        pipeline.run(PipelineInput(parquet_path=salida_pq, data_root=raiz))
+    )
+    assert resumen["excluded_count"] == 1
+    assert resumen["reserve"]["t_star"] == "2026-04-06"
+
+
+@pytest.mark.parametrize("orden", ["csv_primero", "parquet_primero"])
+def test_publicaciones_limpias_equivalentes_ambos_ordenes(
+    tmp_path: Path, orden: str
+) -> None:
+    """S3: Publicaciones equivalentes conservan la identidad sin conflicto."""
+    raiz = tmp_path / "data"
+    pipeline = verification_pipeline()
+    limpio = _serie("A", range(100), range(100)) + _serie("B", range(100), range(100))
+    csv = _csv(tmp_path / "panel.csv", limpio)
+    pq_12 = _parquet_1_2(tmp_path / "panel.parquet", limpio)
+
+    if orden == "csv_primero":
+        assert (
+            cli.main(
+                [
+                    "classify",
+                    "--csv",
+                    str(csv),
+                    "--data-root",
+                    str(raiz),
+                    "--datos-sinteticos",
+                ]
+            )
+            == 0
+        )
+        assert (
+            cli.main(
+                [
+                    "classify",
+                    "--parquet",
+                    str(pq_12),
+                    "--data-root",
+                    str(raiz),
+                    "--datos-sinteticos",
+                ]
+            )
+            == 0
+        )
+    else:
+        assert (
+            cli.main(
+                [
+                    "classify",
+                    "--parquet",
+                    str(pq_12),
+                    "--data-root",
+                    str(raiz),
+                    "--datos-sinteticos",
+                ]
+            )
+            == 0
+        )
+        assert (
+            cli.main(
+                [
+                    "classify",
+                    "--csv",
+                    str(csv),
+                    "--data-root",
+                    str(raiz),
+                    "--datos-sinteticos",
+                ]
+            )
+            == 0
+        )
+
+    publicado = raiz / "processed" / "panel.parquet"
+    reingreso = pipeline.ingest(PipelineInput(parquet_path=publicado, data_root=raiz))
+    assert reingreso.exclusions == ()
+    ajuste = pipeline.fit(reingreso)
+    assert len(ajuste.candidates) == 2
+
+    resumen = summarize_run(
+        pipeline.run(PipelineInput(parquet_path=publicado, data_root=raiz))
+    )
+    assert resumen["excluded_count"] == 0
+
+
+def test_reintento_de_origen_rechazado_no_altera_publicacion_previa(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """S4: Un reintento contradictorio de origen falla sin alterar B."""
+    raiz = tmp_path / "data"
+    limpio = _serie("A", range(100), range(100)) + _serie("B", range(100), range(100))
+    diferente = [dict(f, demand_qty=f["demand_qty"] * 2 + 1) for f in limpio]
+
+    pq_a = _parquet_1_2(tmp_path / "a" / "panel.parquet", limpio)
+    pq_b = _parquet_1_2(tmp_path / "b" / "panel.parquet", diferente)
+
+    assert (
+        cli.main(
+            [
+                "classify",
+                "--parquet",
+                str(pq_a),
+                "--data-root",
+                str(raiz),
+                "--datos-sinteticos",
+            ]
+        )
+        == 0
+    )
+    assert (
+        cli.main(
+            [
+                "classify",
+                "--parquet",
+                str(pq_b),
+                "--data-root",
+                str(raiz),
+                "--datos-sinteticos",
+            ]
+        )
+        == 0
+    )
+
+    dest = raiz / "processed" / "panel.parquet"
+    bytes_b_antes = dest.read_bytes()
+    primera_demanda_b = float(pd.read_parquet(dest)["demand_qty"].iloc[0])
+
+    codigo = cli.main(
+        [
+            "classify",
+            "--parquet",
+            str(pq_a),
+            "--data-root",
+            str(raiz),
+            "--datos-reales",
+        ]
+    )
+    assert codigo != 0
+    assert dest.read_bytes() == bytes_b_antes
+    assert float(pd.read_parquet(dest)["demand_qty"].iloc[0]) == primera_demanda_b
+
+    with pytest.raises(ValueError, match="origen"):
+        classify_parquet_with_report(pq_a, data_root=raiz, datos_sinteticos=False)
+    assert dest.read_bytes() == bytes_b_antes
+    assert float(pd.read_parquet(dest)["demand_qty"].iloc[0]) == primera_demanda_b
