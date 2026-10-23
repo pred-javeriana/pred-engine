@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from pred_engine.comun.dataclasses.hpo import EstadoTrial, Trial
+from pred_engine.comun.estado_trial import estado_del_motor
 
 ARCHIVO_ENSAYOS = "backend.jsonl"
 ARCHIVO_MANIFIESTO = "manifiesto.json"
@@ -68,6 +69,7 @@ def _ensayo(
         datos = json.loads(linea)
         estado = _ESTADO_DESDE_BACKEND[datos["estado_optuna"]]
         atributos = datos.get("user_attrs") or {}
+        estado = estado_del_motor(estado, atributos)
         configuracion = dict(datos.get("params") or {})
     except (ValueError, KeyError, TypeError) as exc:
         raise EnsayosIlegiblesError(

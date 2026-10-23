@@ -125,7 +125,7 @@ def test_interrupcion_y_recuperacion_misma_frontera(tmp_path: Path) -> None:
         return sorted(
             (tuple(sorted(t.configuracion.items())), t.estado, t.valor)
             for t in resultado.trials
-            if t.motivo != "configuracion_invalida"
+            if not (t.motivo or "").startswith("configuracion_invalida:")
         )
 
     assert _clave(reanudado) == _clave(continuo)
@@ -161,5 +161,9 @@ def test_reanudacion_con_tpe_preserva_los_trials_ya_evaluados(tmp_path: Path) ->
     assert final.estado is EstadoCorrida.COMPLETADA
     # Se completan los 6 trials pedidos (no se pierde presupuesto), aunque
     # algunos de los nuevos puedan repetir configuraciones ya evaluadas.
-    reales = [t for t in reanudado.trials if t.motivo != "configuracion_invalida"]
+    reales = [
+        t
+        for t in reanudado.trials
+        if not (t.motivo or "").startswith("configuracion_invalida:")
+    ]
     assert len(reales) == 6

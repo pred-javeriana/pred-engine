@@ -150,6 +150,10 @@ unidades.
   leen de SQLite y no se recalculan.
 - Un estudio en estado `fallida` no se reabre (2.9); su unidad vuelve a fallar
   con ese motivo.
+- Una evaluación M3 PUBLICADA es inmutable. Repetir el mismo comando después
+  de reparar una falla reutiliza esa publicación con sus FALLO_TECNICO y sale
+  con código 8 aunque ningún ajuste falle ahora. Para obtener resultados
+  nuevos, use un `--run-id` nuevo.
 - Si cambia el código, cambia el `run_id`. La reanudación exige entrada,
   configuración y código compatibles. `--run-id` permite nombrar una corrida,
   no eludir esa comprobación.
@@ -159,7 +163,7 @@ unidades.
 | Código | Significado |
 | --- | --- |
 | 0 | L1-L4 completas y evaluación M3 PUBLICADA. |
-| 8 | Publicación completa con fallos técnicos aislados. |
+| 8 | Publicación completa con fallos técnicos aislados, actuales o conservados como FALLO_TECNICO en una publicación reutilizada. |
 | 1 | Error de entrada, base, identidad o etapa sin resultados. |
 | 7 | Solo para un pipeline de biblioteca sin validador configurado; el CLI requiere base central. |
 

@@ -3,7 +3,10 @@
 M3 recibe el Parquet inmutable de M1 y los candidatos completos de M2. Evalúa
 cada configuración sobre todas las ventanas completas de la reserva final del
 20 %, compara con Seasonal Naive, selecciona por categoría y publica los
-resultados de cada SKU entregado en el handoff. Las exclusiones previas de M2
+resultados de cada SKU entregado en el handoff y de cada SKU cuyos ajustes L2
+fallaron todos. Estos últimos reciben FALLO_TECNICO con la causa registrada
+por L2 y cuentan en los conteos y porcentajes de su clase. Sus unidades de
+línea base se incluyen en el total previsto. Las exclusiones previas de M2
 se consultan por separado en la procedencia. M3 no ejecuta HPO, no retunea y
 no desarrolla la interfaz de M4.
 
@@ -131,7 +134,7 @@ identidad. La confirmación de resultado y marcador es atómica.
 ## Evidencia científica
 
 Se publican MAE, RMSE, MASE, ME y la razón de RMSE frente a Seasonal Naive por
-candidato y ventana. La política `3.4.2-inicial` selecciona por mediana de la
+candidato y ventana. La política `3.4.3-inicial` selecciona por mediana de la
 razón dentro de cada categoría, con compuerta de línea base y desempate por
 simplicidad. Los cinco veredictos permanecen visibles por SKU.
 

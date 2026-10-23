@@ -224,7 +224,6 @@ def ejecutar_estudio(
 
             configuracion = _sugerir_configuracion(trial, espacio)
             if configuracion is None:
-                trial.set_user_attr("motivo", "configuracion_invalida")
                 study.tell(trial, None, estado="fallido")
                 _logger.warning(
                     "Configuracion invalida (restricciones) para %s", trial_id
@@ -236,11 +235,19 @@ def ejecutar_estudio(
                         sesion, n_trials_finalizados=indice_trial
                     )
                 if intentos_invalidos > n_trials * _MAX_INTENTOS_INVALIDOS_POR_TRIAL:
+                    diagnostico = instantanea_desde_estudio(
+                        study.trials_finalizados(),
+                        ventanas=tuple(ventanas),
+                        metrica_objetivo=metrica_objetivo,
+                        seed=seed,
+                        familia=familia,
+                    )
                     raise EstudioError(
                         "el espacio de busqueda rechaza casi todas las "
                         "configuraciones muestreadas "
                         f"({intentos_invalidos} intentos invalidos); revise "
-                        "las restricciones de EspacioBusqueda"
+                        "las restricciones de EspacioBusqueda; "
+                        f"{diagnostico.resumen_causas}"
                     )
                 continue
             intentos_invalidos = 0
@@ -314,7 +321,9 @@ def _sugerir_configuracion(
         ):
             continue
         configuracion[parametro.nombre] = _sugerir_parametro(trial, parametro)
-    if not espacio.es_valida(configuracion):
+    restriccion = espacio.restriccion_violada(configuracion)
+    if restriccion is not None:
+        trial.set_user_attr("motivo", f"configuracion_invalida:{restriccion}")
         return None
     return configuracion
 
@@ -384,9 +393,16 @@ def _correr_trial(
                 return
 
         if trial.should_prune():
-            motivo_completo = pruner.motivo_de(trial.number) or (
-                f"ventana={estado.n_evaluadas} valor={estado.valor_parcial:.6g} asha"
-            )
+            motivo_asha = pruner.motivo_de(trial.number)
+            if estado.n_evaluadas == estado.n_totales:
+                # El backend conserva PRUNED para no cambiar el muestreo TPE.
+                trial.set_user_attr("estado_motor", "completado")
+                motivo_completo = None
+            else:
+                motivo_completo = motivo_asha or (
+                    f"ventana={estado.n_evaluadas} "
+                    f"valor={estado.valor_parcial:.6g} asha"
+                )
             ejecutor.cerrar("asha")
             _cerrar_podado_o_fallido(
                 trial,
@@ -416,10 +432,11 @@ def _cerrar_podado_o_fallido(
     study: EstudioHPO,
     n_evaluadas: int,
     valor_parcial: float,
-    motivo: str,
+    motivo: str | None,
 ) -> None:
     trial.set_user_attr("n_ventanas", n_evaluadas)
-    trial.set_user_attr("motivo", motivo)
+    if motivo is not None:
+        trial.set_user_attr("motivo", motivo)
     if math.isfinite(valor_parcial):
         # No se pasa `valor_parcial` aqui: ya se reporto via `trial.report()`
         # en `_correr_trial` justo antes de esta llamada, y el backend

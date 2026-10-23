@@ -125,8 +125,7 @@ class ClassicalSelectionStrategy:
         if seleccionada is None:
             raise SelectionContractError(
                 f"ningun trial de HPO completo para sku_id={request.sku_id!r} "
-                f"({resultado.estudio.n_fallidos} fallidos, "
-                f"{resultado.estudio.n_podados} podados)"
+                f"({resultado.estudio.resumen_causas})"
             )
 
         _logger.info(

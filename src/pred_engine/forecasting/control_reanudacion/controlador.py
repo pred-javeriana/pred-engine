@@ -8,7 +8,7 @@ import sqlite3
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -343,16 +343,23 @@ class ControladorEvaluacion:
                 run_id_m2=self.run_id_m2,
             )
             raise
+        fallos_l2 = {}
+        for unidad in fitting.units:
+            if unidad.failed:
+                fallos_l2.setdefault(unidad.sku_id, []).append(unidad.record.error)
         run_id = registrar_corrida(
             self.conn,
             identidad,
             handoff,
+            skus_fallidos=tuple(fallos_l2),
             ingesta_sha256=ingesta_sha,
             datos_sinteticos=datos_sinteticos,
         )
         plan = ventanas_reserva(corte, config.horizonte)
         skus = sorted(
-            {c.sku for c in handoff.candidatos} | {f.sku for f in handoff.fallos}
+            {c.sku for c in handoff.candidatos}
+            | {f.sku for f in handoff.fallos}
+            | set(fallos_l2)
         )
         exclusiones = {}
         for sku in skus:
@@ -446,6 +453,13 @@ class ControladorEvaluacion:
             # Cada SKU se lee de SQLite al evaluarlo: en memoria quedan sus
             # metricas, no sus pronosticos.
             fallos_sku = Counter(f.sku for f in handoff.fallos)
+            # Solo los SKU sin ningun ajuste L2 exitoso; un candidato que 3.2
+            # rechaza ya cuenta como fallo del handoff.
+            sin_candidatos = set(fallos_l2) - {
+                c.selection.sku_id for c in fitting.candidates
+            }
+            for sku in sin_candidatos:
+                fallos_sku[sku] += len(fallos_l2[sku])
             evaluaciones = []
             for sku in skus:
                 historia, reserva = separar_reserva(series_sku[sku], corte)
@@ -482,6 +496,21 @@ class ControladorEvaluacion:
                 evaluaciones,
                 datos_sinteticos=datos_sinteticos,
                 politica=self.politica,
+            )
+            resultado = replace(
+                resultado,
+                skus=tuple(
+                    replace(
+                        veredicto,
+                        justificacion=veredicto.justificacion
+                        + ": "
+                        + "; ".join(str(causa) for causa in fallos_l2[veredicto.sku]),
+                    )
+                    if veredicto.sku in sin_candidatos
+                    and veredicto.veredicto == "FALLO_TECNICO"
+                    else veredicto
+                    for veredicto in resultado.skus
+                ),
             )
             guardar_evaluacion(self.conn, run_id, evaluaciones, resultado)
         return self._artefacto(

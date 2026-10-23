@@ -60,6 +60,36 @@ _EVIDENCIA_HPO = (
     "n_fallidos",
 )
 
+_IDENTIDAD_CANDIDATO_DTYPES = {
+    "sku_id": "string",
+    "sku_class": "string",
+    "familia": "string",
+    "modelo": "string",
+}
+_PRONOSTICOS_DTYPES = {
+    **_IDENTIDAD_CANDIDATO_DTYPES,
+    "timestamp": "datetime64[ns]",
+    "pronostico": "float64",
+}
+_EVALUACION_DTYPES = {
+    **_IDENTIDAD_CANDIDATO_DTYPES,
+    "metrica": "string",
+    "valor_agregado": "float64",
+    "n_ventanas": "int64",
+    "mae_media": "float64",
+    "rmse_media": "float64",
+    "smape_media": "float64",
+    "mase_media": "float64",
+}
+_WALK_FORWARD_DTYPES = {
+    "sku_id": "string",
+    "familia": "string",
+    "ventana": "int64",
+    "timestamp": "datetime64[ns]",
+    "real": "float64",
+    "pronostico": "float64",
+}
+
 
 def library_versions() -> dict[str, str]:
     """Versiones que fijan la reproducibilidad de los candidatos."""
@@ -277,8 +307,9 @@ def write_run(
                     }
                     for c in fitting.candidates
                     for fecha, valor in zip(fechas, c.forecast, strict=True)
-                ]
-            ),
+                ],
+                columns=list(_PRONOSTICOS_DTYPES),
+            ).astype(_PRONOSTICOS_DTYPES),
             archivos["pronosticos"],
         )
 
@@ -319,9 +350,19 @@ def write_run(
                         }
                     )
         archivos["evaluacion"] = destino / "evaluacion.parquet"
-        _escribir_parquet(pd.DataFrame(resumen), archivos["evaluacion"])
+        _escribir_parquet(
+            pd.DataFrame(resumen, columns=list(_EVALUACION_DTYPES)).astype(
+                _EVALUACION_DTYPES
+            ),
+            archivos["evaluacion"],
+        )
         archivos["walk_forward"] = destino / "walk_forward.parquet"
-        _escribir_parquet(pd.DataFrame(ventanas), archivos["walk_forward"])
+        _escribir_parquet(
+            pd.DataFrame(ventanas, columns=list(_WALK_FORWARD_DTYPES)).astype(
+                _WALK_FORWARD_DTYPES
+            ),
+            archivos["walk_forward"],
+        )
 
     # La seleccion por SKU (ensayos, evidencia, ventanas) para quien no lee Parquet
     # ni Optuna; se escribe con que L2 haya terminado, aunque L3 haya fallado.

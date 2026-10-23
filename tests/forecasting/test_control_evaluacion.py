@@ -386,6 +386,103 @@ def test_fallo_de_un_sku_es_visible_y_no_imputa_ceros_ni_detiene_otro(tmp_path):
     conn.close()
 
 
+@pytest.mark.parametrize("con_sku_sano", [False, True])
+def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
+    tmp_path, con_sku_sano
+):
+    class FalloL2(SeasonalNaiveStub):
+        def fit(self, y):
+            if y[0] < 50:
+                raise ValueError("causa concreta del ajuste L2")
+            return super().fit(y)
+
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    pipeline.factories = {"classical": lambda config, *, seed: FalloL2(1, seed)}
+    if con_sku_sano:
+        datos = pd.read_csv(request.csv_path)
+        pd.concat(
+            [datos, datos.assign(sku_id="segundo", demand_qty=datos.demand_qty + 100)]
+        ).to_csv(request.csv_path, index=False)
+    resultado = pipeline.run(request)
+    assert resultado.complete is True
+    esperados = [("proof-sku", "FALLO_TECNICO")]
+    if con_sku_sano:
+        esperados.append(("segundo", "EVIDENCIA_INSUFICIENTE"))
+    assert [(v.sku_id, v.verdict) for v in resultado.validation.verdicts] == esperados
+    assert (
+        "causa concreta del ajuste L2"
+        in resultado.validation.verdicts[0].evidence["justificacion"]
+    )
+    categorias = conn.execute(
+        "SELECT conteos, porcentajes FROM m3_categorias"
+    ).fetchall()
+    assert len(categorias) == 1
+    conteos, porcentajes = map(json.loads, categorias[0])
+    assert conteos["FALLO_TECNICO"] == 1
+    assert porcentajes["FALLO_TECNICO"] == (50.0 if con_sku_sano else 100.0)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM m3_unidades WHERE sku = 'proof-sku'"
+        ).fetchone()[0]
+        == 6
+    )
+    assert resultado.validation.audit_bundle["n_unidades"] == (
+        18 if con_sku_sano else 6
+    )
+    assert conn.execute("SELECT estado FROM m3_corridas").fetchall() == [("PUBLICADA",)]
+    conn.close()
+
+
+def test_candidato_l2_rechazado_por_3_2_conserva_su_veredicto_ante_otro_fallo_l2(
+    tmp_path,
+):
+    class SeleccionSinEstacional:
+        family = "classical"
+
+        def select(self, request, profile):
+            # Ajusta en L2, pero 3.2 exige las claves estacionales explicitas.
+            return SelectionResult(
+                sku_id=request.sku_id,
+                sku_class=request.sku_class,
+                family="classical",
+                profile=profile,
+                produced_by="seleccion-sin-estacional",
+                forecast_config={"p": 0, "d": 0, "q": 0},
+            )
+
+    class SeleccionFallida:
+        family = "ml"
+
+        def select(self, request, profile):
+            raise ValueError("causa concreta de la otra familia L2")
+
+    def veredicto(raiz, familias):
+        conn = _conexion(raiz)
+        pipeline, request = _caso(raiz, conn)
+        registry = StrategyRegistry()
+        registry.register("classical", SeleccionSinEstacional())
+        registry.register("ml", SeleccionFallida())
+        pipeline.router = SelectionRouter(ConfiguredTopologyPolicy(familias), registry)
+
+        def fabrica(config, *, seed):
+            return SeasonalNaiveStub(1, seed)
+
+        pipeline.factories = {"classical": fabrica, "ml": fabrica}
+        resultado = pipeline.run(request)
+        conn.close()
+        assert [u.failed for u in resultado.fitting.units] == [
+            familia == "ml" for familia in familias
+        ]
+        (unico,) = resultado.validation.verdicts
+        return {k: v for k, v in unico.evidence.items() if k != "run_id"}
+
+    solo_rechazo = veredicto(tmp_path / "sin-fallo-l2", ("classical",))
+    con_fallo_l2 = veredicto(tmp_path / "con-fallo-l2", ("classical", "ml"))
+    assert solo_rechazo["veredicto"] == "FALLO_TECNICO"
+    assert con_fallo_l2 == solo_rechazo
+
+
 def test_fallo_parcial_marca_comparacion_incompleta_y_conserva_ventanas(tmp_path):
     class FalloInicial(SeasonalNaiveStub):
         def pronosticar(self, observadas, horizon):

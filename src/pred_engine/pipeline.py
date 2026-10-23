@@ -402,7 +402,8 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
     if degenerado:
         raise ValueError(
             f"pronostico degenerado para {selection.sku_id}/{selection.family} "
-            f"desde t*: {motivo} (regla #3)"
+            f"desde t*: {motivo} (regla #3); "
+            f"configuracion={dict(selection.forecast_config)}"
         )
     return FittedCandidate(selection, y, forecast)
 
@@ -651,7 +652,9 @@ class Pipeline:
             results,
         )
         candidates = tuple(r.valor for r in results if r.valor is not None)
-        if not candidates:
+        if not candidates and not (
+            getattr(self.validator, "nativo", False) and any(u.failed for u in units)
+        ):
             raise ValueError(_no_results_message("L2", units, exclusions))
         return FittingArtifact(
             ingestion,
@@ -665,7 +668,10 @@ class Pipeline:
 
     def evaluate(self, fitting: FittingArtifact) -> EvaluationArtifact:
         """L3: walk-forward causal por candidato, cada uno como unidad aislada."""
-        if not fitting.candidates:
+        if not fitting.candidates and not (
+            getattr(self.validator, "nativo", False)
+            and any(u.failed for u in fitting.units)
+        ):
             raise ValueError("L3 requires fitted candidates")
         tasks: list[_EvaluationTask] = []
         for candidate in fitting.candidates:
@@ -700,7 +706,7 @@ class Pipeline:
             for candidate, result in zip(fitting.candidates, results, strict=True)
             if result.valor is not None
         )
-        if not evaluated:
+        if not evaluated and fitting.candidates:
             raise ValueError(_no_results_message("L3", units))
         return EvaluationArtifact(fitting, self.settings, evaluated, units)
 
@@ -720,7 +726,10 @@ class Pipeline:
         expected = (
             set(actual)
             if nativo and result.audit_bundle.get("publicada_previamente")
-            else {c.selection.sku_id for c in evaluation.fitting.candidates}
+            else (
+                {c.selection.sku_id for c in evaluation.fitting.candidates}
+                | {u.sku_id for u in evaluation.fitting.units if u.failed}
+            )
             if nativo
             else {c.fitted.selection.sku_id for c in evaluation.candidates}
         )

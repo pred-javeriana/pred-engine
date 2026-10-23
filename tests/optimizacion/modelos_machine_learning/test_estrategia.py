@@ -134,7 +134,7 @@ def test_la_serie_se_ordena_por_timestamp_antes_de_optimizar(monkeypatch):
         capturado["serie"] = serie
         return SimpleNamespace(
             seleccionada=None,
-            estudio=SimpleNamespace(n_fallidos=0, n_podados=0),
+            estudio=SimpleNamespace(resumen_causas="causas={}; motivos={}"),
         )
 
     monkeypatch.setattr(modulo_estrategia, "seleccionar_configuracion_ml", _falso)
@@ -151,7 +151,9 @@ def test_sin_ningun_trial_completado_falla_cerrado(monkeypatch):
         "seleccionar_configuracion_ml",
         lambda serie, **kw: SimpleNamespace(
             seleccionada=None,
-            estudio=SimpleNamespace(n_fallidos=5, n_podados=0),
+            estudio=SimpleNamespace(
+                resumen_causas="causas={'ajuste_fallido': 5}; motivos={'sin ajuste': 5}"
+            ),
         ),
     )
     with pytest.raises(SelectionContractError, match="ningun trial"):

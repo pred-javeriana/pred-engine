@@ -117,9 +117,12 @@ def test_sin_ganador_no_devuelve_resultado_vacio(monkeypatch):
     monkeypatch.setattr(
         modulo,
         "seleccionar_configuracion_dl",
-        lambda *a, **k: SimpleNamespace(mejor=None, n_fallidos=2, n_podados=1),
+        lambda *a, **k: SimpleNamespace(
+            mejor=None,
+            resumen_causas="causas={'ajuste_fallido': 2, 'escalon': 1}",
+        ),
     )
-    with pytest.raises(SelectionContractError, match="2 fallidos, 1 podados"):
+    with pytest.raises(SelectionContractError, match="ajuste_fallido.*escalon"):
         estrategia().select(solicitud(), "dense_stable")
 
 

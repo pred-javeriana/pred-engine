@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from pred_engine import cli
@@ -222,3 +224,38 @@ def test_cli_classify_sku_sin_demanda_sale_6(
     )
     assert codigo == 6
     assert "sin demanda" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("etiquetas", "codigo_esperado"),
+    [(lambda clase: clase, 0), (lambda clase: clase.encode(), 6)],
+    ids=["texto", "bytes"],
+)
+def test_cli_verify_parquet_rechaza_sku_class_binaria(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    etiquetas: Callable[[str], object],
+    codigo_esperado: int,
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,108,17\n"
+        "105,2024-10-04,50,17\n",
+        encoding="utf-8",
+    )
+    raiz = tmp_path / "data"
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    panel = pd.read_parquet(raiz / "processed" / "mini.parquet")
+    panel["sku_class"] = pd.Series(
+        [etiquetas(str(clase)) for clase in panel["sku_class"]], dtype=object
+    )
+    externo = tmp_path / "externo.parquet"
+    panel.to_parquet(externo)
+    capsys.readouterr()
+
+    codigo = cli.main(["verify", "--parquet", str(externo)])
+
+    assert codigo == codigo_esperado
+    if codigo_esperado:
+        assert "violacion Pydantic en fila 0" in capsys.readouterr().err
