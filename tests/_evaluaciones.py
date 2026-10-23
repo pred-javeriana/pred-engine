@@ -56,7 +56,7 @@ def serie(
     return SerieCandidato(candidato_id, familia, modelo, tuple(pronosticos))
 
 
-def reserva(valores: Sequence[float]) -> pd.Series:
+def reserva(valores: Sequence[float] | np.ndarray) -> pd.Series:
     return pd.Series(
         np.asarray(valores, dtype=float), index=fechas_desde(T_ESTRELLA, len(valores))
     )

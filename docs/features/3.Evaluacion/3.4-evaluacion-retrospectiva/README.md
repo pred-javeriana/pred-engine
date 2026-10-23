@@ -5,7 +5,7 @@
 Implementacion de la **evaluacion sobre la reserva** y la **seleccion
 definitiva** de M3 (tareas `TASK-EVAL-3.4-A1` y `TASK-EVAL-3.4-A2`), segun
 ADR-03-003, ADR-03-004, ADR-03-006, ADR-03-007 y ADR-03-008. Version de
-metricas `3.4.1`; politica `3.4.2-inicial`.
+metricas `3.4.1`; politica `3.4.3-inicial`.
 
 1. **Contratos de evaluacion** (`calculo_errores/contratos.py`): entrada
    `PronosticoFechado` -> `SerieCandidato` -> `EntradaSku`, y salida tipada
@@ -104,11 +104,13 @@ Familias elegibles de la politica inicial (la matriz 2.2 de enrutamiento de M2):
 
 | Veredicto | Condicion |
 | --- | --- |
-| `FALLO_TECNICO` | La familia campeona no tiene instancia con pronostico valido para el SKU, o todos sus candidatos fallaron |
+| `FALLO_TECNICO` | Ninguna familia del ranking de la categoria tiene instancia para el SKU, la instancia usada no tiene pronostico valido, o todos sus candidatos fallaron |
 | `NO_EVALUABLE` | Ninguna observacion valida en la reserva |
 | `EVIDENCIA_INSUFICIENTE` | Menos de `n_min` (30) ventanas validas, o demanda real toda en cero |
 | `VALIDADO` | Datos reales, ventanas suficientes, `r < 1` y sin `comparacion_incompleta` |
 | `EXPLORATORIO` | Lo demas: datos sinteticos, `r >= 1` o no calculable, o `comparacion_incompleta` |
+
+Desde la politica `3.4.3-inicial`, si la familia campeona no tiene instancia para un SKU, se usa la siguiente familia con instancia segun la mediana de r de la categoria (empates por nombre, nunca la mejor propia del SKU), y la justificacion lo registra.
 
 `comparacion_incompleta` indica que algun candidato no llego a pronosticar
 (`n_candidatos_fallidos`, en 3.2 o 3.3) o que un candidato de una familia
@@ -122,7 +124,7 @@ lo observado) que necesita el campeon de un SKU.
 
 ### Diebold-Mariano (ADR-03-008, alternativa 2)
 
-- **Que compara:** en cada SKU, la instancia de la familia campeona contra
+- **Que compara:** en cada SKU, la instancia de la familia campeona (o de la familia de fallback) del SKU contra
   Seasonal Naive. No compara los demas candidatos ni las familias entre si.
 - **Perdida:** el error cuadratico medio de cada ventana, coherente con `r`.
   El diferencial es `d_w = MSE_campeon - MSE_SN` en las ventanas validas para
@@ -145,7 +147,8 @@ como evidencia aparte, y 3.5 la persiste para M4.
 ### Que se ve por SKU
 
 La familia campeona se elige por categoria, pero cada SKU usa su propia
-instancia y su resultado queda visible: campeon, r, metricas del campeon y de
+instancia (o la de la siguiente familia del ranking si no tiene instancia de la
+campeona) y su resultado queda visible: campeon, r, metricas del campeon y de
 SN, veredicto, prueba Diebold-Mariano y si pierde frente a SN. Ademas,
 `modelos_evaluados` lista como dato descriptivo **todos** los modelos evaluados
 en el SKU con su r, incluida Seasonal Naive (r = 1). Asi se ve, por ejemplo,

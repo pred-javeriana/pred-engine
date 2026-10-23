@@ -131,7 +131,7 @@ identidad. La confirmación de resultado y marcador es atómica.
 ## Evidencia científica
 
 Se publican MAE, RMSE, MASE, ME y la razón de RMSE frente a Seasonal Naive por
-candidato y ventana. La política `3.4.2-inicial` selecciona por mediana de la
+candidato y ventana. La política `3.4.3-inicial` selecciona por mediana de la
 razón dentro de cada categoría, con compuerta de línea base y desempate por
 simplicidad. Los cinco veredictos permanecen visibles por SKU.
 
