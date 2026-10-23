@@ -364,6 +364,55 @@ def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
     conn.close()
 
 
+def test_candidato_l2_rechazado_por_3_2_conserva_su_veredicto_ante_otro_fallo_l2(
+    tmp_path,
+):
+    class SeleccionSinEstacional:
+        family = "classical"
+
+        def select(self, request, profile):
+            # Ajusta en L2, pero 3.2 exige las claves estacionales explicitas.
+            return SelectionResult(
+                sku_id=request.sku_id,
+                sku_class=request.sku_class,
+                family="classical",
+                profile=profile,
+                produced_by="seleccion-sin-estacional",
+                forecast_config={"p": 0, "d": 0, "q": 0},
+            )
+
+    class SeleccionFallida:
+        family = "ml"
+
+        def select(self, request, profile):
+            raise ValueError("causa concreta de la otra familia L2")
+
+    def veredicto(raiz, familias):
+        conn = _conexion(raiz)
+        pipeline, request = _caso(raiz, conn)
+        registry = StrategyRegistry()
+        registry.register("classical", SeleccionSinEstacional())
+        registry.register("ml", SeleccionFallida())
+        pipeline.router = SelectionRouter(ConfiguredTopologyPolicy(familias), registry)
+
+        def fabrica(config, *, seed):
+            return SeasonalNaiveStub(1, seed)
+
+        pipeline.factories = {"classical": fabrica, "ml": fabrica}
+        resultado = pipeline.run(request)
+        conn.close()
+        assert [u.failed for u in resultado.fitting.units] == [
+            familia == "ml" for familia in familias
+        ]
+        (unico,) = resultado.validation.verdicts
+        return {k: v for k, v in unico.evidence.items() if k != "run_id"}
+
+    solo_rechazo = veredicto(tmp_path / "sin-fallo-l2", ("classical",))
+    con_fallo_l2 = veredicto(tmp_path / "con-fallo-l2", ("classical", "ml"))
+    assert solo_rechazo["veredicto"] == "FALLO_TECNICO"
+    assert con_fallo_l2 == solo_rechazo
+
+
 def test_fallo_parcial_marca_comparacion_incompleta_y_conserva_ventanas(tmp_path):
     class FalloInicial(SeasonalNaiveStub):
         def pronosticar(self, observadas, horizon):

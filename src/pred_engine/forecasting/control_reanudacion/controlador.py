@@ -429,7 +429,11 @@ class ControladorEvaluacion:
         bases: dict[str, SerieCandidato] = {}
         if estado_corrida(self.conn, run_id) in ("EN_CURSO", "EVALUADA"):
             fallos_sku = Counter(f.sku for f in handoff.fallos)
-            sin_candidatos = set(fallos_l2) - {c.sku for c in handoff.candidatos}
+            # Solo los SKU sin ningun ajuste L2 exitoso; un candidato que 3.2
+            # rechaza ya cuenta como fallo del handoff.
+            sin_candidatos = set(fallos_l2) - {
+                c.selection.sku_id for c in fitting.candidates
+            }
             for sku in sin_candidatos:
                 fallos_sku[sku] += len(fallos_l2[sku])
             for sku in skus:
