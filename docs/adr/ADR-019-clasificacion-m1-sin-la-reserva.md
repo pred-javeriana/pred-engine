@@ -20,13 +20,15 @@ decisión pendiente.
 ## Decision
 
 1. El corte de ADR-03-003 (`ReserveCut`, `RESERVE_FRACTION`) vive en
-   `comun.reserva`. M1 y M2 lo derivan del calendario del panel con la misma
-   función, así que coinciden sin intercambiar estado.
+   `comun.reserva`. M1 lo deriva del calendario completo del panel, antes de
+   excluir SKU, y lo publica en `reserve` del informe M1. M2 usa ese corte
+   publicado; solo sin informe M1 lo deriva del Parquet con la misma función.
 2. `classify_panel` calcula ADI y CV² de cada SKU solo con las filas hasta
    t*. El panel publicado conserva todas las filas de los SKU admitidos:
    M3 necesita la reserva.
 3. La ingesta excluye cada SKU sin demanda positiva hasta t* con la causa
-   `lanzado despues del corte` y continúa con los demás. El informe M1 registra
+   `lanzado despues del corte` y continúa con los demás. Excluir no mueve t*
+   para los SKU admitidos ni para el informe. El informe M1 registra
    `exclusions` y `excluded_count`. L2 los registra como `sin historia admisible`
    y el resumen de corrida muestra el número excluido. Un panel sin ningún SKU
    admisible o demasiado corto para dejar historia admisible se rechaza.

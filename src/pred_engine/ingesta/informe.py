@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+import pandas as pd
+import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field
 
 from pred_engine.comun.exclusiones import SkuExclusion
@@ -39,6 +41,7 @@ from pred_engine.ingesta.data import (
     OnConflict,
     RawConflictError,
     RawWritePermissionError,
+    default_data_root,
     deposit_raw,
     ensure_data_layout,
 )
@@ -47,6 +50,7 @@ from pred_engine.ingesta.pipeline import (
     CsvIngestResult,
     IngestResult,
     ingest_canonical_csv,
+    run_classify_parquet,
     run_ingest,
 )
 from pred_engine.ingesta.salida.errores import (
@@ -128,6 +132,36 @@ class ReserveInfo(_Modelo):
     reserved_days: int = Field(ge=1)
     fraction: float
 
+    @classmethod
+    def of(cls, corte: ReserveCut) -> ReserveInfo:
+        return cls(
+            t_star=corte.t_star.date().isoformat(),
+            first_reserved=corte.first_reserved.date().isoformat(),
+            last_observed=corte.last_observed.date().isoformat(),
+            reserved_days=corte.reserved_days,
+            fraction=corte.fraction,
+        )
+
+    def cut(self, panel: pd.DataFrame) -> ReserveCut:
+        """Corte publicado por M1; debe cubrir el calendario de ``panel``."""
+        corte = ReserveCut(
+            t_star=pd.Timestamp(self.t_star),
+            first_reserved=pd.Timestamp(self.first_reserved),
+            last_observed=pd.Timestamp(self.last_observed),
+            reserved_days=self.reserved_days,
+            fraction=self.fraction,
+        )
+        if (
+            ReserveInfo.of(corte) != self
+            or corte.first_reserved != corte.t_star + pd.Timedelta(days=1)
+            or corte.reserved_dates[-1] != corte.last_observed
+        ):
+            raise ValueError("el corte del informe M1 no es coherente")
+        dias = pd.to_datetime(panel["timestamp"]).dt.normalize()
+        if dias.max() > corte.last_observed or dias.min() > corte.t_star:
+            raise ValueError("el corte del informe M1 no cubre el panel publicado")
+        return corte
+
 
 class ThresholdsInfo(_Modelo):
     adi: float
@@ -203,23 +237,36 @@ def report_path(data_root: str | Path | None, sha256: str) -> Path:
     return ensure_data_layout(data_root).ingestas / f"{sha256}.json"
 
 
-def exclusiones_por_huella(
-    data_root: str | Path | None, huella: str
-) -> tuple[SkuExclusion, ...]:
-    """Recupera exclusiones M1 solo de informes ligados a los bytes publicados."""
-    if data_root is None:
-        return ()
-    excluidos: dict[str, SkuExclusion] = {}
-    for ruta in (Path(data_root) / REPORTS_DIR).glob("[0-9a-f]" * 64 + ".json"):
+def informe_publicado(
+    data_root: str | Path | None, parquet_path: str | Path, huella: str
+) -> IngestReportFile | None:
+    """Informe M1 aceptado que publico esos bytes en esa misma ruta.
+
+    No crea directorios. Unos bytes iguales en otra ruta no bastan: son otra
+    publicacion. Si varias ingestas publicaron la misma ruta y huella, la
+    procedencia es ambigua y se rechaza.
+    """
+    raiz = Path(data_root) if data_root is not None else default_data_root()
+    destino = Path(parquet_path).expanduser().resolve()
+    ligados: dict[str, IngestReportFile] = {}
+    for ruta in (raiz / REPORTS_DIR).glob("[0-9a-f]" * 64 + ".json"):
         informe = IngestReportFile.model_validate_json(ruta.read_text())
+        publicado = informe.published
         if (
-            informe.status == "accepted"
-            and informe.published is not None
-            and informe.published.sha256 == huella
+            informe.status != "accepted"
+            or publicado is None
+            or publicado.sha256 != huella
         ):
-            for item in informe.exclusions:
-                excluidos[item.sku_id] = item
-    return tuple(excluidos[sku] for sku in sorted(excluidos))
+            continue
+        origen = Path(publicado.parquet_path)
+        if (origen if origen.is_absolute() else raiz / origen).resolve() == destino:
+            ligados[informe.ingest_id] = informe
+    if len(ligados) > 1:
+        raise ValueError(
+            f"el Parquet {destino} tiene varias procedencias M1: "
+            + ", ".join(sorted(ligados))
+        )
+    return next(iter(ligados.values()), None)
 
 
 def _relativa(ruta: Path, raiz: Path) -> str:
@@ -244,13 +291,9 @@ def _deposito_info(deposito: DepositResult, raiz: Path) -> DepositInfo:
 
 
 def _topologia(artefacto: TopologyArtifact) -> tuple[ReserveInfo, TopologyInfo]:
-    corte = ReserveCut.of(artefacto.frame)
-    reserva = ReserveInfo(
-        t_star=corte.t_star.date().isoformat(),
-        first_reserved=corte.first_reserved.date().isoformat(),
-        last_observed=corte.last_observed.date().isoformat(),
-        reserved_days=corte.reserved_days,
-        fraction=corte.fraction,
+    corte = artefacto.reserve
+    reserva = ReserveInfo.of(
+        corte if corte is not None else ReserveCut.of(artefacto.frame)
     )
     topologia = TopologyInfo(
         thresholds=ThresholdsInfo(adi=ADI_THRESHOLD, cv2=CV2_THRESHOLD),
@@ -271,25 +314,22 @@ def _cabecera(diagnostico: HeaderDiagnostic | None) -> HeaderInfo | None:
 
 def _informe_aceptado(
     fuente: SourceFileInfo,
-    deposito: DepositResult,
-    resultado: CsvIngestResult | IngestResult,
+    deposito: DepositResult | None,
+    topologia: TopologyArtifact,
+    parquet: Path,
     raiz: Path,
+    *,
+    validadas: int,
+    cabecera: HeaderInfo | None = None,
 ) -> IngestReportFile:
-    topologia = resultado.topology
     reserva, info = _topologia(topologia)
-    if isinstance(resultado, IngestResult):
-        cabecera = _cabecera(resultado.diagnostic.diagnostic)
-        validadas = len(resultado.validated)
-    else:
-        cabecera = None
-        validadas = resultado.validated_rows
     n_skus = len(topologia.metrics)
     return IngestReportFile(
         written_at=_ahora(),
         ingest_id=fuente.sha256,
         status="accepted",
         source_file=fuente,
-        deposit=_deposito_info(deposito, raiz),
+        deposit=None if deposito is None else _deposito_info(deposito, raiz),
         header_diagnostic=cabecera,
         validation=ValidationInfo(
             rows_validated=validadas,
@@ -297,8 +337,8 @@ def _informe_aceptado(
             n_skus=n_skus,
         ),
         published=PublishedInfo(
-            sha256=hash_sha256_archivo(resultado.parquet_path),
-            parquet_path=_relativa(resultado.parquet_path, raiz),
+            sha256=hash_sha256_archivo(parquet),
+            parquet_path=_relativa(parquet, raiz),
             rows=len(topologia.frame),
             n_skus=n_skus,
             columns=[str(c) for c in topologia.frame.columns],
@@ -471,8 +511,25 @@ def ingest_csv_with_report(
     except Exception as exc:  # noqa: BLE001 - se registra en el informe y se devuelve
         error = exc
 
-    if error is None and resultado is not None and deposito is not None:
-        informe = _informe_aceptado(fuente, deposito, resultado, layout.root)
+    if isinstance(resultado, IngestResult) and deposito is not None:
+        informe = _informe_aceptado(
+            fuente,
+            deposito,
+            resultado.topology,
+            resultado.parquet_path,
+            layout.root,
+            validadas=len(resultado.validated),
+            cabecera=_cabecera(resultado.diagnostic.diagnostic),
+        )
+    elif resultado is not None and deposito is not None:
+        informe = _informe_aceptado(
+            fuente,
+            deposito,
+            resultado.topology,
+            resultado.parquet_path,
+            layout.root,
+            validadas=resultado.validated_rows,
+        )
     elif isinstance(error, RawConflictError):
         informe = _informe_conflicto(fuente, error, layout.root)
     else:
@@ -480,3 +537,36 @@ def ingest_csv_with_report(
         informe = _informe_fallido(fuente, deposito, error, layout.root)
     ruta = write_ingest_report(informe, layout.root)
     return ReportedIngest(report=informe, path=ruta, result=resultado, error=error)
+
+
+def classify_parquet_with_report(
+    parquet_path: str | Path,
+    *,
+    data_root: str | Path | None = None,
+    datos_sinteticos: bool | None = None,
+) -> tuple[TopologyArtifact, Path, Path]:
+    """``run_classify_parquet`` que deja su informe M1 junto al Parquet publicado.
+
+    El informe usa el mismo esquema que la ruta CSV, sin deposito en raw/, y
+    lleva las exclusiones para que ``run --parquet`` las recupere. Los errores
+    se propagan sin informe, como en ``run_classify_parquet``. Devuelve la
+    topologia, el Parquet publicado y la ruta del informe.
+    """
+    layout = ensure_data_layout(data_root)
+    origen = Path(parquet_path).expanduser().resolve()
+    if not origen.is_file():
+        raise FileNotFoundError(origen)
+    # Antes de publicar: el destino puede ser la misma ruta que el origen.
+    sha256 = hash_sha256_archivo(origen)
+    filas = pq.read_metadata(origen).num_rows
+    topologia, destino = run_classify_parquet(origen, data_root=layout.root)
+    fuente = SourceFileInfo(
+        datos_sinteticos=origen_informe(layout.root, sha256, datos_sinteticos),
+        name=origen.name,
+        sha256=sha256,
+        row_count=filas,
+    )
+    informe = _informe_aceptado(
+        fuente, None, topologia, destino, layout.root, validadas=filas
+    )
+    return topologia, destino, write_ingest_report(informe, layout.root)

@@ -29,7 +29,6 @@ from pred_engine.comun.modelos.manifiesto_candidatos import (
     MODELO_POR_FAMILIA,
     ContextoParticion,
 )
-from pred_engine.comun.reserva import ReserveCut
 from pred_engine.optimizacion.control_reanudacion.almacenamiento import (
     escribir_atomico,
 )
@@ -229,7 +228,7 @@ def write_run(
     ingestion = result.ingestion
     if ingestion is not None and ingestion.topology:
         # La topologia es de L1: se guarda aunque L2 o L3 hayan fallado.
-        corte = ReserveCut.of(ingestion.panel)
+        corte = ingestion.cut()
         archivos["topologia"] = destino / "topologia.json"
         _escribir_json(
             {

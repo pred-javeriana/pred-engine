@@ -10,6 +10,7 @@ import pandas as pd
 from pred_engine.comun.exclusiones import sin_demanda_admisible
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.logger import get_logger, log_ingestion_event
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import (
     TopologyArtifact,
     classify_daily_panel,
@@ -75,11 +76,16 @@ def deposit_raw_csv(source: str | Path, *, data_root: str | Path | None = None) 
 
 
 def _clasificar_panel_diario(panel: pd.DataFrame) -> TopologyArtifact:
-    """Gate de demanda positiva y clasificador real de 1.3 (sin stub)."""
-    excluidos = sin_demanda_admisible(panel)
+    """Gate de demanda positiva y clasificador real de 1.3 (sin stub).
+
+    El corte sale del calendario completo, antes de excluir: quitar un SKU no
+    mueve t* para los demas ni para el informe M1.
+    """
+    corte = ReserveCut.of(panel)
+    excluidos = sin_demanda_admisible(panel, corte)
     admisible = panel.loc[~panel["sku_id"].isin([e.sku_id for e in excluidos])]
-    require_positive_demand(panel if admisible.empty else admisible)
-    topologia = classify_daily_panel(admisible)
+    require_positive_demand(panel if admisible.empty else admisible, corte)
+    topologia = classify_daily_panel(admisible, corte)
     return replace(topologia, exclusions=excluidos)
 
 

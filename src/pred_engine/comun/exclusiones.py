@@ -15,8 +15,10 @@ class SkuExclusion:
     cause: str
 
 
-def sin_demanda_admisible(panel: pd.DataFrame) -> tuple[SkuExclusion, ...]:
-    corte = ReserveCut.of(panel)
+def sin_demanda_admisible(
+    panel: pd.DataFrame, corte: ReserveCut
+) -> tuple[SkuExclusion, ...]:
+    """SKU sin demanda positiva hasta el ``corte`` de la corrida completa."""
     dias = pd.to_datetime(panel["timestamp"]).dt.normalize()
     positivos = panel.loc[
         (dias <= corte.t_star) & (panel["demand_qty"] > 0), "sku_id"

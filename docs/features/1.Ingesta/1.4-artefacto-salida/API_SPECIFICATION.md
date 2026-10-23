@@ -79,15 +79,26 @@ Alias de `classify_panel` (implementacion real de 1.3, no stub).
 
 `run_ingest`, `run_classify_csv` y `run_classify_parquet` publican solo
 tras el handoff 1.4. Antes de clasificar, excluyen cada SKU sin demanda positiva
-hasta t* con la causa `lanzado despues del corte`. El contrato de preservacion
-se aplica a todas las filas de los SKU admitidos, incluida su reserva. Si no
-queda ningun SKU admisible, la ingesta falla.
+hasta t* con la causa `lanzado despues del corte`. t* sale del calendario
+completo del panel, antes de excluir: la exclusion, la clasificacion y el
+informe usan el mismo corte, y `TopologyArtifact.reserve` lo lleva. El contrato
+de preservacion se aplica a todas las filas de los SKU admitidos, incluida su
+reserva. Si no queda ningun SKU admisible, la ingesta falla.
 
-`ingest_csv_with_report` registra en `ingestas/<sha>.json` la lista
-`exclusions` (`sku_id`, `cause`) y el total `excluded_count`. L2 incorpora esas
-exclusiones como `sin historia admisible`. El resumen de `run` expone el mismo
-total en `excluded_count`. La ruta Parquet recupera estas exclusiones cuando
-`data_root` contiene un informe M1 cuya huella coincide con el Parquet.
+`ingest_csv_with_report` y `classify_parquet_with_report` registran en
+`ingestas/<sha>.json` ese corte en `reserve`, la lista `exclusions`
+(`sku_id`, `cause`) y el total `excluded_count`. El informe de un Parquet no
+tiene `deposit` y solo se escribe si la clasificacion termina. L2 usa el corte
+de `reserve` aunque el Parquet publicado ya no tenga los SKU excluidos, e
+incorpora las exclusiones como `sin historia admisible`. El resumen de `run`
+expone el total en `excluded_count`.
+
+La ruta Parquet de `Pipeline.ingest` recupera el corte y las exclusiones del
+informe M1 aceptado que publico ese mismo Parquet: misma ruta y misma huella,
+bajo `data_root` o, sin el, bajo `PRED_DATA_ROOT`. Leer no crea directorios.
+Unos bytes iguales publicados en otra ruta no aportan exclusiones. Si varias
+ingestas publicaron la misma ruta y huella, la entrada se rechaza. Sin informe,
+el corte se deriva del calendario del Parquet.
 
 ### `run_verify_parquet(parquet_path) -> DataFrame`
 
@@ -98,7 +109,9 @@ Relectura + contrato. Sin LLM y sin escritura.
 ### `pred-engine classify`
 
 Igual que 1.3 (sin LLM) mas validacion/publicacion 1.4.
-Stdout incluye `contrato_1_4: accepted`.
+Stdout incluye `contrato_1_4: accepted` y la linea `informe:` con la ruta del
+informe M1, tambien con `--parquet`. Si hubo exclusiones, `classify` e `ingest`
+imprimen `excluded_count: N` y `exclusions:` con la lista en JSON.
 
 ### `pred-engine verify`
 

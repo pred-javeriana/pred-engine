@@ -2,8 +2,9 @@
 
 M1 clasifica cada SKU solo con la historia anterior al corte (ADR-019) y M2
 optimiza y ajusta con esa misma historia; los dias reservados quedan para la
-evaluacion de M3. Ambos modulos derivan el corte del calendario del panel con
-esta misma funcion, asi que coinciden sin intercambiar estado.
+evaluacion de M3. M1 deriva el corte del calendario completo del panel, antes
+de excluir SKU, y lo publica en su informe; M2 usa ese corte publicado y solo
+sin informe lo deriva del Parquet con esta misma funcion.
 """
 
 from __future__ import annotations

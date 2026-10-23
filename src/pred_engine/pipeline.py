@@ -38,7 +38,7 @@ from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
 from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredicto
-from pred_engine.ingesta.informe import exclusiones_por_huella, ingest_csv_with_report
+from pred_engine.ingesta.informe import informe_publicado, ingest_csv_with_report
 from pred_engine.ingesta.pipeline import run_verify_parquet_with_sha256
 from pred_engine.ingesta.salida import validate_output_contract
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degenerada
@@ -149,6 +149,13 @@ class IngestionArtifact:
     # SHA-256 de los bytes Parquet de los que se cargo ``panel``.
     parquet_sha256: str | None = None
     exclusions: tuple[SkuExclusion, ...] = ()
+    # Corte de la corrida que publico M1, anterior a sus exclusiones; None si
+    # ningun informe M1 respalda el Parquet.
+    reserve: ReserveCut | None = None
+
+    def cut(self) -> ReserveCut:
+        """Corte de M1 o, sin informe, el del calendario del panel."""
+        return self.reserve if self.reserve is not None else ReserveCut.of(self.panel)
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,12 +552,16 @@ class Pipeline:
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
             panel, huella = run_verify_parquet_with_sha256(path)
+            informe = informe_publicado(request.data_root, path, huella)
             return IngestionArtifact(
                 path,
                 panel,
                 datos_sinteticos=request.datos_sinteticos,
                 parquet_sha256=huella,
-                exclusions=exclusiones_por_huella(request.data_root, huella),
+                exclusions=() if informe is None else tuple(informe.exclusions),
+                reserve=None
+                if informe is None or informe.reserve is None
+                else informe.reserve.cut(panel),
             )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
@@ -562,7 +573,7 @@ class Pipeline:
         )
         if salida.error is not None:
             raise salida.error
-        assert salida.result is not None
+        assert salida.result is not None and salida.report.reserve is not None
         path = salida.result.parquet_path
         panel, huella = run_verify_parquet_with_sha256(path)
         return IngestionArtifact(
@@ -573,6 +584,7 @@ class Pipeline:
             datos_sinteticos=salida.report.source_file.datos_sinteticos,
             parquet_sha256=huella,
             exclusions=tuple(salida.report.exclusions),
+            reserve=salida.report.reserve.cut(panel),
         )
 
     def _exclusion_cause(
@@ -604,7 +616,7 @@ class Pipeline:
         """L2: corte t*, una unidad por SKU x familia y pronostico de la reserva."""
         panel = ingestion.panel
         validate_output_contract(panel)
-        reserve = ReserveCut.of(panel)
+        reserve = ingestion.cut()
         tasks: list[_FitTask] = []
         exclusions = [
             SkuExclusion(e.sku_id, f"sin historia admisible: {e.cause}")

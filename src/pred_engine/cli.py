@@ -79,6 +79,12 @@ def _imprimir_topologia(artefacto: TopologyArtifact) -> None:
     for m in artefacto.metrics:
         resumen[m.sku_class] = resumen.get(m.sku_class, 0) + 1
     print("sku_class_resumen:", resumen)
+    if artefacto.exclusions:
+        print("excluded_count:", len(artefacto.exclusions))
+        exclusiones = [
+            {"sku_id": e.sku_id, "cause": e.cause} for e in artefacto.exclusions
+        ]
+        print("exclusions:", json.dumps(exclusiones, ensure_ascii=False))
 
 
 def _imprimir_contrato(marco, parquet: Path) -> None:
@@ -499,8 +505,10 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
 
 def _cmd_classify(args: argparse.Namespace) -> int:
     from pred_engine.ingesta.data import RawConflictError
-    from pred_engine.ingesta.informe import ingest_csv_with_report
-    from pred_engine.ingesta.pipeline import run_classify_parquet
+    from pred_engine.ingesta.informe import (
+        classify_parquet_with_report,
+        ingest_csv_with_report,
+    )
     from pred_engine.ingesta.validador_formato import SchemaBarrierError
 
     if (args.csv is None) == (args.parquet is None):
@@ -522,8 +530,10 @@ def _cmd_classify(args: argparse.Namespace) -> int:
             topologia = salida.result.topology
             destino = salida.result.parquet_path
         else:
-            topologia, destino = run_classify_parquet(
-                args.parquet, data_root=args.data_root
+            topologia, destino, informe = classify_parquet_with_report(
+                args.parquet,
+                data_root=args.data_root,
+                datos_sinteticos=args.datos_sinteticos,
             )
     except RawConflictError as exc:
         _logger.error("%s", exc)

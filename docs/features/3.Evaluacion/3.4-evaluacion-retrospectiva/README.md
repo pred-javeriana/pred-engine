@@ -26,7 +26,7 @@ metricas `3.4.1`; politica `3.4.2-inicial`.
 ## Como
 
 ```
-3.1  ReserveCut.of(panel) ──► t*, reserva (20 % final del calendario)
+3.1  ReserveCut de M1 ──► t*, reserva (20 % final del calendario completo)
 3.2  instanciar(candidato).fit(historia <= t*)
 3.3 ──► PronosticoFechado por origen, para cada candidato
                     │
