@@ -87,11 +87,13 @@ def registrar_corrida(
     ingesta_sha256: str,
     datos_sinteticos: bool | None,
     run_id_m2: str | None = None,
+    skus_fallidos: tuple[str, ...] = (),
 ) -> str:
     """Registra la corrida con el resultado de 3.2 y devuelve su `run_id`.
 
     Un lote rechazado queda en RECHAZADA con su causa; uno valido, en EN_CURSO
-    con los SKUs de su manifiesto y sus fallos de candidato. Registrar otra vez
+    con los SKUs de su manifiesto, sus fallos de candidato y los fallidos en L2.
+    Registrar otra vez
     la misma identidad no cambia nada. `ingesta_sha256` es la clave de
     `ingestas` (archivo fuente de M1); la identidad lleva `ingesta_ref_m1`, que
     es el Parquet publicado.
@@ -118,7 +120,11 @@ def registrar_corrida(
             handoff.run_id_m2,
             handoff.fallos,
         )
-        skus = {c.sku for c in handoff.candidatos} | {f.sku for f in fallos}
+        skus = (
+            {c.sku for c in handoff.candidatos}
+            | {f.sku for f in fallos}
+            | set(skus_fallidos)
+        )
     run_id = identidad.run_id
     with _transaccion(conn):
         origenes = conn.execute(
