@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -89,3 +90,41 @@ def test_rechaza_demand_qty_no_float() -> None:
     marco["demand_qty"] = marco["demand_qty"].astype("int64")
     with pytest.raises(OutputContractError, match="Float"):
         validate_output_contract(marco)
+
+
+def test_rechaza_sku_que_queda_vacio_sin_espacios_de_python() -> None:
+    marco = _clasificado_valido()
+    marco["sku_id"] = pd.Series(["105", "\x1c", "105", "105"], dtype=object)
+    with pytest.raises(OutputContractError):
+        validate_output_contract(marco)
+
+
+def test_acepta_sku_no_textual_en_columna_object() -> None:
+    marco = _clasificado_valido()
+    marco["sku_id"] = pd.Series([105] * 4, dtype=object)
+    validate_output_contract(marco)
+
+
+def test_rechaza_timestamp_fuera_del_rango_de_datetime() -> None:
+    marco = _clasificado_valido()
+    marco["timestamp"] = pd.Series(
+        np.array(
+            ["9999-12-30", "9999-12-31", "10000-01-01", "10000-01-02"],
+            dtype="datetime64[s]",
+        )
+    )
+    with pytest.raises(OutputContractError, match="violacion Pydantic en fila 2"):
+        validate_output_contract(marco)
+
+
+def test_rechaza_sku_class_binaria_en_su_fila() -> None:
+    marco = _clasificado_valido()
+    marco["sku_class"] = pd.Series([b"intermittent"] * 4, dtype=object)
+    with pytest.raises(OutputContractError, match="violacion Pydantic en fila 0"):
+        validate_output_contract(marco)
+
+
+def test_acepta_sku_class_de_texto_en_columna_object() -> None:
+    marco = _clasificado_valido()
+    marco["sku_class"] = pd.Series(["intermittent"] * 4, dtype=object)
+    validate_output_contract(marco)

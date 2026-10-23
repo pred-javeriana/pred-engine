@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -13,6 +14,7 @@ from pred_engine.ingesta.lector import export_parquet
 from pred_engine.ingesta.salida.errores import OutputContractError
 from pred_engine.ingesta.salida.preservacion import require_panel_preserved
 from pred_engine.ingesta.salida.validador import (
+    contar_skus,
     normalize_output_frame,
     validate_output_contract,
 )
@@ -43,7 +45,7 @@ def publish_classified_panel(
         "Artefacto 1.4 publicado ruta=%s filas=%s skus=%s",
         escrito,
         int(len(normalizado)),
-        len({str(v) for v in normalizado["sku_id"].tolist()}),
+        contar_skus(cast(pd.Series, normalizado["sku_id"])),
     )
     return escrito
 
@@ -67,6 +69,6 @@ def read_classified_parquet_with_sha256(path: str | Path) -> tuple[pd.DataFrame,
         "Artefacto 1.4 verificado ruta=%s filas=%s skus=%s",
         origen,
         int(len(marco)),
-        len({str(v) for v in marco["sku_id"].tolist()}),
+        contar_skus(cast(pd.Series, marco["sku_id"])),
     )
     return marco, hashlib.sha256(datos).hexdigest()
