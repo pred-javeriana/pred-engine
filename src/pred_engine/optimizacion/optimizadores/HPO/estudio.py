@@ -224,7 +224,6 @@ def ejecutar_estudio(
 
             configuracion = _sugerir_configuracion(trial, espacio)
             if configuracion is None:
-                trial.set_user_attr("motivo", "configuracion_invalida")
                 study.tell(trial, None, estado="fallido")
                 _logger.warning(
                     "Configuracion invalida (restricciones) para %s", trial_id
@@ -236,11 +235,19 @@ def ejecutar_estudio(
                         sesion, n_trials_finalizados=indice_trial
                     )
                 if intentos_invalidos > n_trials * _MAX_INTENTOS_INVALIDOS_POR_TRIAL:
+                    diagnostico = instantanea_desde_estudio(
+                        study.trials_finalizados(),
+                        ventanas=tuple(ventanas),
+                        metrica_objetivo=metrica_objetivo,
+                        seed=seed,
+                        familia=familia,
+                    )
                     raise EstudioError(
                         "el espacio de busqueda rechaza casi todas las "
                         "configuraciones muestreadas "
                         f"({intentos_invalidos} intentos invalidos); revise "
-                        "las restricciones de EspacioBusqueda"
+                        "las restricciones de EspacioBusqueda; "
+                        f"{diagnostico.resumen_causas}"
                     )
                 continue
             intentos_invalidos = 0
@@ -314,7 +321,9 @@ def _sugerir_configuracion(
         ):
             continue
         configuracion[parametro.nombre] = _sugerir_parametro(trial, parametro)
-    if not espacio.es_valida(configuracion):
+    restriccion = espacio.restriccion_violada(configuracion)
+    if restriccion is not None:
+        trial.set_user_attr("motivo", f"configuracion_invalida:{restriccion}")
         return None
     return configuracion
 
