@@ -243,6 +243,7 @@ def run_classify_parquet(
     origen_resuelto = origen_informe(layout.root, sha256, datos_sinteticos)
     marco = pd.read_parquet(origen, engine="pyarrow")
     canonico = select_canonical_columns(marco)
+    validate_aligned_frame(canonico)
     topologia = _clasificar_panel_diario(canonico)
     destino = layout.processed / f"{origen.stem}.parquet"
     fuente = SourceFileInfo(

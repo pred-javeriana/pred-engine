@@ -115,30 +115,29 @@ def _buscar_ingesta(
     conocida = origen_registrado(conn, sha) if sha is not None else None
     if sha is not None and conocida is not None:
         return sha, conocida
-    from pred_engine.ingesta.informe import IngestReportFile, son_informes_equivalentes
+    from pred_engine.ingesta.informe import (
+        informes_publicados,
+        son_informes_equivalentes,
+    )
 
-    coincidentes: list[IngestReportFile] = []
-    # Un archivo ajeno no es un informe M1. Si ya se conoce la fuente, solo
-    # su informe canonico puede aportar procedencia y se valida estrictamente.
-    patron = f"{sha}.json" if sha is not None else "[0-9a-f]" * 64 + ".json"
-    for path in (data_root / "ingestas").glob(patron):
-        report = IngestReportFile.model_validate_json(path.read_text())
-        if report.status != "accepted":
-            continue
-        publicaciones = (
-            [report.published] if report.published is not None else []
-        ) + report.publications
-        if any(p is not None and p.sha256 == ingesta_ref_m1 for p in publicaciones):
-            if report.ingest_id != report.source_file.sha256:
-                raise ValueError("la procedencia M1 tiene identidades incompatibles")
-            coincidentes.append(report)
+    coincidentes = informes_publicados(data_root, parquet, ingesta_ref_m1)
+    if sha is not None:
+        coincidentes = [r for r in coincidentes if r.ingest_id == sha]
+    for report in coincidentes:
+        if report.ingest_id != report.source_file.sha256:
+            raise ValueError("la procedencia M1 tiene identidades incompatibles")
     if len(coincidentes) > 1:
         if all(
             son_informes_equivalentes(coincidentes[0], otro)
             for otro in coincidentes[1:]
         ):
+            origen_resuelto: bool | None = None
+            for r in coincidentes:
+                origen_resuelto = resolver_origen(
+                    origen_resuelto, r.source_file.datos_sinteticos
+                )
             canonical = min(coincidentes, key=lambda r: r.ingest_id)
-            declarada = (canonical.ingest_id, canonical.source_file.datos_sinteticos)
+            declarada = (canonical.ingest_id, origen_resuelto)
             if sha is not None and sha not in {r.ingest_id for r in coincidentes}:
                 raise ValueError(
                     "la referencia de plataforma difiere de la procedencia M1"

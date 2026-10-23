@@ -17,11 +17,20 @@ import pandas as pd
 import pytest
 
 from pred_engine import cli
+from pred_engine.comun.llm.errores import LlmProviderError, LlmTimeoutError
 from pred_engine.comun.reserva import ReserveCut
+from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
+from pred_engine.forecasting.persistencia_evidencia import abrir_base_plataforma
 from pred_engine.ingesta import pipeline as ip
-from pred_engine.ingesta.informe import classify_parquet_with_report
-from pred_engine.pipeline import PipelineInput, summarize_run
+from pred_engine.ingesta.informe import (
+    classify_parquet_with_report,
+    ingest_csv_with_report,
+)
+from pred_engine.ingesta.validador_formato.errores import SchemaBarrierError
+from pred_engine.pipeline import EvaluationSettings, PipelineInput, summarize_run
+from pred_engine.pipeline_setup import build_pipeline
 from pred_engine.verify import representative_csv, verification_pipeline
+from tests._plataforma import crear_base_plataforma
 
 INICIO = date(2026, 1, 1)
 LANZADO = "lanzado despues del corte"
@@ -567,3 +576,576 @@ def test_reintento_de_origen_rechazado_no_altera_publicacion_previa(
         classify_parquet_with_report(pq_a, data_root=raiz, datos_sinteticos=False)
     assert dest.read_bytes() == bytes_b_antes
     assert float(pd.read_parquet(dest)["demand_qty"].iloc[0]) == primera_demanda_b
+
+
+class _ProveedorTimeout:
+    def complete(self, prompt: str, *, temperature: float, timeout: float) -> str:
+        raise LlmTimeoutError("timeout simulado")
+
+
+class _ProveedorFallaGenerica:
+    def complete(self, prompt: str, *, temperature: float, timeout: float) -> str:
+        raise LlmProviderError("error generico simulado")
+
+
+def _correr_cli_run(
+    ruta_parquet: Path,
+    raiz: Path,
+    run_id: str,
+    capsys: pytest.CaptureFixture[str],
+    extra: list[str] | None = None,
+) -> tuple[int, dict[str, Any] | None]:
+    db_path = raiz / f"{run_id}_cli.db"
+    crear_base_plataforma(db_path)
+    cmd = [
+        "run",
+        "--parquet",
+        str(ruta_parquet),
+        "--data-root",
+        str(raiz),
+        "--db-path",
+        str(db_path),
+        "--run-id",
+        run_id,
+        "--families",
+        "ml",
+        "--trials",
+        "1",
+        "--min-train",
+        "20",
+        "--horizon",
+        "2",
+        "--step",
+        "7",
+        "--seed",
+        "17",
+        "--workers",
+        "1",
+        "--telemetry-interval",
+        "0",
+    ]
+    if extra:
+        cmd.extend(extra)
+    codigo = cli.main(cmd)
+    salida = capsys.readouterr().out
+    resumen = None
+    for linea in reversed(salida.splitlines()):
+        if linea.startswith("{") and '"stages"' in linea:
+            resumen = json.loads(linea)
+            break
+    return codigo, resumen
+
+
+def _correr_native_m3(
+    ruta_parquet: Path,
+    raiz: Path,
+    run_id: str,
+    *,
+    datos_sinteticos: bool | None = True,
+) -> Any:
+    db_path = raiz / f"{run_id}_m3.db"
+    crear_base_plataforma(db_path)
+    with abrir_base_plataforma(db_path) as con:
+        ctl = ControladorEvaluacion(
+            con,
+            raiz / "runs" / run_id,
+            run_id_m2=run_id,
+            codigo_version="head",
+            datos_sinteticos=datos_sinteticos,
+            data_root=raiz,
+        )
+        settings = EvaluationSettings(min_train=20, horizon=2, step=7)
+        native = build_pipeline(
+            settings,
+            families=("ml",),
+            n_trials=1,
+            seed=17,
+            workers=1,
+            validator=ctl,
+        )
+        return native.run(
+            PipelineInput(
+                parquet_path=ruta_parquet,
+                data_root=raiz,
+                datos_sinteticos=datos_sinteticos,
+            )
+        )
+
+
+def test_s1_publicaciones_distintas_con_bytes_iguales_no_bloquean_run_parquet(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """S1: Publicaciones distintas con bytes iguales no se bloquean entre si."""
+    raiz = tmp_path / "data"
+    limpio = _serie("A", range(100), range(100)) + _serie("B", range(100), range(100))
+    tardio = _serie("tardio", range(40, 60), range(0))
+    csv_limpio = _csv(tmp_path / "entrada" / "clean.csv", limpio)
+    csv_mixto = _csv(tmp_path / "entrada" / "collision-late.csv", limpio + tardio)
+
+    assert (
+        cli.main(
+            [
+                "classify",
+                "--csv",
+                str(csv_limpio),
+                "--data-root",
+                str(raiz),
+                "--datos-sinteticos",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        cli.main(
+            [
+                "classify",
+                "--csv",
+                str(csv_mixto),
+                "--data-root",
+                str(raiz),
+                "--datos-sinteticos",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    pq_limpio = raiz / "processed" / "clean.parquet"
+    pq_mixto = raiz / "processed" / "collision-late.parquet"
+    assert pq_limpio.exists() and pq_mixto.exists()
+    assert pq_limpio.read_bytes() == pq_mixto.read_bytes()
+
+    cod_limpio, res_limpio = _correr_cli_run(
+        pq_limpio, raiz, "s1_cli_clean", capsys, ["--datos-sinteticos"]
+    )
+    assert cod_limpio == 0
+    assert res_limpio is not None
+    assert res_limpio["excluded_count"] == 0
+
+    cod_mixto, res_mixto = _correr_cli_run(
+        pq_mixto, raiz, "s1_cli_mixto", capsys, ["--datos-sinteticos"]
+    )
+    assert cod_mixto == 0
+    assert res_mixto is not None
+    assert res_mixto["excluded_count"] == 1
+    assert any("tardio" in str(e) for e in res_mixto["exclusions"])
+
+    m3_limpio = _correr_native_m3(pq_limpio, raiz, "s1_m3_clean")
+    assert m3_limpio.stages[-1].state == "completed"
+
+    m3_mixto = _correr_native_m3(pq_mixto, raiz, "s1_m3_mixto")
+    assert m3_mixto.stages[-1].state == "completed"
+
+
+def test_s2_reintento_fallido_conserva_corte_y_exclusiones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """S2: Un reintento fallido conserva el corte aceptado y sus exclusiones."""
+    raiz = tmp_path / "data"
+    pipeline = verification_pipeline()
+    csv = _csv(tmp_path / "start.csv", INICIO_DEL_CALENDARIO)
+
+    res_inicial = ingest_csv_with_report(csv, data_root=raiz, datos_sinteticos=True)
+    assert res_inicial.error is None
+    assert res_inicial.result is not None
+    pq_path = res_inicial.result.parquet_path
+    hash_antes = pq_path.read_bytes()
+
+    reingreso_antes = pipeline.ingest(
+        PipelineInput(parquet_path=pq_path, data_root=raiz)
+    )
+    assert [e.sku_id for e in reingreso_antes.exclusions] == ["X"]
+    assert reingreso_antes.cut().t_star == pd.Timestamp("2026-04-06")
+    ajuste_antes = pipeline.fit(reingreso_antes)
+    assert len(ajuste_antes.candidates[0].series) == 75
+
+    reintento_timeout = ingest_csv_with_report(
+        csv, data_root=raiz, datos_sinteticos=True, provider=_ProveedorTimeout()
+    )
+    assert isinstance(reintento_timeout.error, LlmTimeoutError)
+    assert reintento_timeout.report.status == "failed"
+    assert reintento_timeout.path.read_text()
+    assert pq_path.read_bytes() == hash_antes
+
+    reingreso_timeout = pipeline.ingest(
+        PipelineInput(parquet_path=pq_path, data_root=raiz)
+    )
+    assert [e.sku_id for e in reingreso_timeout.exclusions] == ["X"]
+    assert reingreso_timeout.cut().t_star == pd.Timestamp("2026-04-06")
+    ajuste_timeout = pipeline.fit(reingreso_timeout)
+    assert len(ajuste_timeout.candidates[0].series) == 75
+    assert len(ajuste_timeout.candidates[0].series) != 80
+
+    codigo, resumen = _correr_cli_run(
+        pq_path, raiz, "s2_cli_timeout", capsys, ["--datos-sinteticos"]
+    )
+    assert codigo == 0
+    assert resumen is not None
+    assert resumen["excluded_count"] == 1
+    assert resumen["reserve"]["t_star"] == "2026-04-06"
+
+    reintento_gen = ingest_csv_with_report(
+        csv, data_root=raiz, datos_sinteticos=True, provider=_ProveedorFallaGenerica()
+    )
+    assert isinstance(reintento_gen.error, LlmProviderError)
+    assert pq_path.read_bytes() == hash_antes
+
+    reingreso_gen = pipeline.ingest(PipelineInput(parquet_path=pq_path, data_root=raiz))
+    assert [e.sku_id for e in reingreso_gen.exclusions] == ["X"]
+    assert reingreso_gen.cut().t_star == pd.Timestamp("2026-04-06")
+    ajuste_gen = pipeline.fit(reingreso_gen)
+    assert len(ajuste_gen.candidates[0].series) == 75
+
+
+@pytest.mark.parametrize("orden", ["csv_primero", "parquet_primero"])
+def test_s3_origen_desconocido_y_conocido_compatibles_ambos_ordenes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], orden: str
+) -> None:
+    """S3: Declaraciones compatibles (None y True) se combinan en ambos ordenes."""
+    raiz = tmp_path / "data"
+    pipeline = verification_pipeline()
+    limpio = _serie("A", range(100), range(100)) + _serie("B", range(100), range(100))
+    csv = _csv(tmp_path / "panel.csv", limpio)
+    pq_12 = _parquet_1_2(tmp_path / "panel.parquet", limpio)
+
+    if orden == "csv_primero":
+        assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+        capsys.readouterr()
+        assert (
+            cli.main(
+                [
+                    "classify",
+                    "--parquet",
+                    str(pq_12),
+                    "--data-root",
+                    str(raiz),
+                    "--datos-sinteticos",
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+    else:
+        assert (
+            cli.main(
+                [
+                    "classify",
+                    "--parquet",
+                    str(pq_12),
+                    "--data-root",
+                    str(raiz),
+                    "--datos-sinteticos",
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+        assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+        capsys.readouterr()
+
+    dest = raiz / "processed" / "panel.parquet"
+    reingreso = pipeline.ingest(PipelineInput(parquet_path=dest, data_root=raiz))
+    assert reingreso.exclusions == ()
+    ajuste = pipeline.fit(reingreso)
+    assert len(ajuste.candidates) == 2
+
+    m3 = _correr_native_m3(dest, raiz, f"s3_m3_{orden}", datos_sinteticos=True)
+    assert m3.stages[-1].state == "completed"
+
+    codigo, resumen = _correr_cli_run(
+        dest, raiz, f"s3_cli_{orden}", capsys, ["--datos-sinteticos"]
+    )
+    assert codigo == 0
+    assert resumen is not None
+
+    raiz_conflicto = tmp_path / f"conflicto_{orden}"
+    assert (
+        cli.main(
+            [
+                "classify",
+                "--csv",
+                str(csv),
+                "--data-root",
+                str(raiz_conflicto),
+                "--datos-sinteticos",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        cli.main(
+            [
+                "classify",
+                "--parquet",
+                str(pq_12),
+                "--data-root",
+                str(raiz_conflicto),
+                "--datos-reales",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    conflicto_pq = raiz_conflicto / "processed" / "panel.parquet"
+    with pytest.raises(ValueError, match="varias procedencias M1"):
+        pipeline.ingest(
+            PipelineInput(parquet_path=conflicto_pq, data_root=raiz_conflicto)
+        )
+    cod_conflicto, _ = _correr_cli_run(
+        conflicto_pq, raiz_conflicto, f"s3_cli_conflicto_{orden}", capsys
+    )
+    assert cod_conflicto != 0
+
+
+def test_s4_campo_invalido_en_producto_excluido_rechaza_parquet(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """S4: Un campo invalido en un producto excluido rechaza el Parquet con codigo 3."""
+    serie_a = _serie("A", range(100), range(100))
+    serie_late1 = [
+        {
+            "sku_id": "late-short",
+            "timestamp": (INICIO + timedelta(days=d)).isoformat(),
+            "demand_qty": 0.0 if d < 90 else 5.0,
+            "lead_time_days": 0,
+        }
+        for d in range(100)
+    ]
+    serie_late2 = [
+        {
+            "sku_id": "late-z",
+            "timestamp": (INICIO + timedelta(days=d)).isoformat(),
+            "demand_qty": 0.0 if d < 90 else 10.0,
+            "lead_time_days": 0,
+        }
+        for d in range(100)
+    ]
+    filas = serie_a + serie_late1 + serie_late2
+
+    pq_origen = _parquet_1_2(tmp_path / "invalido.parquet", filas)
+    csv_origen = _csv(tmp_path / "invalido.csv", filas)
+    raiz = tmp_path / "data"
+
+    cod_csv = cli.main(["classify", "--csv", str(csv_origen), "--data-root", str(raiz)])
+    capsys.readouterr()
+    assert cod_csv == 3
+
+    cod_pq = cli.main(
+        ["classify", "--parquet", str(pq_origen), "--data-root", str(raiz)]
+    )
+    capsys.readouterr()
+    assert cod_pq == 3
+    assert not (raiz / "processed" / "invalido.parquet").exists()
+
+    with pytest.raises(SchemaBarrierError):
+        ip.run_classify_parquet(pq_origen, data_root=raiz)
+
+    filas_retained_bad = [
+        dict(f, lead_time_days=0 if f["sku_id"] == "A" else 7) for f in filas
+    ]
+    pq_retained_bad = _parquet_1_2(
+        tmp_path / "retained_bad.parquet", filas_retained_bad
+    )
+    cod_retained = cli.main(
+        ["classify", "--parquet", str(pq_retained_bad), "--data-root", str(raiz)]
+    )
+    capsys.readouterr()
+    assert cod_retained == 3
+
+    filas_valid_late = [dict(f, lead_time_days=7) for f in filas]
+    pq_valid_late = _parquet_1_2(tmp_path / "valid_late.parquet", filas_valid_late)
+    cod_valid = cli.main(
+        ["classify", "--parquet", str(pq_valid_late), "--data-root", str(raiz)]
+    )
+    salida_valid = capsys.readouterr().out
+    assert cod_valid == 0
+    assert "excluded_count: 2" in salida_valid
+
+
+def test_i1_corte_sobrevive_reintento_renombre_y_republicacion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I1: El corte y exclusiones sobreviven reintento, renombre y republicacion."""
+    raiz = tmp_path / "data"
+    pipeline = verification_pipeline()
+    csv_a = _csv(tmp_path / "primero.csv", INICIO_DEL_CALENDARIO)
+    csv_renombrado = _csv(tmp_path / "segundo.csv", INICIO_DEL_CALENDARIO)
+
+    assert cli.main(["classify", "--csv", str(csv_a), "--data-root", str(raiz)]) == 0
+    capsys.readouterr()
+    pub = raiz / "processed" / "primero.parquet"
+
+    reingreso1 = pipeline.ingest(PipelineInput(parquet_path=pub, data_root=raiz))
+    assert reingreso1.cut().t_star == pd.Timestamp("2026-04-06")
+    assert [e.sku_id for e in reingreso1.exclusions] == ["X"]
+    assert len(pipeline.fit(reingreso1).candidates[0].series) == 75
+
+    assert (
+        cli.main(["classify", "--csv", str(csv_renombrado), "--data-root", str(raiz)])
+        == 0
+    )
+    capsys.readouterr()
+    reingreso2 = pipeline.ingest(PipelineInput(parquet_path=pub, data_root=raiz))
+    assert reingreso2.cut().t_star == pd.Timestamp("2026-04-06")
+    assert [e.sku_id for e in reingreso2.exclusions] == ["X"]
+    assert len(pipeline.fit(reingreso2).candidates[0].series) == 75
+
+    ingest_csv_with_report(csv_a, data_root=raiz, provider=_ProveedorTimeout())
+    reingreso3 = pipeline.ingest(PipelineInput(parquet_path=pub, data_root=raiz))
+    assert reingreso3.cut().t_star == pd.Timestamp("2026-04-06")
+    assert [e.sku_id for e in reingreso3.exclusions] == ["X"]
+    assert len(pipeline.fit(reingreso3).candidates[0].series) == 75
+
+    assert cli.main(["classify", "--csv", str(csv_a), "--data-root", str(raiz)]) == 0
+    capsys.readouterr()
+    reingreso4 = pipeline.ingest(PipelineInput(parquet_path=pub, data_root=raiz))
+    assert reingreso4.cut().t_star == pd.Timestamp("2026-04-06")
+    assert [e.sku_id for e in reingreso4.exclusions] == ["X"]
+    assert len(pipeline.fit(reingreso4).candidates[0].series) == 75
+
+
+def test_i2_reserva_nunca_entra_al_entrenamiento(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I2: Los dias de reserva nunca entran al entrenamiento."""
+    raiz = tmp_path / "data"
+    pipeline = verification_pipeline()
+    csv = _csv(tmp_path / "panel.csv", INICIO_DEL_CALENDARIO)
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    capsys.readouterr()
+    pub = raiz / "processed" / "panel.parquet"
+
+    ingest_csv_with_report(csv, data_root=raiz, provider=_ProveedorTimeout())
+    reingreso = pipeline.ingest(PipelineInput(parquet_path=pub, data_root=raiz))
+    ajuste = pipeline.fit(reingreso)
+
+    corte_t_star = pd.Timestamp("2026-04-06")
+    for cand in ajuste.candidates:
+        filas = reingreso.panel[
+            (reingreso.panel.sku_id == cand.selection.sku_id)
+            & (reingreso.panel.timestamp <= ajuste.reserve.t_star)
+        ]
+        assert len(cand.series) == len(filas)
+        assert len(cand.series) == 75
+        assert filas.timestamp.max() <= corte_t_star
+
+
+def test_i3_filas_invalidas_nunca_publicadas_como_aceptadas(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I3: Filas invalidas en productos excluidos nunca se publican como aceptadas."""
+    raiz = tmp_path / "data"
+    serie_ok = _serie("A", range(100), range(100))
+
+    serie_bad_lead = [
+        {
+            "sku_id": "late",
+            "timestamp": (INICIO + timedelta(days=d)).isoformat(),
+            "demand_qty": 0.0 if d < 90 else 5.0,
+            "lead_time_days": 0,
+        }
+        for d in range(100)
+    ]
+    pq1 = _parquet_1_2(tmp_path / "bad_lead.parquet", serie_ok + serie_bad_lead)
+    assert cli.main(["classify", "--parquet", str(pq1), "--data-root", str(raiz)]) == 3
+    capsys.readouterr()
+    assert not (raiz / "processed" / "bad_lead.parquet").exists()
+
+    serie_bad_dem = [
+        {
+            "sku_id": "late",
+            "timestamp": (INICIO + timedelta(days=d)).isoformat(),
+            "demand_qty": -1.0 if d == 95 else 0.0,
+            "lead_time_days": 7,
+        }
+        for d in range(100)
+    ]
+    pq2 = _parquet_1_2(tmp_path / "bad_dem.parquet", serie_ok + serie_bad_dem)
+    assert cli.main(["classify", "--parquet", str(pq2), "--data-root", str(raiz)]) == 3
+    capsys.readouterr()
+    assert not (raiz / "processed" / "bad_dem.parquet").exists()
+
+    assert not any(
+        json.loads(p.read_text()).get("status") == "accepted"
+        for p in (raiz / "ingestas").glob("*.json")
+    )
+
+
+def test_i4_publicaciones_limpias_equivalentes_no_bloquean(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I4: Publicaciones limpias equivalentes no bloquean un artefacto sin cambios."""
+    raiz = tmp_path / "data"
+    pipeline = verification_pipeline()
+    limpio = _serie("A", range(100), range(100)) + _serie("B", range(100), range(100))
+    csv = _csv(tmp_path / "panel.csv", limpio)
+    pq = _parquet_1_2(tmp_path / "panel.parquet", limpio)
+
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    capsys.readouterr()
+    pub = raiz / "processed" / "panel.parquet"
+    re1 = pipeline.ingest(PipelineInput(parquet_path=pub, data_root=raiz))
+    assert re1.exclusions == ()
+
+    assert (
+        cli.main(
+            [
+                "classify",
+                "--parquet",
+                str(pq),
+                "--data-root",
+                str(raiz),
+                "--datos-sinteticos",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    re2 = pipeline.ingest(PipelineInput(parquet_path=pub, data_root=raiz))
+    assert re2.exclusions == ()
+
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    capsys.readouterr()
+    re3 = pipeline.ingest(PipelineInput(parquet_path=pub, data_root=raiz))
+    assert re3.exclusions == ()
+
+    cod, res = _correr_cli_run(pub, raiz, "i4_run", capsys, ["--datos-sinteticos"])
+    assert cod == 0
+    assert res is not None
+
+
+def test_i5_reintento_no_sobrescribe_otra_salida_aceptada(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I5: Un reintento no sobrescribe otra salida aceptada ni un informe aceptado."""
+    raiz = tmp_path / "data"
+    limpio = _serie("A", range(100), range(100)) + _serie("B", range(100), range(100))
+    csv_a = _csv(tmp_path / "panel_a.csv", limpio)
+
+    res_a = ingest_csv_with_report(csv_a, data_root=raiz, datos_sinteticos=True)
+    assert res_a.error is None and res_a.result is not None
+    pq_a = res_a.result.parquet_path
+    bytes_a = pq_a.read_bytes()
+    informe_a_path = res_a.path
+    informe_a_texto = informe_a_path.read_text()
+
+    reintento = ingest_csv_with_report(
+        csv_a, data_root=raiz, datos_sinteticos=True, provider=_ProveedorTimeout()
+    )
+    assert reintento.error is not None
+    assert pq_a.read_bytes() == bytes_a
+    assert informe_a_path.read_text() == informe_a_texto
+
+    with pytest.raises(ValueError, match="origen"):
+        ingest_csv_with_report(csv_a, data_root=raiz, datos_sinteticos=False)
+    assert pq_a.read_bytes() == bytes_a
+    assert informe_a_path.read_text() == informe_a_texto
+
+    diferente = [dict(f, demand_qty=f["demand_qty"] + 10.0) for f in limpio]
+    csv_b = _csv(tmp_path / "panel_b.csv", diferente)
+    res_b = ingest_csv_with_report(csv_b, data_root=raiz, datos_sinteticos=True)
+    assert res_b.error is None and res_b.result is not None
+    assert pq_a.read_bytes() == bytes_a
+    assert informe_a_path.read_text() == informe_a_texto

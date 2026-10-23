@@ -238,14 +238,18 @@ def son_informes_equivalentes(a: IngestReportFile, b: IngestReportFile) -> bool:
     """Comprueba si dos informes representan publicaciones equivalentes.
 
     Dos informes son equivalentes si ambos fueron aceptados y coinciden en:
-    - Procedencia/origen (datos_sinteticos).
+    - Procedencia/origen compatible (datos_sinteticos).
     - Corte publicado (reserve).
     - Exclusiones y conteo de exclusiones (exclusions, excluded_count).
     - Huella del Parquet publicado.
     """
     if a.status != "accepted" or b.status != "accepted":
         return False
-    if a.source_file.datos_sinteticos != b.source_file.datos_sinteticos:
+    from pred_engine.comun.procedencia import resolver_origen
+
+    try:
+        resolver_origen(a.source_file.datos_sinteticos, b.source_file.datos_sinteticos)
+    except ValueError:
         return False
     if a.reserve != b.reserve:
         return False
@@ -266,15 +270,10 @@ def son_informes_equivalentes(a: IngestReportFile, b: IngestReportFile) -> bool:
     return True
 
 
-def informe_publicado(
+def informes_publicados(
     data_root: str | Path | None, parquet_path: str | Path, huella: str
-) -> IngestReportFile | None:
-    """Informe M1 aceptado que publico esos bytes en esa misma ruta.
-
-    No crea directorios. Unos bytes iguales en otra ruta no bastan: son otra
-    publicacion. Si varias ingestas publicaron la misma ruta y huella, la
-    procedencia es ambigua y se rechaza salvo que sean publicaciones equivalentes.
-    """
+) -> list[IngestReportFile]:
+    """Informes M1 aceptados que publicaron esos bytes en esa misma ruta."""
     raiz = Path(data_root) if data_root is not None else default_data_root()
     destino = Path(parquet_path).expanduser().resolve()
     ligados: dict[str, IngestReportFile] = {}
@@ -295,15 +294,44 @@ def informe_publicado(
                 break
         if coincide:
             ligados[informe.ingest_id] = informe
-    if len(ligados) > 1:
-        informes = list(ligados.values())
+    return list(ligados.values())
+
+
+def informe_publicado(
+    data_root: str | Path | None, parquet_path: str | Path, huella: str
+) -> IngestReportFile | None:
+    """Informe M1 aceptado que publico esos bytes en esa misma ruta.
+
+    No crea directorios. Unos bytes iguales en otra ruta no bastan: son otra
+    publicacion. Si varias ingestas publicaron la misma ruta y huella, la
+    procedencia es ambigua y se rechaza salvo que sean publicaciones equivalentes.
+    """
+    from pred_engine.comun.procedencia import resolver_origen
+
+    destino = Path(parquet_path).expanduser().resolve()
+    informes = informes_publicados(data_root, parquet_path, huella)
+    if len(informes) > 1:
         if all(son_informes_equivalentes(informes[0], otro) for otro in informes[1:]):
-            return min(informes, key=lambda r: r.ingest_id)
+            origen_resuelto: bool | None = None
+            for inf in informes:
+                origen_resuelto = resolver_origen(
+                    origen_resuelto, inf.source_file.datos_sinteticos
+                )
+            canonical = min(informes, key=lambda r: r.ingest_id)
+            if canonical.source_file.datos_sinteticos != origen_resuelto:
+                canonical = canonical.model_copy(
+                    update={
+                        "source_file": canonical.source_file.model_copy(
+                            update={"datos_sinteticos": origen_resuelto}
+                        )
+                    }
+                )
+            return canonical
         raise ValueError(
             f"el Parquet {destino} tiene varias procedencias M1: "
-            + ", ".join(sorted(ligados))
+            + ", ".join(sorted(r.ingest_id for r in informes))
         )
-    return next(iter(ligados.values()), None)
+    return next(iter(informes), None)
 
 
 def _relativa(ruta: Path, raiz: Path) -> str:
@@ -502,17 +530,25 @@ def write_ingest_report(report: IngestReportFile, data_root: str | Path | None) 
         except Exception:
             previa = None
         if previa is not None and previa.status == "accepted":
-            viejas = (
-                [previa.published] if previa.published is not None else []
-            ) + previa.publications
-            nuevas = (
-                [report.published] if report.published is not None else []
-            ) + report.publications
-            todas: dict[str, PublishedInfo] = {}
-            for p in viejas + nuevas:
-                if p is not None:
-                    todas[p.parquet_path] = p
-            report = report.model_copy(update={"publications": list(todas.values())})
+            if report.status != "accepted":
+                destino = destino.with_name(f"{report.ingest_id}.failed.json")
+            else:
+                destino.with_name(f"{report.ingest_id}.failed.json").unlink(
+                    missing_ok=True
+                )
+                viejas = (
+                    [previa.published] if previa.published is not None else []
+                ) + previa.publications
+                nuevas = (
+                    [report.published] if report.published is not None else []
+                ) + report.publications
+                todas: dict[str, PublishedInfo] = {}
+                for p in viejas + nuevas:
+                    if p is not None:
+                        todas[p.parquet_path] = p
+                report = report.model_copy(
+                    update={"publications": list(todas.values())}
+                )
     elif report.published is not None and not report.publications:
         report = report.model_copy(update={"publications": [report.published]})
     temporal = destino.with_name(f".{destino.name}.{os.getpid()}.part")
