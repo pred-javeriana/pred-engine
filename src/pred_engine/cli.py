@@ -294,7 +294,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--workers",
         type=int,
         default=max(1, (os.cpu_count() or 2) - 1),
-        help="Procesos para las unidades SKU x familia (por defecto, nucleos - 1)",
+        help=(
+            "Procesos para las unidades SKU x familia de L2 y L3 y los "
+            "pronosticos por SKU de L4 (por defecto, nucleos - 1)"
+        ),
     )
     run.add_argument(
         "--runs-dir",
@@ -772,6 +775,7 @@ def _cmd_run_con_base(
                 data_root=args.data_root,
                 politica=politica,
                 configuracion_m2=settings,
+                procesos=args.workers,
             ),
         )
         request = PipelineInput(

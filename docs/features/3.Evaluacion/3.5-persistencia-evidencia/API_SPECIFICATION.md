@@ -73,14 +73,16 @@ fijar_protocolo(
     conn, run_id, *, protocolo, manifiesto, procedencia,
     reserva_abierta_en, n_unidades_previstas, ejecucion_id=None,
 ) -> None
-guardar_unidad_generada(conn, run_id, unidad: UnidadPronostico) -> None
+guardar_unidades_generadas(conn, run_id, unidades: Sequence[UnidadPronostico]) -> int
 cargar_unidades(conn, run_id, candidato) -> tuple[UnidadPronostico, ...]
 cargar_serie(conn, run_id, sku, candidato_id, familia, modelo) -> SerieCandidato
 candidatos_con_fallos(conn, run_id, sku) -> frozenset[str]
 protocolo_guardado(conn, run_id) -> dict | None
 ```
 
-El protocolo, el handoff y el plan no se reemplazan. Las lecturas reconstruyen
+`guardar_unidades_generadas` confirma varias ventanas, con sus marcadores, en
+una sola transacción y devuelve cuántas eran nuevas. El protocolo, el handoff
+y el plan no se reemplazan. Las lecturas reconstruyen
 fechas, NaN para NULL y metadatos originales. Una secuencia H incompleta,
 fechas corruptas o trazabilidad incompatible se rechazan antes de reutilizar
 la unidad. Los candidatos con fallos parciales también limitan la comparación

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from pred_engine.forecasting.adaptador_candidatos import LoteRechazadoError
 from pred_engine.forecasting.base import SeasonalNaiveStub
 from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
 from pred_engine.forecasting.persistencia_evidencia import aplicar_migraciones_m3
+from pred_engine.optimizacion.optimizadores.modelos_clasicos import fabrica_sarima
 from pred_engine.optimizacion.router import (
     SelectionResult,
     SelectionRouter,
@@ -87,6 +89,68 @@ def test_m2_a_m3_publica_todas_las_ventanas_y_los_dos_skus(tmp_path):
     conn.close()
 
 
+@dataclass(frozen=True)
+class _SarimaQueAnotaProceso:
+    """Fabrica serializable: deja el pid del proceso que ajusta el modelo."""
+
+    carpeta: Path
+
+    def __call__(self, configuracion, *, seed):
+        (self.carpeta / str(os.getpid())).touch()
+        return fabrica_sarima(configuracion, seed=seed)
+
+
+def _evidencia_m3(conn):
+    """Toda la evidencia M3 salvo las horas de emision, que cambian por corrida."""
+    unidades = conn.execute("SELECT * FROM m3_unidades ORDER BY rowid")
+    columnas = [c[0] for c in unidades.description]
+    return {
+        "unidades": [
+            {k: v for k, v in zip(columnas, fila, strict=True) if k != "emitido_en"}
+            for fila in unidades.fetchall()
+        ],
+        **{
+            tabla: conn.execute(f"SELECT * FROM {tabla} ORDER BY rowid").fetchall()
+            for tabla in ("m3_pronosticos", "m3_metricas", "m3_veredictos")
+        },
+    }
+
+
+def test_l4_en_paralelo_publica_lo_mismo_que_en_un_proceso(tmp_path):
+    procesos_ajuste = tmp_path / "pids"
+    procesos_ajuste.mkdir()
+    inicial = _conexion(tmp_path / "inicial")
+    pipeline, request = _caso(tmp_path, inicial)
+    datos = pd.read_csv(request.csv_path)
+    pd.concat(
+        [datos, datos.assign(sku_id="segundo", demand_qty=datos.demand_qty + 100)]
+    ).to_csv(request.csv_path, index=False)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    inicial.close()
+    evidencias = []
+    for procesos in (1, 2):
+        conn = _conexion(tmp_path / str(procesos))
+        pipeline.validator = ControladorEvaluacion(
+            conn,
+            tmp_path / f"corrida-{procesos}",
+            run_id_m2="m2-integral",
+            codigo_version="revision-1",
+            datos_sinteticos=True,
+            data_root=tmp_path / "data",
+            fabricas={"classical": _SarimaQueAnotaProceso(procesos_ajuste)},
+            procesos=procesos,
+        )
+        resultado = pipeline.validate(evaluation)
+        assert resultado.audit_bundle["estado"] == "PUBLICADA"
+        evidencias.append(_evidencia_m3(conn))
+        conn.close()
+    assert len(evidencias[0]["unidades"]) == 24
+    assert evidencias[1] == evidencias[0]
+    pids = {int(p.name) for p in procesos_ajuste.iterdir()}
+    assert os.getpid() in pids
+    assert len(pids - {os.getpid()}) >= 1
+
+
 def test_publicada_se_relee_sin_modelos_ni_reescritura(tmp_path, monkeypatch):
     conn = _conexion(tmp_path)
     pipeline, request = _caso(tmp_path, conn)
@@ -135,8 +199,11 @@ def test_publicada_se_relee_sin_modelos_ni_reescritura(tmp_path, monkeypatch):
     conn.close()
 
 
+@pytest.mark.parametrize("procesos", [1, 2])
 @pytest.mark.parametrize("despues", [False, True])
-def test_caida_antes_y_despues_del_commit_preserva_la_unidad_durable(tmp_path, despues):
+def test_caida_antes_y_despues_del_commit_preserva_la_unidad_durable(
+    tmp_path, despues, procesos
+):
     class ConexionConCaida(sqlite3.Connection):
         armada = False
 
@@ -152,16 +219,20 @@ def test_caida_antes_y_despues_del_commit_preserva_la_unidad_durable(tmp_path, d
             super().commit()
 
     conn = _conexion(tmp_path, factory=ConexionConCaida)
-    pipeline, request = _caso(tmp_path, conn)
+    pipeline, request = _caso(tmp_path, conn, procesos=procesos)
     evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
     conn.armada = True
     with pytest.raises(KeyboardInterrupt, match="caida de proceso"):
         pipeline.validate(evaluation)
-    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == int(
-        despues
+    # Las ventanas nuevas de los candidatos de un SKU van en un solo commit: el
+    # SARIMA de proof-sku tiene 6 y quedan todas durables o ninguna.
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == (
+        6 if despues else 0
     )
     assert conn.execute("SELECT estado FROM m3_corridas").fetchone()[0] == "EN_CURSO"
-    previa = conn.execute("SELECT emitido_en FROM m3_unidades").fetchall()
+    previa = conn.execute(
+        "SELECT origen, emitido_en FROM m3_unidades ORDER BY origen"
+    ).fetchall()
     final = pipeline.validate(evaluation)
     assert final.audit_bundle["estado"] == "PUBLICADA"
     assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 12
@@ -169,9 +240,8 @@ def test_caida_antes_y_despues_del_commit_preserva_la_unidad_durable(tmp_path, d
     if despues:
         assert (
             conn.execute(
-                "SELECT emitido_en FROM m3_unidades "
-                "WHERE candidato_id = 'proof-sku/classical/sarima' "
-                "AND origen = '2024-01-28'"
+                "SELECT origen, emitido_en FROM m3_unidades "
+                "WHERE candidato_id = 'proof-sku/classical/sarima' ORDER BY origen"
             ).fetchall()
             == previa
         )

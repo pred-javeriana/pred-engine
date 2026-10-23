@@ -14,6 +14,7 @@ ControladorEvaluacion(
     politica: PoliticaSeleccion = POLITICA_INICIAL,
     configuracion_m2: Mapping[str, Any] | None = None,
     fabricas: Mapping[str, FabricaAdaptador] = FABRICAS,
+    procesos: int = 1,
 )
 ```
 
@@ -24,6 +25,16 @@ efectiva que permite resolver las rutas relativas registradas por M1; el CLI
 la pasa explícitamente. Es un colaborador obligatorio, no se infiere desde
 `directorio`. La identidad CSV original no se sustituye por la huella
 Parquet cuando la plataforma ya conoce esa ingesta.
+
+`procesos` fija cuántos procesos generan los pronósticos de los SKU (el CLI
+pasa `--workers`). Con 1 todo corre en el proceso actual. Con más de 1, cada
+SKU es una unidad del pool de `comun.ejecucion_paralela`, con `spawn` y BLAS
+de una hebra, así que las fábricas deben poder serializarse con `pickle`. El
+proceso que llama sigue siendo el único que escribe en SQLite: confirma las
+unidades nuevas de cada SKU con sus marcadores en una sola transacción, en el
+orden de los SKU. Si un SKU no puede
+pronosticarse, la etapa se detiene con su causa y los SKU anteriores quedan
+durables para la reanudación. Los resultados no dependen de `procesos`.
 
 La instancia implementa `RetrospectiveValidator`:
 
