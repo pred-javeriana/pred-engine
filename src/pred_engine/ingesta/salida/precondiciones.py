@@ -15,12 +15,15 @@ from pred_engine.ingesta.salida.validador import contar_skus
 _logger = get_logger(__name__)
 
 
-def require_positive_demand(panel: pd.DataFrame) -> None:
+def require_positive_demand(
+    panel: pd.DataFrame, corte: ReserveCut | None = None
+) -> None:
     """Exige al menos una demanda estrictamente positiva por SKU hasta t*.
 
     No muta el panel. No calcula ADI ni CV²: solo cuenta d>0 en la historia
     que usa el clasificador (sin los dias reservados, ADR-019) para no iniciar
-    la clasificacion sobre series matematicamente indefinidas.
+    la clasificacion sobre series matematicamente indefinidas. ``corte`` es el
+    de la corrida completa; sin el, se deriva del calendario de ``panel``.
     """
     if panel.empty:
         _logger.error("Handoff 1.4: panel diario vacio")
@@ -32,10 +35,11 @@ def require_positive_demand(panel: pd.DataFrame) -> None:
     if extras_canonico:
         raise HandoffPreconditionError(f"faltan columnas canonicas {extras_canonico}")
 
-    try:
-        corte = ReserveCut.of(panel)
-    except ValueError as exc:
-        raise HandoffPreconditionError(str(exc)) from exc
+    if corte is None:
+        try:
+            corte = ReserveCut.of(panel)
+        except ValueError as exc:
+            raise HandoffPreconditionError(str(exc)) from exc
     dias = pd.to_datetime(panel["timestamp"]).dt.normalize()
     admisible = panel.loc[dias <= corte.t_star]
     positivos = admisible.loc[admisible["demand_qty"] > 0.0, "sku_id"].astype("string")

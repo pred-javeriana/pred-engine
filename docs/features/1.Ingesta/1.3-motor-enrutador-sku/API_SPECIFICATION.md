@@ -88,7 +88,9 @@ Sin LLM. Lee CSV (extras ERP permitidas), valida, remuestrea, clasifica.
 
 ### `run_classify_parquet(parquet_path, *, data_root) -> (TopologyArtifact, Path)`
 
-Sin LLM. Proyecta columnas canonicas y clasifica el panel.
+Sin LLM. Proyecta columnas canonicas y clasifica el panel. No escribe informe;
+`TopologyArtifact.exclusions` lleva los SKU excluidos. La CLI usa
+`classify_parquet_with_report`, que ademas deja el informe M1.
 
 ## CLI
 

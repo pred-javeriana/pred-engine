@@ -109,6 +109,45 @@ def test_multi_sku_chronology_survives_shuffled_input(tmp_path):
     assert result.blocked_stage == "L4"
 
 
+@pytest.mark.parametrize("ceros_antes", [False, True])
+def test_producto_lanzado_despues_del_corte_se_excluye_y_la_corrida_continua(
+    tmp_path, ceros_antes
+):
+    request = request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    late = source.assign(sku_id="late")
+    if ceros_antes:
+        late.loc[:27, "demand_qty"] = 0
+    else:
+        late = late.tail(3)
+    pd.concat([source, late]).to_csv(request.csv_path, index=False)
+    pipeline = verification_pipeline()
+    result = pipeline.run(request)
+    assert result.stages[0].state == "completed"
+    assert [c.selection.sku_id for c in result.fitting.candidates] == ["proof-sku"]
+    assert result.stages[2].state == "completed"
+    summary = summarize_run(result)
+    assert summary["excluded_count"] == 1
+    assert summary["exclusions"] == [
+        {"sku_id": "late", "cause": "sin historia admisible: lanzado despues del corte"}
+    ]
+    report = json.loads(
+        next((request.data_root / "ingestas").glob("*.json")).read_text()
+    )
+    assert report["excluded_count"] == 1
+    assert report["exclusions"] == [
+        {"sku_id": "late", "cause": "lanzado despues del corte"}
+    ]
+    assert result.ingestion.panel["sku_id"].unique().tolist() == ["proof-sku"]
+    resumed = pipeline.run(
+        PipelineInput(
+            parquet_path=result.ingestion.parquet_path, data_root=request.data_root
+        )
+    )
+    assert summarize_run(resumed)["exclusions"] == summary["exclusions"]
+    assert summarize_run(resumed)["excluded_count"] == 1
+
+
 def test_existing_parquet_can_enter_without_repeating_csv_ingestion(tmp_path):
     pipeline = verification_pipeline()
     original = pipeline.run(request_at(tmp_path))
@@ -220,7 +259,8 @@ def _panel_with_admissible_days(pipeline, root, days):
             "sku_class": ingestion.panel["sku_class"].iloc[0],
         }
     )[list(ingestion.panel.columns)]
-    return replace(ingestion, panel=panel)
+    # Panel sintetico: su corte sale de su propio calendario, no del informe M1.
+    return replace(ingestion, panel=panel, reserve=None)
 
 
 def test_l2_excludes_history_below_the_hpo_minimum_windows(tmp_path):

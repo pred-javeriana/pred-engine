@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos import (
     CANONICAL_FIELDS,
@@ -37,19 +38,29 @@ class TopologyArtifact:
 
     frame: pd.DataFrame
     metrics: tuple[TopologyMetrics, ...]
+    exclusions: tuple[SkuExclusion, ...] = ()
+    # Corte con el que se clasifico: el de la corrida completa, antes de excluir.
+    reserve: ReserveCut | None = None
 
 
-def classify_panel(frame: pd.DataFrame) -> TopologyArtifact:
-    """Clasifica cada SKU con su historia hasta t* y rellena sku_class por broadcast."""
+def classify_panel(
+    frame: pd.DataFrame, corte: ReserveCut | None = None
+) -> TopologyArtifact:
+    """Clasifica cada SKU con su historia hasta t* y rellena sku_class por broadcast.
+
+    ``corte`` es el de la corrida completa cuando la ingesta excluyo SKU; sin
+    el, se deriva del calendario de ``frame``.
+    """
     if frame.empty:
         raise TopologyContractError("no hay filas para clasificar")
     faltan = [c for c in CANONICAL_FIELDS if c not in frame.columns]
     if faltan:
         raise TopologyContractError(f"faltan columnas {faltan}")
-    try:
-        corte = ReserveCut.of(frame)
-    except ValueError as exc:
-        raise TopologyContractError(str(exc)) from exc
+    if corte is None:
+        try:
+            corte = ReserveCut.of(frame)
+        except ValueError as exc:
+            raise TopologyContractError(str(exc)) from exc
     dias = pd.to_datetime(frame["timestamp"]).dt.normalize()
     admisible = frame.loc[dias <= corte.t_star]
     _logger.info(
@@ -115,9 +126,12 @@ def classify_panel(frame: pd.DataFrame) -> TopologyArtifact:
     return TopologyArtifact(
         frame=panel.loc[:, list(PANEL_FIELDS)],
         metrics=tuple(metricas),
+        reserve=corte,
     )
 
 
-def classify_daily_panel(frame: pd.DataFrame) -> TopologyArtifact:
+def classify_daily_panel(
+    frame: pd.DataFrame, corte: ReserveCut | None = None
+) -> TopologyArtifact:
     """Alias del contrato Notion 1.4: delega al clasificador real de 1.3."""
-    return classify_panel(frame)
+    return classify_panel(frame, corte)

@@ -12,10 +12,12 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
+import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm.errores import LlmError, LlmProviderError, LlmTimeoutError
 from pred_engine.comun.llm.protocolo import LlmProvider
 from pred_engine.comun.modelos import (
@@ -38,6 +40,7 @@ from pred_engine.ingesta.data import (
     OnConflict,
     RawConflictError,
     RawWritePermissionError,
+    default_data_root,
     deposit_raw,
     ensure_data_layout,
 )
@@ -46,6 +49,7 @@ from pred_engine.ingesta.pipeline import (
     CsvIngestResult,
     IngestResult,
     ingest_canonical_csv,
+    run_classify_parquet,
     run_ingest,
 )
 from pred_engine.ingesta.salida.errores import (
@@ -127,6 +131,33 @@ class ReserveInfo(_Modelo):
     reserved_days: int = Field(ge=1)
     fraction: float
 
+    @classmethod
+    def of(cls, corte: ReserveCut) -> ReserveInfo:
+        return cls(
+            t_star=corte.t_star.date().isoformat(),
+            first_reserved=corte.first_reserved.date().isoformat(),
+            last_observed=corte.last_observed.date().isoformat(),
+            reserved_days=corte.reserved_days,
+            fraction=corte.fraction,
+        )
+
+    def cut(self) -> ReserveCut:
+        """Corte publicado por M1, validado al releer el informe."""
+        corte = ReserveCut(
+            t_star=cast(pd.Timestamp, pd.Timestamp(self.t_star)),
+            first_reserved=cast(pd.Timestamp, pd.Timestamp(self.first_reserved)),
+            last_observed=cast(pd.Timestamp, pd.Timestamp(self.last_observed)),
+            reserved_days=self.reserved_days,
+            fraction=self.fraction,
+        )
+        if (
+            ReserveInfo.of(corte) != self
+            or corte.first_reserved != corte.t_star + pd.Timedelta(days=1)
+            or corte.reserved_dates[-1] != corte.last_observed
+        ):
+            raise ValueError("el corte del informe M1 no es coherente")
+        return corte
+
 
 class ThresholdsInfo(_Modelo):
     adi: float
@@ -154,6 +185,9 @@ class IngestReportFile(_Modelo):
     error: ErrorDetail | None = None
     reserve: ReserveInfo | None = None
     topology: TopologyInfo | None = None
+    exclusions: list[SkuExclusion] = Field(default_factory=list)
+    excluded_count: int = Field(default=0, ge=0)
+    publications: list[PublishedInfo] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +234,106 @@ def report_path(data_root: str | Path | None, sha256: str) -> Path:
     return ensure_data_layout(data_root).ingestas / f"{sha256}.json"
 
 
+def son_informes_equivalentes(a: IngestReportFile, b: IngestReportFile) -> bool:
+    """Comprueba si dos informes representan publicaciones equivalentes.
+
+    Dos informes son equivalentes si ambos fueron aceptados y coinciden en:
+    - Procedencia/origen compatible (datos_sinteticos).
+    - Corte publicado (reserve).
+    - Exclusiones y conteo de exclusiones (exclusions, excluded_count).
+    - Huella del Parquet publicado.
+    """
+    if a.status != "accepted" or b.status != "accepted":
+        return False
+    from pred_engine.comun.procedencia import resolver_origen
+
+    try:
+        resolver_origen(a.source_file.datos_sinteticos, b.source_file.datos_sinteticos)
+    except ValueError:
+        return False
+    if a.reserve != b.reserve:
+        return False
+    if a.exclusions != b.exclusions or a.excluded_count != b.excluded_count:
+        return False
+    pubs_a = {
+        p.sha256
+        for p in ([a.published] if a.published is not None else []) + a.publications
+        if p is not None and p.sha256 is not None
+    }
+    pubs_b = {
+        p.sha256
+        for p in ([b.published] if b.published is not None else []) + b.publications
+        if p is not None and p.sha256 is not None
+    }
+    if not (pubs_a & pubs_b):
+        return False
+    return True
+
+
+def informes_publicados(
+    data_root: str | Path | None, parquet_path: str | Path, huella: str
+) -> list[IngestReportFile]:
+    """Informes M1 aceptados que publicaron esos bytes en esa misma ruta."""
+    raiz = Path(data_root) if data_root is not None else default_data_root()
+    destino = Path(parquet_path).expanduser().resolve()
+    ligados: dict[str, IngestReportFile] = {}
+    for ruta in (raiz / REPORTS_DIR).glob("[0-9a-f]" * 64 + ".json"):
+        informe = IngestReportFile.model_validate_json(ruta.read_text())
+        if informe.status != "accepted":
+            continue
+        publicaciones = (
+            [informe.published] if informe.published is not None else []
+        ) + informe.publications
+        coincide = False
+        for publicado in publicaciones:
+            if publicado is None or publicado.sha256 != huella:
+                continue
+            origen = Path(publicado.parquet_path)
+            if (origen if origen.is_absolute() else raiz / origen).resolve() == destino:
+                coincide = True
+                break
+        if coincide:
+            ligados[informe.ingest_id] = informe
+    return list(ligados.values())
+
+
+def informe_publicado(
+    data_root: str | Path | None, parquet_path: str | Path, huella: str
+) -> IngestReportFile | None:
+    """Informe M1 aceptado que publico esos bytes en esa misma ruta.
+
+    No crea directorios. Unos bytes iguales en otra ruta no bastan: son otra
+    publicacion. Si varias ingestas publicaron la misma ruta y huella, la
+    procedencia es ambigua y se rechaza salvo que sean publicaciones equivalentes.
+    """
+    from pred_engine.comun.procedencia import resolver_origen
+
+    destino = Path(parquet_path).expanduser().resolve()
+    informes = informes_publicados(data_root, parquet_path, huella)
+    if len(informes) > 1:
+        if all(son_informes_equivalentes(informes[0], otro) for otro in informes[1:]):
+            origen_resuelto: bool | None = None
+            for inf in informes:
+                origen_resuelto = resolver_origen(
+                    origen_resuelto, inf.source_file.datos_sinteticos
+                )
+            canonical = min(informes, key=lambda r: r.ingest_id)
+            if canonical.source_file.datos_sinteticos != origen_resuelto:
+                canonical = canonical.model_copy(
+                    update={
+                        "source_file": canonical.source_file.model_copy(
+                            update={"datos_sinteticos": origen_resuelto}
+                        )
+                    }
+                )
+            return canonical
+        raise ValueError(
+            f"el Parquet {destino} tiene varias procedencias M1: "
+            + ", ".join(sorted(r.ingest_id for r in informes))
+        )
+    return next(iter(informes), None)
+
+
 def _relativa(ruta: Path, raiz: Path) -> str:
     try:
         return ruta.resolve().relative_to(raiz.resolve()).as_posix()
@@ -222,13 +356,9 @@ def _deposito_info(deposito: DepositResult, raiz: Path) -> DepositInfo:
 
 
 def _topologia(artefacto: TopologyArtifact) -> tuple[ReserveInfo, TopologyInfo]:
-    corte = ReserveCut.of(artefacto.frame)
-    reserva = ReserveInfo(
-        t_star=corte.t_star.date().isoformat(),
-        first_reserved=corte.first_reserved.date().isoformat(),
-        last_observed=corte.last_observed.date().isoformat(),
-        reserved_days=corte.reserved_days,
-        fraction=corte.fraction,
+    corte = artefacto.reserve
+    reserva = ReserveInfo.of(
+        corte if corte is not None else ReserveCut.of(artefacto.frame)
     )
     topologia = TopologyInfo(
         thresholds=ThresholdsInfo(adi=ADI_THRESHOLD, cv2=CV2_THRESHOLD),
@@ -249,40 +379,41 @@ def _cabecera(diagnostico: HeaderDiagnostic | None) -> HeaderInfo | None:
 
 def _informe_aceptado(
     fuente: SourceFileInfo,
-    deposito: DepositResult,
-    resultado: CsvIngestResult | IngestResult,
+    deposito: DepositResult | None,
+    topologia: TopologyArtifact,
+    parquet: Path,
     raiz: Path,
+    *,
+    validadas: int,
+    cabecera: HeaderInfo | None = None,
 ) -> IngestReportFile:
-    topologia = resultado.topology
     reserva, info = _topologia(topologia)
-    if isinstance(resultado, IngestResult):
-        cabecera = _cabecera(resultado.diagnostic.diagnostic)
-        validadas = len(resultado.validated)
-    else:
-        cabecera = None
-        validadas = resultado.validated_rows
     n_skus = len(topologia.metrics)
+    publicado = PublishedInfo(
+        sha256=hash_sha256_archivo(parquet),
+        parquet_path=_relativa(parquet, raiz),
+        rows=len(topologia.frame),
+        n_skus=n_skus,
+        columns=[str(c) for c in topologia.frame.columns],
+    )
     return IngestReportFile(
         written_at=_ahora(),
         ingest_id=fuente.sha256,
         status="accepted",
         source_file=fuente,
-        deposit=_deposito_info(deposito, raiz),
+        deposit=None if deposito is None else _deposito_info(deposito, raiz),
         header_diagnostic=cabecera,
         validation=ValidationInfo(
             rows_validated=validadas,
             rows_daily_panel=len(topologia.frame),
             n_skus=n_skus,
         ),
-        published=PublishedInfo(
-            sha256=hash_sha256_archivo(resultado.parquet_path),
-            parquet_path=_relativa(resultado.parquet_path, raiz),
-            rows=len(topologia.frame),
-            n_skus=n_skus,
-            columns=[str(c) for c in topologia.frame.columns],
-        ),
+        published=publicado,
         reserve=reserva,
         topology=info,
+        exclusions=list(topologia.exclusions),
+        excluded_count=len(topologia.exclusions),
+        publications=[publicado],
     )
 
 
@@ -393,6 +524,33 @@ def write_ingest_report(report: IngestReportFile, data_root: str | Path | None) 
             }
         )
     destino = report_path(data_root, report.ingest_id)
+    if destino.exists():
+        try:
+            previa = IngestReportFile.model_validate_json(destino.read_text())
+        except Exception:
+            previa = None
+        if previa is not None and previa.status == "accepted":
+            if report.status != "accepted":
+                destino = destino.with_name(f"{report.ingest_id}.failed.json")
+            else:
+                destino.with_name(f"{report.ingest_id}.failed.json").unlink(
+                    missing_ok=True
+                )
+                viejas = (
+                    [previa.published] if previa.published is not None else []
+                ) + previa.publications
+                nuevas = (
+                    [report.published] if report.published is not None else []
+                ) + report.publications
+                todas: dict[str, PublishedInfo] = {}
+                for p in viejas + nuevas:
+                    if p is not None:
+                        todas[p.parquet_path] = p
+                report = report.model_copy(
+                    update={"publications": list(todas.values())}
+                )
+    elif report.published is not None and not report.publications:
+        report = report.model_copy(update={"publications": [report.published]})
     temporal = destino.with_name(f".{destino.name}.{os.getpid()}.part")
     try:
         temporal.write_text(
@@ -439,20 +597,59 @@ def ingest_csv_with_report(
         deposito = deposit_raw(origen, data_root=layout.root, on_conflict=on_conflict)
         # Ya esta en raw/: las rutas de ingesta lo reconocen sin copiarlo de nuevo.
         if provider is None:
-            resultado = ingest_canonical_csv(deposito.path, data_root=layout.root)
+            resultado = ingest_canonical_csv(
+                deposito.path,
+                data_root=layout.root,
+                datos_sinteticos=datos_sinteticos,
+                deposito=deposito,
+            )
         else:
             resultado = run_ingest(
-                deposito.path, provider, data_root=layout.root, timeout=timeout
+                deposito.path,
+                provider,
+                data_root=layout.root,
+                timeout=timeout,
+                datos_sinteticos=datos_sinteticos,
+                deposito=deposito,
             )
     except Exception as exc:  # noqa: BLE001 - se registra en el informe y se devuelve
         error = exc
 
-    if error is None and resultado is not None and deposito is not None:
-        informe = _informe_aceptado(fuente, deposito, resultado, layout.root)
+    if resultado is not None:
+        ruta = report_path(layout.root, sha256)
+        informe = IngestReportFile.model_validate_json(ruta.read_text())
     elif isinstance(error, RawConflictError):
         informe = _informe_conflicto(fuente, error, layout.root)
+        ruta = write_ingest_report(informe, layout.root)
     else:
         assert error is not None
         informe = _informe_fallido(fuente, deposito, error, layout.root)
-    ruta = write_ingest_report(informe, layout.root)
+        ruta = write_ingest_report(informe, layout.root)
     return ReportedIngest(report=informe, path=ruta, result=resultado, error=error)
+
+
+def classify_parquet_with_report(
+    parquet_path: str | Path,
+    *,
+    data_root: str | Path | None = None,
+    datos_sinteticos: bool | None = None,
+) -> tuple[TopologyArtifact, Path, Path]:
+    """``run_classify_parquet`` que deja su informe M1 junto al Parquet publicado.
+
+    El informe usa el mismo esquema que la ruta CSV, sin deposito en raw/, y
+    lleva las exclusiones para que ``run --parquet`` las recupere. Los errores
+    se propagan sin informe, como en ``run_classify_parquet``. Devuelve la
+    topologia, el Parquet publicado y la ruta del informe.
+    """
+    layout = ensure_data_layout(data_root)
+    origen = Path(parquet_path).expanduser().resolve()
+    if not origen.is_file():
+        raise FileNotFoundError(origen)
+    sha256 = hash_sha256_archivo(origen)
+    # Validar origen ANTES de run_classify_parquet (S4)
+    origen_resuelto = origen_informe(layout.root, sha256, datos_sinteticos)
+    topologia, destino = run_classify_parquet(
+        origen, data_root=layout.root, datos_sinteticos=origen_resuelto
+    )
+    ruta = report_path(layout.root, sha256)
+    return topologia, destino, ruta
