@@ -214,12 +214,8 @@ def _verificar_contenido(
     informe = report_path(data_root, sha)
     if informe.exists():
         report = IngestReportFile.model_validate_json(informe.read_text())
-        publicaciones = (
-            [report.published] if report.published is not None else []
-        ) + report.publications
-        for p in publicaciones:
-            if p is not None and p.sha256 is not None:
-                huellas.add(p.sha256)
+        if report.published is not None and report.published.sha256 is not None:
+            huellas.add(report.published.sha256)
     if huellas and ingesta_ref_m1 not in huellas:
         raise ValueError(
             f"el Parquet registrado en {ruta} cambio de contenido: la procedencia "

@@ -512,9 +512,7 @@ def write_ingest_report(report: IngestReportFile, data_root: str | Path | None) 
             for p in viejas + nuevas:
                 if p is not None:
                     todas[p.parquet_path] = p
-            report = report.model_copy(
-                update={"publications": list(todas.values())}
-            )
+            report = report.model_copy(update={"publications": list(todas.values())})
     elif report.published is not None and not report.publications:
         report = report.model_copy(update={"publications": [report.published]})
     temporal = destino.with_name(f".{destino.name}.{os.getpid()}.part")

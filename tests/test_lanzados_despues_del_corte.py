@@ -355,9 +355,7 @@ def test_fuente_renombrada_conserva_corte_y_exclusiones(
     origen_a = _csv(tmp_path / "primero.csv", INICIO_DEL_CALENDARIO)
     origen_b = _csv(tmp_path / "segundo.csv", INICIO_DEL_CALENDARIO)
 
-    assert (
-        cli.main(["classify", "--csv", str(origen_a), "--data-root", str(raiz)]) == 0
-    )
+    assert cli.main(["classify", "--csv", str(origen_a), "--data-root", str(raiz)]) == 0
     salida_a = capsys.readouterr().out
     assert "excluded_count: 1" in salida_a
     informe_a = _informe(salida_a)
@@ -373,9 +371,7 @@ def test_fuente_renombrada_conserva_corte_y_exclusiones(
     assert len(ajuste_antes.candidates[0].series) == 75
     assert len(ajuste_antes.candidates[0].series) != 80
 
-    assert (
-        cli.main(["classify", "--csv", str(origen_b), "--data-root", str(raiz)]) == 0
-    )
+    assert cli.main(["classify", "--csv", str(origen_b), "--data-root", str(raiz)]) == 0
     capsys.readouterr()
 
     reingreso_despues = pipeline.ingest(
@@ -416,9 +412,7 @@ def test_publicadores_publicos_persisten_corte_y_exclusiones_durables(
     elif publicador == "run_classify_parquet":
         _, salida_pq = ip.run_classify_parquet(pq_origen, data_root=raiz)
     else:
-        resultado_ingest = ip.run_ingest(
-            csv, _ProveedorAceptado(), data_root=raiz
-        )
+        resultado_ingest = ip.run_ingest(csv, _ProveedorAceptado(), data_root=raiz)
         salida_pq = resultado_ingest.parquet_path
 
     reingreso = pipeline.ingest(PipelineInput(parquet_path=salida_pq, data_root=raiz))
