@@ -126,29 +126,69 @@ def test_reintento_reparado_conserva_la_publicacion_con_fallo_tecnico(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pred_engine import pipeline_setup
+    import pyarrow as pa
+    import pyarrow.parquet as pq
 
-    construir = pipeline_setup.build_pipeline
+    from pred_engine.optimizacion.router import SelectionRouter
+
+    identidad = [
+        ("sku_id", pa.large_string()),
+        ("sku_class", pa.large_string()),
+        ("familia", pa.large_string()),
+        ("modelo", pa.large_string()),
+    ]
+    esquemas = {
+        "pronosticos": pa.schema(
+            [
+                *identidad,
+                ("timestamp", pa.timestamp("ns")),
+                ("pronostico", pa.float64()),
+            ]
+        ),
+        "evaluacion": pa.schema(
+            [
+                *identidad,
+                ("metrica", pa.large_string()),
+                ("valor_agregado", pa.float64()),
+                ("n_ventanas", pa.int64()),
+                ("mae_media", pa.float64()),
+                ("rmse_media", pa.float64()),
+                ("smape_media", pa.float64()),
+                ("mase_media", pa.float64()),
+            ]
+        ),
+        "walk_forward": pa.schema(
+            [
+                ("sku_id", pa.large_string()),
+                ("familia", pa.large_string()),
+                ("ventana", pa.int64()),
+                ("timestamp", pa.timestamp("ns")),
+                ("real", pa.float64()),
+                ("pronostico", pa.float64()),
+            ]
+        ),
+    }
+
+    def leer_exportaciones(reporte: dict[str, Any]) -> list[int]:
+        filas = []
+        for nombre, esquema in esquemas.items():
+            tabla = pq.read_table(
+                Path(reporte["run_dir"]) / f"{nombre}.parquet",
+                columns=esquema.names,
+            )
+            assert tabla.schema.equals(esquema)
+            filas.append(tabla.num_rows)
+        return filas
+
+    ejecutar = SelectionRouter.execute
     averia = {"activa": True}
 
-    class RouterConAveriaTransitoria:
-        def __init__(self, router: Any) -> None:
-            self.router = router
+    def con_averia(router: SelectionRouter, request: Any, decision: Any) -> Any:
+        if averia["activa"]:
+            raise RuntimeError("fallo transitorio de L2")
+        return ejecutar(router, request, decision)
 
-        def plan(self, request: Any) -> Any:
-            return self.router.plan(request)
-
-        def execute(self, request: Any, decision: Any) -> Any:
-            if averia["activa"]:
-                raise RuntimeError("fallo transitorio de L2")
-            return self.router.execute(request, decision)
-
-    def con_averia(*args: Any, **kwargs: Any) -> Any:
-        pipeline = construir(*args, **kwargs)
-        pipeline.router = RouterConAveriaTransitoria(pipeline.router)
-        return pipeline
-
-    monkeypatch.setattr("pred_engine.pipeline_setup.build_pipeline", con_averia)
+    monkeypatch.setattr(SelectionRouter, "execute", con_averia)
     crear_base_plataforma(tmp_path / "data" / "pred.db")
     args = [
         "run", "--csv", str(_csv(tmp_path)), "--data-root", str(tmp_path / "data"),
@@ -162,6 +202,8 @@ def test_reintento_reparado_conserva_la_publicacion_con_fallo_tecnico(
     codigo, fallida = correr()
     assert codigo == 8
     assert {f["sku_id"] for f in fallida["failures"]} == {"sku-a", "sku-b"}
+    assert fallida["m3"]["estado"] == "PUBLICADA"
+    assert leer_exportaciones(fallida) == [0, 0, 0]
 
     # La causa se reparo, pero el mismo run_id reusa la publicacion congelada.
     averia["activa"] = False
@@ -183,3 +225,4 @@ def test_reintento_reparado_conserva_la_publicacion_con_fallo_tecnico(
     assert codigo == 0
     assert nueva["failures"] == []
     assert nueva["m3"]["run_id_m3"] != fallida["m3"]["run_id_m3"]
+    assert leer_exportaciones(nueva) == [48, 2, 16]
