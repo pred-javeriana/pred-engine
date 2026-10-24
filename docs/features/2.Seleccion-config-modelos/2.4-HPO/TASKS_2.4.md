@@ -1,7 +1,7 @@
 # Tareas 2.4 — HPO (TPE Sampler + ASHA Resource Allocator)
 
 Fuente: Notion, pagina "2.4 HPO" (hija de "2. Seleccion de configuracion y
-modelo"), 9 tareas unicas asignadas a Tomas Ramirez Roa (`TASK-HPO-4.0-*`,
+modelo"), 9 tareas unicas asignadas al Scrum Master del equipo (`TASK-HPO-4.0-*`,
 `TASK-HPO-5.0-*`), todas `P1-Important`, estado `Backlog` al momento de
 escribir esto.
 
@@ -172,8 +172,8 @@ alcance redefinido (no "Completada" en el sentido literal original, sino
 
 **Estado: satisfecho por codigo preexistente + tests adicionales de esta sesion.**
 
-- [x] Regla de >= 4 ventanas antes de podar (`ReglasPoda.min_ventanas`,
-  probado en `test_asha.py`).
+- [x] Regla de >= 4 ventanas antes de la poda por escalon (ASHA)
+  (`ReglasPoda.min_ventanas`, probado en `test_asha.py`).
 - [x] Metrica robusta a outliers (`agregacion="media_recortada"` por
   defecto).
 - [x] Poda semantica detecta modelos degenerados (`es_degenerada`).

@@ -4,11 +4,12 @@
 **PRED** platform (Plataforma de Evaluación y Recomendación de modelos de
 Demanda). It provides L1 ingestion and series characterisation, L2 model
 selection and fitting behind a uniform `BaseForecaster` contract, and causal
-L3 walk-forward evaluation. L3 statistical comparison and L4 retrospective
-validation (hold/partial/fail verdicts and audit bundles) are not implemented.
-The library has no UI or database; ingestion publishes Parquet under a
-caller-owned data root. Typed artifacts, NumPy arrays and pandas DataFrames
-can be consumed by applications without terminal automation.
+L3 walk-forward evaluation. Native L4 runs M3's reserved-window forecasts,
+category selection, five descriptive verdicts and complementary HLN-DM/BH.
+The library has no UI. M3 writes through an injected connection to the single
+platform SQLite database and publishes derived Parquet/CSV. Ingestion retains
+a caller-owned data root. Typed artifacts, NumPy arrays and pandas DataFrames
+remain usable without terminal automation.
 
 PRED is an academic software project developed at Pontificia Universidad
 Javeriana under a software-engineering capstone course. It targets a
@@ -21,7 +22,7 @@ MIT licence to allow institutional publication.
 
 ```bash
 # Requires uv — https://docs.astral.sh/uv/
-uv sync --extra dev
+uv sync --frozen --extra dev
 ```
 
 ## Running tests
@@ -31,6 +32,41 @@ uv run pytest                  # runs the suite with an 80% coverage gate
 uv run pytest -m "not slow"    # fast suite with coverage gate (CI mode)
 uv run pytest -m slow --no-cov # slow tests (benchmarks / model fitting)
 ```
+
+### Equipos con pocos núcleos (4 núcleos, 8 GB)
+
+La sesión de pruebas ya limita la CPU: `tests/conftest.py` fija una hebra de
+BLAS/OpenMP por proceso, y las pruebas que corren la CLI pasan `--workers 1` o
+`2`. Medido con 4 núcleos visibles, `pytest -m "not slow"` usa como máximo
+unos 2 núcleos y `pytest -m slow` unos 2. Para no saturar el equipo:
+
+1. Corra un solo `pytest` a la vez.
+2. Mientras desarrolla, corra solo las pruebas del área que cambió, sin
+   cobertura. `tests/` replica la estructura de `src/pred_engine/`:
+
+   ```bash
+   uv run pytest -m "not slow" --no-cov tests/optimizacion/HPO
+   ```
+
+3. Antes de abrir el PR, corra la corrida de humo de CI (8 SKU, unos 35 s y
+   menos de 3 núcleos). Necesita una copia de `pred-platform` para crear la
+   base central:
+
+   ```bash
+   PYTHONPATH=../pred-platform/src uv run --no-sync python -m pred_platform.dal.migrate \
+     --db local_data/humo/pred.db
+   uv run pred-engine run --seed-csv tests/fixtures/semilla_inventario.csv \
+     --data-root local_data/humo --db-path local_data/humo/pred.db --run-id "humo-$(date +%Y%m%d-%H%M%S)" --workers 2 \
+     --m0-metodo mbb-directo --m0-n-series 1 --m0-minimo-filas 0 \
+     --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
+     --m0-columna demand_qty=Avg_Usage_Per_Day --m0-columna lead_time_days=Restock_Lead_Time
+   ```
+
+   El código de salida esperado es `0` u `8`. Use un `--run-id` nuevo en cada corrida: el motor rechaza un `run_id` ya usado si el código o la configuración cambiaron, y termina con código 1 sin ajustar modelos. Pase siempre `--workers 2` en un
+   equipo pequeño: el valor por defecto (núcleos - 1) ocupa todos los núcleos.
+
+CI corre las suites completas en cada PR, así que no hace falta repetirlas
+localmente.
 
 ## Linting, formatting and type checking
 
@@ -56,14 +92,24 @@ core classical, ML and DL families using the existing topology matrix;
 foundation is opt-in and requires the `foundation` extra.
 
 ```python
+from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
+from pred_engine.forecasting.persistencia_evidencia import abrir_base_plataforma
 from pred_engine.pipeline import EvaluationSettings, PipelineInput
 from pred_engine.pipeline_setup import build_pipeline
+from pred_engine.run_artifacts import code_fingerprint
 
-pipeline = build_pipeline(EvaluationSettings(min_train=40), n_trials=4)
-result = pipeline.run(PipelineInput(csv_path="sales.csv", data_root="data"))
-assert result.blocked_stage == "L4"
-assert not result.complete
-# Actual L1, L2 and walk-forward L3 artifacts are available on result.
+# The platform creates this database first with its migration command.
+with abrir_base_plataforma("data/pred.db") as conn:
+    validator = ControladorEvaluacion(
+        conn, "data/runs/sales", run_id_m2="sales",
+        codigo_version=code_fingerprint(), datos_sinteticos=False, data_root="data",
+    )
+    pipeline = build_pipeline(
+        EvaluationSettings(min_train=40), n_trials=4, validator=validator,
+    )
+    result = pipeline.run(PipelineInput(csv_path="sales.csv", data_root="data", datos_sinteticos=False))
+    assert result.complete
+    assert result.validation.audit_bundle["estado"] == "PUBLICADA"
 ```
 
 Canonical CSV inputs need no LLM. Pass an injectable `provider` for the existing
@@ -75,25 +121,31 @@ retrospective verdict.
 
 ```bash
 uv run python -m pred_engine.verify
-uv run pred-engine run --csv sales.csv --data-root data --trials 4
+uv run pred-engine run --csv sales.csv --data-root data --db-path data/pred.db --trials 4
 ```
 
-The offline proof uses real, bounded SARIMA selection and evaluation. Its exit
-`0` means the integration checks passed, while its report explicitly says
-`complete: false` and `blocked_stage: L4`. The diagnostic `run` command instead
-returns `7` for this unfinished-stage blocker (`1` on stage failure). Existing
-`pred-engine verify --parquet ...` still verifies only the L1 output contract.
+The bounded offline proof exercises L1-L3 without requiring a platform database.
+Its report keeps L4 unconfigured rather than inventing a validation result.
+The real `run` command requires the existing platform database and configures
+native M3. It returns `0` after publication, `8` with isolated technical failures,
+or `1` on a stage or database error. It applies pending M3 migrations itself,
+but never creates a separate database. `PRED_DB_PATH` selects the platform path
+when `--db-path` is absent. Mark augmented inputs with `--datos-sinteticos`;
+`--seed-csv` does so automatically. Existing `verify --parquet` remains an L1
+contract check.
 
 See [backend pipeline API and boundaries](docs/features/backend-pipeline/README.md)
-for independent stage execution, errors and the future L4 attachment point.
+for independent stages and errors. See [M3](docs/features/3.Evaluacion/README.md)
+for the reserve protocol, migrations, recovery, statistical limits and delivery to M4.
 
-### Corrida M0 → M1 → M2 desde la semilla
+### Corrida M0 -> M1 -> M2 -> M3 desde la semilla
 
 Un solo comando genera el panel sintético de la Fase 0, lo ingiere y clasifica
-(L1) y ejecuta la selección y el pronóstico de M2 (L2-L3) en paralelo:
+(L1), ejecuta M2 en paralelo y publica la evaluación reservada M3 en la base
+central existente de plataforma:
 
 ```bash
-uv run pred-engine run --seed-csv inventory_data.csv --data-root data \
+uv run pred-engine run --seed-csv inventory_data.csv --data-root data --db-path data/pred.db \
   --m0-metodo mbb-directo \
   --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
   --m0-columna demand_qty=Avg_Usage_Per_Day \
@@ -107,8 +159,9 @@ queda en `data/runs/{run_id}/` con el manifiesto tipado de candidatos para M3
 (`candidatos.json`), los pronósticos desde t*, la evidencia walk-forward, la
 traza de cada unidad con su modelo y el uso de CPU y memoria de cada proceso;
 `pred-engine telemetry data/runs/{run_id}` los grafica. Repetir el comando
-retoma los estudios HPO terminados sin reentrenar. El código de salida es `7`
-(L4 ausente) u `8` (L4 ausente con unidades fallidas aisladas). Ver
+retoma los estudios HPO y los orígenes M3 ya confirmados. Los resultados M3
+quedan en SQLite y en exportaciones derivadas. El código de salida es `0` o
+`8` cuando la publicación tiene fallos aislados. Ver
 [EJECUCION_M0_M2.md](docs/features/backend-pipeline/EJECUCION_M0_M2.md).
 
 ## L1 ingestion (raw storage)
@@ -170,6 +223,13 @@ for ensayo in leer_ensayos("data/runs/r-.../hpo/classical-FIL-0001-r-..."):
     print(ensayo.estado, ensayo.valor, ensayo.motivo)
 ```
 
+When no HPO trial completes, the L2 error includes cause counts and the recorded reasons in
+`unidades.jsonl`, `corrida.json` and `seleccion.jsonl` (when L2 has surviving candidates).
+Invalid draws name the first violated constraint. Fit failures retain the exception and window.
+Counts separate `configuracion_invalida`, `ajuste_fallido`, `poda_semantica` and `escalon`,
+without replacing the total failed and pruned counts or changing the search budget.
+A rejected final forecast also records the winning configuration.
+
 The foundation family has no study: it is not optimised, so it has neither trials nor counters.
 
 ```python
@@ -188,7 +248,7 @@ export_parquet(
 ```
 
 Structured JSON logs (timestamp, level, module, file hash, row count) go to
-stdout. See `docs/features/ingesta-almacenamiento-crudo/` for the API and
+stdout. See `docs/features/1.Ingesta/1.1-ingesta-almacenamiento-crudo/` for the API and
 session notes.
 
 ## L1.2 semantic alignment
@@ -213,7 +273,7 @@ uv run pred-engine ingest \
 The API key is read from `--api-key` or `PRED_LLM_API_KEY` / `GEMINI_API_KEY`
 (and equivalents for OpenAI and Anthropic). If the probe cannot map `sku_id`,
 `timestamp`, `demand_qty` and `lead_time_days` with confidence, ingestion stops.
-See `docs/features/1.2-alineacion-semantica-validacion/`.
+See `docs/features/1.Ingesta/1.2-alineacion-semantica-validacion/`.
 
 ## L1.3 SKU topology (Syntetos-Boylan)
 
@@ -227,7 +287,7 @@ Thresholds are 1.32 and 0.49. Original demand columns are not rewritten.
 uv run pred-engine classify --csv inventory_data.csv --data-root data
 ```
 
-No LLM key is required. See `docs/features/1.3-motor-enrutador-sku/`.
+No LLM key is required. See `docs/features/1.Ingesta/1.3-motor-enrutador-sku/`.
 
 ## L1.4 output contract (Parquet handoff)
 
@@ -241,7 +301,7 @@ uv run pred-engine classify --csv local_data/inventory_data.csv --data-root data
 uv run pred-engine verify --parquet data/processed/inventory_data.parquet
 ```
 
-See `docs/features/1.4-artefacto-salida/`.
+See `docs/features/1.Ingesta/1.4-artefacto-salida/`.
 
 ## Module 2 deep-learning selection
 

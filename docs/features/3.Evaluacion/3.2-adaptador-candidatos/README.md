@@ -134,9 +134,9 @@ uv run pyright
 
 ## Fuera de alcance y pendientes
 
-- Ajustar y pronosticar en cada ventana de la reserva (3.3, Derek) y orquestar
-  M3 (3.0, Derek).
-- Persistir el handoff y sus fallos (3.5).
+- El ajuste y los pronosticos se ejecutan en 3.3. La coordinacion 3.0 valida
+  este handoff antes de abrir la reserva y 3.5 conserva el protocolo y fallos.
+  Estas capacidades ya estan conectadas al pipeline nativo.
 - Ajustes internos de los envoltorios que no viajan en el manifiesto (por
   ejemplo `max_iter` de SARIMA o los hilos de LightGBM): quedan fijados porque
   M3 usa la misma fabrica que M2 y la version de codigo es parte de la

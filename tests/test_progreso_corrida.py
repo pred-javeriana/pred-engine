@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pandas as pd
 import pytest
 
 from pred_engine.cli import main
+from tests._plataforma import crear_base_plataforma
 
 _ARGS = [
     "--trials", "1", "--min-train", "40", "--horizon", "2", "--step", "14",
@@ -40,6 +42,8 @@ def _correr(
     raiz: Path, capsys: pytest.CaptureFixture[str], **kw: Any
 ) -> dict[str, Any]:
     csv = _csv(raiz, **kw)
+    if not (raiz / "data" / "pred.db").exists():
+        crear_base_plataforma(raiz / "data" / "pred.db")
     main(["run", "--csv", str(csv), "--data-root", str(raiz / "data"), *_ARGS])
     return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
@@ -64,8 +68,9 @@ def test_la_corrida_deja_un_flujo_completo_y_coherente(
     assert eventos[0]["schema"] == "pred-engine.progreso/1"
     assert eventos[0]["attempt"] == 1 and eventos[0]["run_id"] == resumen["run_id"]
     assert eventos[-1]["event"] == "run_finished"
-    # L4 no existe: la corrida termina sin fallos y con el codigo de salida 7.
-    assert (eventos[-1]["state"], eventos[-1]["exit_code"]) == ("completed", 7)
+    # La evaluacion reservada queda publicada en la misma base de plataforma.
+    assert (eventos[-1]["state"], eventos[-1]["exit_code"]) == ("completed", 0)
+    assert resumen["m3"]["estado"] == "PUBLICADA"
 
     etapas = [
         (e["stage"], e["event"]) for e in eventos if e["event"].startswith("stage_")
@@ -115,3 +120,110 @@ def test_repetir_la_corrida_agrega_un_intento_sin_perder_el_anterior(
         e for e in _eventos(Path(segundo["run_dir"])) if e["event"] == "run_started"
     ]
     assert [e["attempt"] for e in inicios] == [1, 2]
+
+
+def test_reintento_reparado_conserva_la_publicacion_con_fallo_tecnico(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from pred_engine.optimizacion.router import SelectionRouter
+
+    identidad = [
+        ("sku_id", pa.large_string()),
+        ("sku_class", pa.large_string()),
+        ("familia", pa.large_string()),
+        ("modelo", pa.large_string()),
+    ]
+    esquemas = {
+        "pronosticos": pa.schema(
+            [
+                *identidad,
+                ("timestamp", pa.timestamp("ns")),
+                ("pronostico", pa.float64()),
+            ]
+        ),
+        "evaluacion": pa.schema(
+            [
+                *identidad,
+                ("metrica", pa.large_string()),
+                ("valor_agregado", pa.float64()),
+                ("n_ventanas", pa.int64()),
+                ("mae_media", pa.float64()),
+                ("rmse_media", pa.float64()),
+                ("smape_media", pa.float64()),
+                ("mase_media", pa.float64()),
+            ]
+        ),
+        "walk_forward": pa.schema(
+            [
+                ("sku_id", pa.large_string()),
+                ("familia", pa.large_string()),
+                ("ventana", pa.int64()),
+                ("timestamp", pa.timestamp("ns")),
+                ("real", pa.float64()),
+                ("pronostico", pa.float64()),
+            ]
+        ),
+    }
+
+    def leer_exportaciones(reporte: dict[str, Any]) -> list[int]:
+        filas = []
+        for nombre, esquema in esquemas.items():
+            tabla = pq.read_table(
+                Path(reporte["run_dir"]) / f"{nombre}.parquet",
+                columns=esquema.names,
+            )
+            assert tabla.schema.equals(esquema)
+            filas.append(tabla.num_rows)
+        return filas
+
+    ejecutar = SelectionRouter.execute
+    averia = {"activa": True}
+
+    def con_averia(router: SelectionRouter, request: Any, decision: Any) -> Any:
+        if averia["activa"]:
+            raise RuntimeError("fallo transitorio de L2")
+        return ejecutar(router, request, decision)
+
+    monkeypatch.setattr(SelectionRouter, "execute", con_averia)
+    crear_base_plataforma(tmp_path / "data" / "pred.db")
+    args = [
+        "run", "--csv", str(_csv(tmp_path)), "--data-root", str(tmp_path / "data"),
+        *_ARGS, "--workers", "1",
+    ]  # fmt: skip
+
+    def correr(*extra: str) -> tuple[int, dict[str, Any]]:
+        codigo = main([*args, *extra])
+        return codigo, json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    codigo, fallida = correr()
+    assert codigo == 8
+    assert {f["sku_id"] for f in fallida["failures"]} == {"sku-a", "sku-b"}
+    assert fallida["m3"]["estado"] == "PUBLICADA"
+    assert leer_exportaciones(fallida) == [0, 0, 0]
+
+    # La causa se reparo, pero el mismo run_id reusa la publicacion congelada.
+    averia["activa"] = False
+    codigo, reintento = correr()
+    assert codigo == 8
+    assert reintento["failures"] == []
+    assert reintento["m3"]["publicada_previamente"] is True
+    assert reintento["m3"]["run_id_m3"] == fallida["m3"]["run_id_m3"]
+    assert _eventos(Path(reintento["run_dir"]))[-1]["exit_code"] == 8
+    with sqlite3.connect(tmp_path / "data" / "pred.db") as conn:
+        veredictos = conn.execute(
+            "SELECT DISTINCT veredicto FROM evidencia_publicada WHERE run_id = ?",
+            (reintento["m3"]["run_id_m3"],),
+        ).fetchall()
+    assert veredictos == [("FALLO_TECNICO",)]
+
+    # Un run_id nuevo produce resultados nuevos y sale limpio.
+    codigo, nueva = correr("--run-id", "reparada")
+    assert codigo == 0
+    assert nueva["failures"] == []
+    assert nueva["m3"]["run_id_m3"] != fallida["m3"]["run_id_m3"]
+    assert leer_exportaciones(nueva) == [48, 2, 16]

@@ -29,6 +29,7 @@ from pred_engine.ingesta.lector import (
 from pred_engine.ingesta.salida import (
     publish_classified_panel,
     read_classified_parquet,
+    read_classified_parquet_with_sha256,
     require_positive_demand,
 )
 from pred_engine.ingesta.sonda import DiagnosticArtifact, probe_headers
@@ -199,6 +200,13 @@ def run_classify_parquet(
 def run_verify_parquet(parquet_path: str | Path) -> pd.DataFrame:
     """Relee un Parquet publicado y valida el contrato 1.4. No escribe."""
     return read_classified_parquet(parquet_path)
+
+
+def run_verify_parquet_with_sha256(
+    parquet_path: str | Path,
+) -> tuple[pd.DataFrame, str]:
+    """``run_verify_parquet`` con el SHA-256 de los bytes que se leyeron."""
+    return read_classified_parquet_with_sha256(parquet_path)
 
 
 def run_ingest(

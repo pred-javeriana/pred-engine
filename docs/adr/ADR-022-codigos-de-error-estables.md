@@ -1,4 +1,4 @@
-# ADR-021: Códigos de error estables por tipo de excepción y por causa de exclusión
+# ADR-022: Códigos de error estables por tipo de excepción y por causa de exclusión
 
 **Date:** 2026-10-19
 **Status:** Proposed

@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 from pydantic import TypeAdapter
 
-from pred_engine.comun.modelos.manifiesto_candidatos import Candidato
+from pred_engine.comun.modelos.manifiesto_candidatos import Candidato, ContextoParticion
 from pred_engine.forecasting.adaptador_candidatos import (
     FalloCandidato,
     HandoffValidado,
@@ -32,18 +32,22 @@ from pred_engine.forecasting.evaluaciones.veredictos import (
 )
 from pred_engine.forecasting.persistencia_evidencia import (
     IdentidadCorrida,
+    aplicar_migraciones_m3,
     esquema_m3,
     guardar_unidades,
     marcar_evaluada,
     registrar_corrida,
 )
 from tests._evaluaciones import corte, pronostico, reserva, serie
-from tests._manifiestos import CONTEXTO, candidato
+from tests._manifiestos import candidato
 
 INGESTA = "c" * 64
 
 # Solo la columna que referencia M3; la tabla real es de la plataforma (0001).
-_INGESTAS = "CREATE TABLE ingestas (id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE);"
+_INGESTAS = (
+    "CREATE TABLE ingestas (id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE);"
+    "CREATE TABLE ejecuciones (id INTEGER PRIMARY KEY);"
+)
 
 # S2 es lumpy: ML no es elegible ahi y Chronos no llega en el handoff.
 _SKUS = (("S1", "smooth"), ("S2", "lumpy"))
@@ -54,6 +58,8 @@ _CANDIDATO: TypeAdapter[Candidato] = TypeAdapter(Candidato)
 def base() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_INGESTAS + esquema_m3())
+    conn.execute("PRAGMA user_version = 5")
+    aplicar_migraciones_m3(conn)
     conn.execute("INSERT INTO ingestas (sha256) VALUES (?)", (INGESTA,))
     conn.commit()
     return conn
@@ -85,7 +91,11 @@ def fallo(sku: str = "S1", familia: str = "dl") -> FalloCandidato:
 def handoff(*fallos: FalloCandidato) -> HandoffValidado:
     """Manifiesto validado por 3.2: SARIMA y LightGBM para S1 y S2."""
     return HandoffValidado(
-        contexto=CONTEXTO,
+        contexto=ContextoParticion(
+            ingesta_ref_m1="b" * 64,
+            t_corte_reserva=date(2024, 1, 14),
+            fraccion_reserva=0.2,
+        ),
         run_id_m2="m2-corrida-1",
         candidatos=tuple(
             _CANDIDATO.validate_python(candidato(familia, sku, sku_class=sku_class))

@@ -117,6 +117,16 @@ def test_el_desempate_no_elige_una_familia_peor_que_la_linea_base() -> None:
     assert seleccion.motivo == "menor_mediana"
 
 
+def test_tolerancia_cero_conserva_el_minimo_y_desempata_solo_igualdades() -> None:
+    politica = PoliticaSeleccion(tolerancia_empate=0.0)
+    distinto = _seleccionar(_sku("A", classical=0.8, ml=0.7), politica=politica)
+    igual = _seleccionar(_sku("A", classical=0.7, ml=0.7), politica=politica)
+    assert distinto.familia_campeona == "ml"
+    assert distinto.motivo == "menor_mediana"
+    assert igual.familia_campeona == "classical"
+    assert igual.motivo == "empate_por_simplicidad"
+
+
 def test_fuera_de_la_tolerancia_gana_la_menor_mediana() -> None:
     seleccion = _seleccionar(_sku("A", classical=0.80, ml=0.70))
     assert seleccion.familia_campeona == "ml"
@@ -140,6 +150,10 @@ def test_familia_fuera_del_orden_declarado_es_la_menos_simple() -> None:
     [
         {"version": " "},
         {"n_min": 0},
+        {"n_min": True},
+        {"n_min": 3.5},
+        {"n_min_dm": True},
+        {"n_min_dm": 1},
         {"tolerancia_empate": -0.1},
         {"tolerancia_empate": float("nan")},
         {"orden_simplicidad": ("ml", "ml")},
@@ -153,6 +167,15 @@ def test_familia_fuera_del_orden_declarado_es_la_menos_simple() -> None:
 def test_politica_invalida_se_rechaza(argumentos: dict) -> None:
     with pytest.raises(ValueError):
         PoliticaSeleccion(**argumentos)
+
+
+def test_modificar_el_diccionario_original_no_cambia_la_politica_fijada() -> None:
+    familias = dict(FAMILIES_BY_SKU_CLASS)
+    politica = PoliticaSeleccion(familias_elegibles=familias)
+    familias["smooth"] = ("classical",)
+    seleccion = _seleccionar(_sku("A", classical=0.8, ml=0.5), politica=politica)
+    assert seleccion.familia_campeona == "ml"
+    assert seleccion.medianas_r == {"classical": 0.8, "ml": 0.5}
 
 
 def test_politica_inicial_predeclarada() -> None:

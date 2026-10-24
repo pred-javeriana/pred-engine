@@ -126,9 +126,11 @@ def test_respaldo_por_etapa_para_errores_sin_tipo() -> None:
 
 
 # ------------------------------------------------------------------ elegibilidad
-def _pipeline(min_train: int = 5, horizon: int = 3) -> Any:
+def _pipeline(min_train: int = 5, horizon: int = 3, step: int = 0) -> Any:
     pipeline = Pipeline.__new__(Pipeline)
-    pipeline.settings = type("S", (), {"min_train": min_train, "horizon": horizon})()
+    pipeline.settings = type(
+        "S", (), {"min_train": min_train, "horizon": horizon, "step": step}
+    )()
     return pipeline
 
 

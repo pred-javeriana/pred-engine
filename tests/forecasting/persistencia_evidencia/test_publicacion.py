@@ -128,6 +128,38 @@ def test_si_la_exportacion_falla_la_corrida_no_queda_publicada(
     assert filas(conn, "evidencia_publicada") == 0
 
 
+def test_fallo_tras_un_archivo_preparado_no_expone_un_conjunto_parcial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pred_engine.forecasting.persistencia_evidencia import repositorio
+
+    conn = base()
+    run_id = _seleccionada(conn)
+    original = repositorio._escribir_parquet
+    llamadas = 0
+
+    def falla_en_segundo(frame, ruta):
+        nonlocal llamadas
+        llamadas += 1
+        if llamadas == 2:
+            raise OSError("disco lleno despues del primer archivo")
+        original(frame, ruta)
+
+    monkeypatch.setattr(repositorio, "_escribir_parquet", falla_en_segundo)
+    with pytest.raises(OSError, match="primer archivo"):
+        publicar(conn, run_id, tmp_path)
+    assert estado_corrida(conn, run_id) == "SELECCIONADA"
+    assert not (tmp_path / run_id).exists()
+    assert filas(conn, "evidencia_publicada") == 0
+    monkeypatch.setattr(repositorio, "_escribir_parquet", original)
+    rutas = publicar(conn, run_id, tmp_path)
+    assert estado_corrida(conn, run_id) == "PUBLICADA"
+    assert pd.read_csv(rutas["m3_veredictos"].with_suffix(".csv"))["sku"].tolist() == [
+        "S2",
+        "S1",
+    ]
+
+
 def test_una_corrida_publicada_no_se_reescribe(tmp_path: Path) -> None:
     conn = base()
     run_id = _seleccionada(conn)

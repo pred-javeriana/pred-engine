@@ -24,6 +24,7 @@ from pred_engine.forecasting.evaluaciones.diebold_mariano import prueba_hln
 from pred_engine.forecasting.evaluaciones.veredictos import (
     POLITICA_INICIAL,
     VEREDICTOS,
+    PoliticaSeleccion,
     emitir_veredictos,
 )
 
@@ -131,14 +132,84 @@ def test_fallo_tecnico_precede_a_no_evaluable() -> None:
     assert veredicto.veredicto == "FALLO_TECNICO"
 
 
-def test_sku_sin_instancia_de_la_familia_campeona_es_fallo_tecnico() -> None:
+def test_sku_sin_instancia_usa_la_siguiente_familia_de_la_clase() -> None:
     veredictos = _unico(
         evaluacion("A", [metricas_candidato("ml", 0.5), metricas_candidato("dl", 0.9)]),
         evaluacion("B", [metricas_candidato("dl", 0.9)]),
     )
     assert veredictos["A"].familia_campeona == "ml"
+    assert veredictos["B"].veredicto == "VALIDADO"
+    assert veredictos["B"].familia_campeona == "dl"
+    assert veredictos["B"].candidato_campeon == "S/dl"
+    assert veredictos["B"].justificacion == (
+        "VALIDADO: datos reales, ventanas suficientes y r < 1 (descriptivo); "
+        "fallback de familia ml a dl: sin instancia de la campeona de clase"
+    )
+    assert "fallback" not in veredictos["A"].justificacion
+
+
+@pytest.mark.parametrize("segunda_disponible", [True, False])
+def test_fallback_sigue_mediana_de_clase_nunca_el_mejor_del_producto(
+    segunda_disponible: bool,
+) -> None:
+    candidatos = [metricas_candidato("foundation", 0.1)]
+    if segunda_disponible:
+        candidatos.append(metricas_candidato("ml", 1.1))
+    resultado = emitir_veredictos(
+        [
+            evaluacion(
+                "A",
+                [
+                    metricas_candidato("classical", 0.5),
+                    metricas_candidato("ml", 0.6),
+                    metricas_candidato("foundation", 0.9),
+                ],
+                sku_class="intermittent",
+            ),
+            evaluacion("B", candidatos, sku_class="intermittent", fallidos=1),
+        ],
+        datos_sinteticos=False,
+    )
+    assert resultado.categorias[0].seleccion.familia_campeona == "classical"
+    b = next(v for v in resultado.skus if v.sku == "B")
+    destino = "ml" if segunda_disponible else "foundation"
+    assert b.familia_campeona == destino
+    assert b.candidato_campeon == f"S/{destino}"
+    assert b.razon_sn == pytest.approx(1.1 if segunda_disponible else 0.1)
+    assert b.veredicto == "EXPLORATORIO"
+    assert b.comparacion_incompleta is True
+    assert (
+        f"fallback de familia classical a {destino}: "
+        "sin instancia de la campeona de clase"
+    ) in b.justificacion
+
+
+def test_sin_familia_disponible_en_el_ranking_conserva_fallo_tecnico() -> None:
+    veredictos = _unico(
+        evaluacion("A", [metricas_candidato("classical", 0.5)], sku_class="lumpy"),
+        evaluacion("B", [metricas_candidato("dl", 0.1)], sku_class="lumpy"),
+    )
     assert veredictos["B"].veredicto == "FALLO_TECNICO"
+    assert veredictos["B"].familia_campeona == "classical"
     assert veredictos["B"].candidato_campeon is None
+    assert "fallback" not in veredictos["B"].justificacion
+
+
+def test_instancia_campeona_fallida_no_dispara_fallback() -> None:
+    veredictos = _unico(
+        evaluacion("A", [metricas_candidato("ml", 0.5), metricas_candidato("dl", 0.9)]),
+        evaluacion(
+            "B",
+            [
+                metricas_candidato("ml", None, pronosticos_validos=0),
+                metricas_candidato("dl", 0.1),
+            ],
+        ),
+    )
+    assert veredictos["B"].veredicto == "FALLO_TECNICO"
+    assert veredictos["B"].familia_campeona == "ml"
+    assert veredictos["B"].candidato_campeon == "S/ml"
+    assert "fallback" not in veredictos["B"].justificacion
 
 
 def test_cada_sku_lista_todos_sus_modelos_evaluados_con_su_r() -> None:
@@ -201,6 +272,20 @@ def test_diebold_mariano_acompana_al_veredicto_sin_cambiarlo() -> None:
     # Una sola prueba en la corrida: BH no cambia el p-valor.
     assert prueba.p_ajustado == pytest.approx(esperado.p_valor)
     assert prueba.significativa is True
+
+
+def test_minimo_dm_configurado_no_cambia_el_veredicto_descriptivo() -> None:
+    entrada = evaluacion("A", [metricas_candidato("ml", 0.8, rmses=_MEJOR)])
+    resultado = emitir_veredictos(
+        [entrada], datos_sinteticos=False, politica=PoliticaSeleccion(n_min_dm=41)
+    )
+    veredicto = resultado.skus[0]
+    assert veredicto.veredicto == "VALIDADO"
+    assert veredicto.razon_sn == 0.8
+    assert veredicto.diebold_mariano.n_ventanas == 40
+    assert veredicto.diebold_mariano.causa == "pocas_ventanas"
+    assert veredicto.diebold_mariano.p_valor is None
+    assert _unico(entrada)["A"].diebold_mariano.significativa is True
 
 
 def test_sin_diebold_mariano_queda_la_causa() -> None:

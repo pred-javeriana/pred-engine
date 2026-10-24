@@ -184,8 +184,14 @@ class ResourceSampler:
         for pid, proceso in vivos.items():
             try:
                 with proceso.oneshot():
+                    # Un proceso que sale o es zombi ya no tiene memoria: psutil
+                    # lee rss 0 sin lanzar error, y esa fila no mide nada.
+                    if proceso.status() == psutil.STATUS_ZOMBIE:
+                        continue
                     tiempos = proceso.cpu_times()
                     rss = proceso.memory_info().rss
+                    if rss <= 0:
+                        continue
                     if pid not in self._previo:
                         self._previo[pid] = (proceso.create_time(), 0.0)
                     if pid not in self._roles:

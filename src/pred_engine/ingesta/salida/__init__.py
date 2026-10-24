@@ -11,6 +11,7 @@ from pred_engine.ingesta.salida.preservacion import require_panel_preserved
 from pred_engine.ingesta.salida.publicador import (
     publish_classified_panel,
     read_classified_parquet,
+    read_classified_parquet_with_sha256,
 )
 from pred_engine.ingesta.salida.validador import (
     normalize_output_frame,
@@ -25,6 +26,7 @@ __all__ = [
     "normalize_output_frame",
     "publish_classified_panel",
     "read_classified_parquet",
+    "read_classified_parquet_with_sha256",
     "require_panel_preserved",
     "require_positive_demand",
     "validate_output_contract",

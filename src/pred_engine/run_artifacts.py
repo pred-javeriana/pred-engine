@@ -60,6 +60,36 @@ _EVIDENCIA_HPO = (
     "n_fallidos",
 )
 
+_IDENTIDAD_CANDIDATO_DTYPES = {
+    "sku_id": "string",
+    "sku_class": "string",
+    "familia": "string",
+    "modelo": "string",
+}
+_PRONOSTICOS_DTYPES = {
+    **_IDENTIDAD_CANDIDATO_DTYPES,
+    "timestamp": "datetime64[ns]",
+    "pronostico": "float64",
+}
+_EVALUACION_DTYPES = {
+    **_IDENTIDAD_CANDIDATO_DTYPES,
+    "metrica": "string",
+    "valor_agregado": "float64",
+    "n_ventanas": "int64",
+    "mae_media": "float64",
+    "rmse_media": "float64",
+    "smape_media": "float64",
+    "mase_media": "float64",
+}
+_WALK_FORWARD_DTYPES = {
+    "sku_id": "string",
+    "familia": "string",
+    "ventana": "int64",
+    "timestamp": "datetime64[ns]",
+    "real": "float64",
+    "pronostico": "float64",
+}
+
 
 def library_versions() -> dict[str, str]:
     """Versiones que fijan la reproducibilidad de los candidatos."""
@@ -111,7 +141,9 @@ def _contexto(fitting: FittingArtifact) -> ContextoParticion:
     )
 
 
-def _procedencia(candidato_id: str, seleccion: SelectionResult) -> dict[str, Any]:
+def procedencia_candidato(
+    candidato_id: str, seleccion: SelectionResult
+) -> dict[str, Any]:
     """Lo que el manifiesto no lleva: politica, perfil y evidencia del HPO."""
     payload = seleccion.payload
     return {
@@ -137,6 +169,40 @@ def _escribir_parquet(frame: pd.DataFrame, ruta: Path) -> None:
 
 def _escribir_json(datos: Any, ruta: Path) -> None:
     escribir_atomico(ruta, json.dumps(datos, ensure_ascii=False, indent=2) + "\n")
+
+
+def fijar_identidad(
+    directorio: Path, fuente_sha256: str, settings: Mapping[str, Any]
+) -> None:
+    """Fija la identidad antes de HPO; un intento rechazado no puede sustituirla.
+
+    Sin identidad ni resumen completo no se adivina la entrada original de
+    checkpoints antiguos. Se debe restaurar la identidad o usar otra corrida.
+    """
+    destino = directorio / "identidad.json"
+    solicitada = {"source_sha256": fuente_sha256, "settings": dict(settings)}
+    anterior = None
+    if destino.exists():
+        anterior = json.loads(destino.read_text())
+    elif (directorio / "corrida.json").exists():
+        resumen = json.loads((directorio / "corrida.json").read_text())
+        if resumen.get("summary", {}).get("complete") is True:
+            anterior = {
+                "source_sha256": resumen["inputs"]["source"]["sha256"],
+                "settings": {
+                    k: v for k, v in resumen["settings"].items() if k != "workers"
+                },
+            }
+    if anterior is not None and anterior != solicitada:
+        raise ValueError("run_id incompatible con la entrada o configuracion previa")
+    if anterior is None and any((directorio / "hpo").glob("*/manifiesto.json")):
+        raise ValueError(
+            "falta la identidad durable de los checkpoints; "
+            "restaure la identidad original o use otro run_id"
+        )
+    if not destino.exists():
+        directorio.mkdir(parents=True, exist_ok=True)
+        escribir_atomico(destino, json.dumps(solicitada, sort_keys=True) + "\n")
 
 
 def write_run(
@@ -217,9 +283,12 @@ def write_run(
             emitido_en=datetime.now(UTC),
         )
         archivos["candidatos"] = destino / "candidatos.json"
-        escribir_atomico(archivos["candidatos"], manifiesto + "\n")
+        # El handoff ya pudo ser validado por M3 antes de abrir la reserva.
+        # Reanudar o guardar el resumen nunca cambia su emision original.
+        if not archivos["candidatos"].exists():
+            escribir_atomico(archivos["candidatos"], manifiesto + "\n")
         procedencia = [
-            _procedencia(crudo["candidato_id"], seleccion)
+            procedencia_candidato(crudo["candidato_id"], seleccion)
             for crudo, seleccion in zip(
                 json.loads(manifiesto)["candidatos"], selecciones, strict=True
             )
@@ -239,8 +308,9 @@ def write_run(
                     }
                     for c in fitting.candidates
                     for fecha, valor in zip(fechas, c.forecast, strict=True)
-                ]
-            ),
+                ],
+                columns=list(_PRONOSTICOS_DTYPES),
+            ).astype(_PRONOSTICOS_DTYPES),
             archivos["pronosticos"],
         )
 
@@ -281,9 +351,19 @@ def write_run(
                         }
                     )
         archivos["evaluacion"] = destino / "evaluacion.parquet"
-        _escribir_parquet(pd.DataFrame(resumen), archivos["evaluacion"])
+        _escribir_parquet(
+            pd.DataFrame(resumen, columns=list(_EVALUACION_DTYPES)).astype(
+                _EVALUACION_DTYPES
+            ),
+            archivos["evaluacion"],
+        )
         archivos["walk_forward"] = destino / "walk_forward.parquet"
-        _escribir_parquet(pd.DataFrame(ventanas), archivos["walk_forward"])
+        _escribir_parquet(
+            pd.DataFrame(ventanas, columns=list(_WALK_FORWARD_DTYPES)).astype(
+                _WALK_FORWARD_DTYPES
+            ),
+            archivos["walk_forward"],
+        )
 
     # La seleccion por SKU (ensayos, evidencia, ventanas) para quien no lee Parquet
     # ni Optuna; se escribe con que L2 haya terminado, aunque L3 haya fallado.

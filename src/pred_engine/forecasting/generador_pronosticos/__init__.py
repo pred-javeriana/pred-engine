@@ -1,5 +1,27 @@
-"""PRED analytical engine.
+"""Pronosticos sobre todas las ventanas completas de la reserva (3.3)."""
 
-Pure-Python library for demand-forecasting: ingestion, modelling,
-walk-forward evaluation, and retrospective validation.
-"""
+from pred_engine.forecasting.generador_pronosticos.contratos import (
+    ConfiguracionPronosticos,
+    FalloPronostico,
+    ResultadoPronosticos,
+    SerieNoElegibleError,
+    UnidadPronostico,
+    VentanaReserva,
+)
+from pred_engine.forecasting.generador_pronosticos.generacion import generar_pronosticos
+from pred_engine.forecasting.generador_pronosticos.particion import (
+    separar_serie,
+    ventanas_reserva,
+)
+
+__all__ = [
+    "ConfiguracionPronosticos",
+    "FalloPronostico",
+    "ResultadoPronosticos",
+    "SerieNoElegibleError",
+    "UnidadPronostico",
+    "VentanaReserva",
+    "generar_pronosticos",
+    "separar_serie",
+    "ventanas_reserva",
+]

@@ -86,8 +86,12 @@ def build_pipeline(
     """Compose core families; foundation is opt-in and requires the foundation extra.
 
     With n_trials=None the original strategy budgets are preserved. Evaluation
-    settings also define HPO windows. For custom search spaces, construct a
-    SelectionRouter with existing strategies and pass it to Pipeline.
+    settings also define HPO windows. Pipeline's L2 gate assumes these windows
+    and the default ReglasPoda (min_ventanas = 4); a custom router whose
+    strategies use other windows or pruning rules gets per-unit HPO failures,
+    not exclusions. For custom search spaces, construct a SelectionRouter with
+    existing strategies and pass it to Pipeline, with ``m2_settings`` naming its
+    families, trials and seed for the native validator.
 
     Con ``hpo_root`` y ``session`` cada estudio de HPO persiste su manifiesto y
     sus trials (2.9): repetir la corrida con la misma sesion retoma los estudios
@@ -156,4 +160,5 @@ def build_pipeline(
         validator=validator,
         workers=workers,
         progress=progress,
+        m2_settings={"families": list(families), "trials": n_trials, "seed": seed},
     )

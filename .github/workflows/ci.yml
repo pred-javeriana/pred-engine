@@ -97,30 +97,42 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/preparar
+      - name: Obtener plataforma con esquema base publicado
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: pred-javeriana/pred-platform
+          ref: 7e3b327ef5ebf10e9bacf7e2a98ef95cf210cbdd
+          path: .ci-platform
+          persist-credentials: false
+
+      - name: Crear base central con el migrador de plataforma
+        env:
+          PYTHONPATH: .ci-platform/src
+        run: .venv/bin/python -m pred_platform.dal.migrate --db data/pred.db
 
       - name: pred-engine run con tests/fixtures/semilla_inventario.csv
         run: |
           code=0
           uv run --no-sync pred-engine run \
             --seed-csv tests/fixtures/semilla_inventario.csv \
-            --data-root data --run-id ci --workers 2 \
+            --data-root data --db-path data/pred.db --run-id ci --workers 2 \
             --m0-metodo mbb-directo --m0-n-series 1 --m0-minimo-filas 0 \
             --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
             --m0-columna demand_qty=Avg_Usage_Per_Day \
             --m0-columna lead_time_days=Restock_Lead_Time \
             > "$RUNNER_TEMP/corrida.log" || code=$?
           tail -n 1 "$RUNNER_TEMP/corrida.log"
-          if [ "$code" != 7 ] && [ "$code" != 8 ]; then
+          if [ "$code" != 0 ] && [ "$code" != 8 ]; then
             tail -n 40 "$RUNNER_TEMP/corrida.log"
-            echo "::error title=pred-engine run::codigo de salida $code; se espera 7 (L4 ausente) u 8 (L4 ausente con unidades fallidas aisladas)"
+            echo "::error title=pred-engine run::codigo de salida $code; se espera 0 (M3 publicada) u 8 (publicada con fallos aislados)"
             exit 1
           fi
 
       - name: pred-engine telemetry
         run: uv run --no-sync pred-engine telemetry "$RUN_DIR"
 
-      - name: Verificar artefactos de la corrida
-        run: uv run --no-sync python .github/scripts/verificar_corrida.py "$RUN_DIR"
+      - name: Verificar artefactos y publicacion central
+        run: uv run --no-sync python .github/scripts/verificar_corrida.py "$RUN_DIR" data/pred.db
 
       - name: Publicar artefactos de la corrida
         if: always()
@@ -132,5 +144,7 @@ jobs:
             ${{ env.RUN_DIR }}/*.jsonl
             ${{ env.RUN_DIR }}/*.parquet
             ${{ env.RUN_DIR }}/*.svg
+            ${{ env.RUN_DIR }}/m3/
+            data/pred.db
           retention-days: 7
           if-no-files-found: ignore
