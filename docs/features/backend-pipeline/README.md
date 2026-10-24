@@ -80,6 +80,11 @@ history, forecasts from t*, exclusions and unit records. `EvaluationArtifact`
 contains the causal L3 windows and settings. Native L4 consumes all M2 fitted
 candidates, not just those whose L3 reevaluation completed.
 
+Cada exclusión y cada falla de unidad lleva un código estable (ADR-022):
+`eligibility.*` en `exclusions[].code`, y el código de la excepción en
+`failures[].code`, `unidades.jsonl`, el evento `unit_finished` y
+`seleccion.jsonl`. El texto (`cause`, `error`) sigue siendo el detalle técnico.
+
 `ValidationArtifact` exposes one `SkuVerdict` per handed-off SKU and an
 `audit_bundle` with M3 identity, publication, coverage and export paths.
 Native verdicts are FALLO_TECNICO, NO_EVALUABLE, EVIDENCIA_INSUFICIENTE,

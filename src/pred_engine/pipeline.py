@@ -28,6 +28,14 @@ from pred_engine.comun.ejecucion_paralela import (
     ejecutar_unidades,
     emitir_evento,
 )
+from pred_engine.comun.errores_codigo import (
+    ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
+    ELEGIBILIDAD_HUECOS,
+    ELEGIBILIDAD_NO_FINITA,
+    ELEGIBILIDAD_SIN_HISTORIA,
+    ELEGIBILIDAD_SIN_RESERVA,
+    codigo_de,
+)
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
@@ -155,6 +163,7 @@ class SkuExclusion:
 
     sku_id: str
     cause: str
+    code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,7 +356,8 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     if evaluation is not None:
         summary["units"]["L3"] = _unit_counts(evaluation.units)
     summary["exclusions"] = [
-        {"sku_id": item.sku_id, "cause": item.cause} for item in fitting.exclusions
+        {"sku_id": item.sku_id, "cause": item.cause, "code": item.code}
+        for item in fitting.exclusions
     ]
     summary["failures"] = [
         {
@@ -355,6 +365,7 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
             "sku_id": unit.sku_id,
             "family": unit.family,
             "error": unit.record.error,
+            "code": unit.record.codigo,
         }
         for unit in result.failures
     ]
@@ -580,24 +591,38 @@ class Pipeline:
 
     def _exclusion_cause(
         self, admissible: pd.DataFrame, reserve: ReserveCut
-    ) -> str | None:
+    ) -> tuple[str, str] | None:
+        """``(codigo, causa)`` de la exclusion, o ``None`` si el SKU es elegible."""
         if admissible.empty:
-            return "sin historia admisible: la serie comienza despues de t*"
+            return (
+                ELEGIBILIDAD_SIN_HISTORIA,
+                "sin historia admisible: la serie comienza despues de t*",
+            )
         timestamps = admissible["timestamp"]
         if not timestamps.diff().iloc[1:].eq(pd.Timedelta(days=1)).all():
-            return "calendario diario con huecos (daily grid requerido)"
+            return (
+                ELEGIBILIDAD_HUECOS,
+                "calendario diario con huecos (daily grid requerido)",
+            )
         if timestamps.iloc[-1] != reserve.t_star:
-            return "la serie termina antes de t*: no tiene observaciones reservadas"
+            return (
+                ELEGIBILIDAD_SIN_RESERVA,
+                "la serie termina antes de t*: no tiene observaciones reservadas",
+            )
         if not np.isfinite(admissible["demand_qty"].to_numpy(dtype=float)).all():
-            return "demanda no finita en la historia admisible"
+            return (
+                ELEGIBILIDAD_NO_FINITA,
+                "demanda no finita en la historia admisible",
+            )
         pasos = ReglasPoda().min_ventanas - 1
         needed = (
             self.settings.min_train + self.settings.horizon + pasos * self.settings.step
         )
         if len(admissible) < needed:
             return (
+                ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
                 f"historia admisible insuficiente: {len(admissible)} dias, se "
-                f"requieren {needed} (min_train + horizonte + {pasos} pasos)"
+                f"requieren {needed} (min_train + horizonte + {pasos} pasos)",
             )
         return None
 
@@ -611,10 +636,11 @@ class Pipeline:
         for sku_id, group in panel.groupby("sku_id", sort=True):
             ordered = group.sort_values("timestamp")
             admissible = ordered.loc[ordered["timestamp"] <= reserve.t_star]
-            cause = self._exclusion_cause(admissible, reserve)
-            if cause is not None:
-                exclusions.append(SkuExclusion(str(sku_id), cause))
-                self._emit("excluded", sku_id=str(sku_id), cause=cause)
+            exclusion = self._exclusion_cause(admissible, reserve)
+            if exclusion is not None:
+                code, cause = exclusion
+                exclusions.append(SkuExclusion(str(sku_id), cause, code))
+                self._emit("excluded", sku_id=str(sku_id), cause=cause, code=code)
                 continue
             series = tuple(
                 ClassifiedObservation(**row)
@@ -774,6 +800,7 @@ class Pipeline:
                     stage=current.definition.id,
                     state="failed",
                     message=str(exc),
+                    code=codigo_de(exc, etapa=str(current.definition.id)),
                 )
                 raise PipelineExecutionError(
                     current.definition.id,

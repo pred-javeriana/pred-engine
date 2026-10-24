@@ -106,6 +106,7 @@ def test_un_sku_sin_historia_suficiente_se_anota_como_excluido(
     excluidos = [e for e in _eventos(carpeta) if e["event"] == "excluded"]
     assert [e["sku_id"] for e in excluidos] == ["sku-b"]
     assert "termina antes de t*" in excluidos[0]["cause"]
+    assert excluidos[0]["code"] == "eligibility.no_reserved_observations"
 
 
 def test_repetir_la_corrida_agrega_un_intento_sin_perder_el_anterior(

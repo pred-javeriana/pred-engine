@@ -714,12 +714,14 @@ def test_failed_unit_is_isolated_and_short_sku_is_excluded_with_cause(tmp_path):
             "sku_id": "broken",
             "family": "classical",
             "error": "RuntimeError: HPO interrumpido para este SKU",
+            "code": "pipeline.stage_failed",
         }
     ]
     assert summary["exclusions"] == [
         {
             "sku_id": "short",
             "cause": "la serie termina antes de t*: no tiene observaciones reservadas",
+            "code": "eligibility.no_reserved_observations",
         }
     ]
     assert summary["units"] == {

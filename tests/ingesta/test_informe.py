@@ -18,6 +18,10 @@ from pred_engine.ingesta.informe import (
     ingest_csv_with_report,
     report_path,
 )
+from pred_engine.ingesta.lector.extractor_csv import (
+    ArchivoNoCsvError,
+    RutaFueraDeRawError,
+)
 from pred_engine.ingesta.salida.errores import HandoffPreconditionError
 from pred_engine.ingesta.validador_formato.errores import SchemaBarrierError
 
@@ -273,10 +277,10 @@ def test_sin_archivo_no_hay_informe_y_se_propaga(tmp_path: Path) -> None:
         (RawWritePermissionError("raw/a.csv", "test"), "ingest.raw_write_blocked"),
         (SchemaBarrierError("x"), "ingest.schema_barrier"),
         (FileNotFoundError("x"), "ingest.file_not_found"),
-        (
-            ValueError("La extraccion pasiva solo admite archivos .csv"),
-            "ingest.not_csv",
-        ),
+        (ArchivoNoCsvError("x"), "ingest.not_csv"),
+        (RutaFueraDeRawError("x"), "ingest.not_csv"),
+        # El codigo sale del tipo, no del mensaje.
+        (ValueError("solo admite archivos .csv"), "pipeline.stage_failed"),
         (ValueError("otra cosa"), "pipeline.stage_failed"),
         (RuntimeError("inesperado"), "pipeline.stage_failed"),
     ],

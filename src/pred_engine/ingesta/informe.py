@@ -16,7 +16,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from pred_engine.comun.llm.errores import LlmError, LlmProviderError, LlmTimeoutError
+from pred_engine.comun.errores_codigo import codigo_de
+from pred_engine.comun.llm.errores import LlmProviderError, LlmTimeoutError
 from pred_engine.comun.llm.protocolo import LlmProvider
 from pred_engine.comun.modelos import (
     ADI_THRESHOLD,
@@ -28,16 +29,11 @@ from pred_engine.comun.modelos import (
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import (
     TopologyArtifact,
-    TopologyContractError,
-    TopologyMathError,
-    TopologyRoutingError,
 )
-from pred_engine.ingesta.continuidad.errores import TemporalContinuityError
 from pred_engine.ingesta.data import (
     DepositResult,
     OnConflict,
     RawConflictError,
-    RawWritePermissionError,
     deposit_raw,
     ensure_data_layout,
 )
@@ -47,11 +43,6 @@ from pred_engine.ingesta.pipeline import (
     IngestResult,
     ingest_canonical_csv,
     run_ingest,
-)
-from pred_engine.ingesta.salida.errores import (
-    HandoffPreconditionError,
-    OutputContractError,
-    PanelPreservationError,
 )
 from pred_engine.ingesta.sonda.errores import SemanticAlignmentError
 from pred_engine.ingesta.validador_formato.errores import SchemaBarrierError
@@ -166,33 +157,9 @@ class ReportedIngest:
     error: Exception | None
 
 
-# Codigos de la seccion 11 del contrato, deducidos del tipo de la excepcion (G6 los
-# formaliza; lo que no aparece aqui cae en ``pipeline.stage_failed``).
-_CODIGOS: tuple[tuple[type[BaseException], str], ...] = (
-    (RawConflictError, "ingest.raw_conflict"),
-    (RawWritePermissionError, "ingest.raw_write_blocked"),
-    (SemanticAlignmentError, "ingest.header_rejected"),
-    (SchemaBarrierError, "ingest.schema_barrier"),
-    (TemporalContinuityError, "ingest.temporal_continuity"),
-    (TopologyMathError, "topology.math"),
-    (TopologyRoutingError, "topology.routing"),
-    (TopologyContractError, "topology.contract"),
-    (OutputContractError, "handoff.contract"),
-    (PanelPreservationError, "handoff.preservation"),
-    (HandoffPreconditionError, "handoff.precondition"),
-    (LlmError, "ingest.llm_provider"),
-    (FileNotFoundError, "ingest.file_not_found"),
-)
-
-
 def error_code(exc: BaseException) -> str:
     """Codigo estable para ``exc`` (ver seccion 11 del contrato)."""
-    for tipo, codigo in _CODIGOS:
-        if isinstance(exc, tipo):
-            return codigo
-    if isinstance(exc, ValueError) and ".csv" in str(exc):
-        return "ingest.not_csv"
-    return "pipeline.stage_failed"
+    return codigo_de(exc)
 
 
 def report_path(data_root: str | Path | None, sha256: str) -> Path:

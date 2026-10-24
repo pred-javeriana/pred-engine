@@ -247,6 +247,7 @@ def write_run(
                 if unit.record.cpu_s is None
                 else round(unit.record.cpu_s, 3),
                 "error": unit.record.error,
+                "code": unit.record.codigo,
             },
             ensure_ascii=False,
         )

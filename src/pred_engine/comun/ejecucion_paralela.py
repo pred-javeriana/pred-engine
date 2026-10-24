@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from pred_engine.comun.errores_codigo import codigo_de
 from pred_engine.comun.logger import get_logger
 
 _logger = get_logger(__name__)
@@ -106,7 +107,8 @@ class RegistroUnidad:
     """Traza de una unidad: estado, proceso y reloj de pared (epoch, segundos).
 
     ``cpu_s`` es el tiempo de CPU que consumio el proceso mientras corria la
-    unidad (todas sus hebras); ``None`` si la unidad no llego a correr.
+    unidad (todas sus hebras); ``None`` si la unidad no llego a correr. ``codigo`` es
+    el codigo estable del error (seccion 11 del contrato), solo en unidades fallidas.
     """
 
     estado: EstadoUnidad
@@ -115,6 +117,7 @@ class RegistroUnidad:
     fin: float
     error: str | None = None
     cpu_s: float | None = None
+    codigo: str | None = None
 
     @property
     def duracion_s(self) -> float:
@@ -183,6 +186,7 @@ def _evento_fin(
         seconds=round(registro.duracion_s, 3),
         cpu_s=None if registro.cpu_s is None else round(registro.cpu_s, 3),
         error=registro.error,
+        code=registro.codigo,
     )
 
 
@@ -191,6 +195,7 @@ def _ejecutar_aislada[T, R](
     tarea: T,
     etiqueta: EtiquetaUnidad | None = None,
     ruta: str | Path | None = None,
+    etapa: str | None = None,
 ) -> ResultadoUnidad[R]:
     """Unidad de trabajo de nivel de modulo (``pickle`` no serializa closures).
 
@@ -207,14 +212,16 @@ def _ejecutar_aislada[T, R](
             pid=os.getpid(),
             started_at=_iso(time.time()),
         )
-    resultado = _correr_aislada(funcion, tarea)
+    resultado = _correr_aislada(funcion, tarea, etapa)
     if seguimiento:
         assert etiqueta is not None and ruta is not None
         _evento_fin(ruta, etiqueta, resultado.registro)
     return resultado
 
 
-def _correr_aislada[T, R](funcion: Callable[[T], R], tarea: T) -> ResultadoUnidad[R]:
+def _correr_aislada[T, R](
+    funcion: Callable[[T], R], tarea: T, etapa: str | None = None
+) -> ResultadoUnidad[R]:
     inicio, cpu = time.time(), time.process_time()
     try:
         valor = funcion(tarea)
@@ -226,6 +233,7 @@ def _correr_aislada[T, R](funcion: Callable[[T], R], tarea: T) -> ResultadoUnida
             time.time(),
             describir_error(exc),
             time.process_time() - cpu,
+            codigo_de(exc, etapa=etapa),
         )
         return ResultadoUnidad(registro)
     registro = RegistroUnidad(
@@ -300,15 +308,7 @@ def iterar_unidades[T, R](
     limite = 2 * procesos if en_vuelo is None else en_vuelo
     if type(limite) is not int or limite < 1:
         raise ValueError(f"en_vuelo debe ser un entero >= 1; se recibio {en_vuelo!r}")
-    seguimiento = etiquetas is not None and progreso is not None
-    return _iterar(
-        funcion,
-        tareas,
-        procesos,
-        limite,
-        etiquetas if seguimiento else None,
-        progreso if seguimiento else None,
-    )
+    return _iterar(funcion, tareas, procesos, limite, etiquetas, progreso)
 
 
 def _exigir_procesos(procesos: int) -> None:
@@ -327,9 +327,14 @@ def _iterar[T, R](
     def etiqueta_de(indice: int) -> EtiquetaUnidad | None:
         return None if etiquetas is None else etiquetas[indice]
 
+    def etapa_de(indice: int) -> str | None:
+        return None if etiquetas is None else etiquetas[indice].etapa
+
     if procesos == 1:
         for indice, tarea in enumerate(tareas):
-            yield _ejecutar_aislada(funcion, tarea, etiqueta_de(indice), ruta)
+            yield _ejecutar_aislada(
+                funcion, tarea, etiqueta_de(indice), ruta, etapa_de(indice)
+            )
         return
 
     with (
@@ -350,7 +355,12 @@ def _iterar[T, R](
                         (
                             indice,
                             _enviar(
-                                ejecutor, funcion, tarea, etiqueta_de(indice), ruta
+                                ejecutor,
+                                funcion,
+                                tarea,
+                                etiqueta_de(indice),
+                                ruta,
+                                etapa_de(indice),
                             ),
                         )
                     )
@@ -364,7 +374,12 @@ def _iterar[T, R](
                 except Exception as exc:
                     _logger.error("Unidad %d sin resultado: %s", indice, exc)
                     registro = RegistroUnidad(
-                        "fallida", 0, envio, time.time(), describir_error(exc)
+                        "fallida",
+                        0,
+                        envio,
+                        time.time(),
+                        describir_error(exc),
+                        codigo=codigo_de(exc, etapa=etapa_de(indice)),
                     )
                     resultado = ResultadoUnidad(registro)
                     etiqueta = etiqueta_de(indice)
@@ -385,9 +400,10 @@ def _enviar[T, R](
     tarea: T,
     etiqueta: EtiquetaUnidad | None,
     ruta: str | Path | None,
+    etapa: str | None = None,
 ) -> Future[ResultadoUnidad[R]]:
     try:
-        return ejecutor.submit(_ejecutar_aislada, funcion, tarea, etiqueta, ruta)
+        return ejecutor.submit(_ejecutar_aislada, funcion, tarea, etiqueta, ruta, etapa)
     except BrokenProcessPool as exc:
         # Un hijo ya murio: la tarea queda fallida con esa causa, como las enviadas.
         futuro: Future[ResultadoUnidad[R]] = Future()

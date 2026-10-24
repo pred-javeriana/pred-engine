@@ -22,13 +22,21 @@ class ExtractionArtifact:
     source_path: Path
 
 
+class ArchivoNoCsvError(ValueError):
+    """El archivo a extraer no tiene extension .csv."""
+
+
+class RutaFueraDeRawError(ValueError):
+    """El archivo a extraer no esta bajo la carpeta de datos crudos."""
+
+
 def _assert_csv_bajo_raw(origen: Path, raw_root: Path) -> None:
     if origen.suffix.lower() != ".csv":
-        raise ValueError("La extraccion pasiva solo admite archivos .csv")
+        raise ArchivoNoCsvError("La extraccion pasiva solo admite archivos .csv")
     try:
         origen.expanduser().resolve().relative_to(raw_root.resolve())
     except ValueError as exc:
-        raise ValueError(
+        raise RutaFueraDeRawError(
             f"La extraccion pasiva solo lee desde {raw_root.resolve()}"
         ) from exc
 
