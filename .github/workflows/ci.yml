@@ -88,6 +88,23 @@ jobs:
       - name: python -m pred_engine.verify
         run: uv run --no-sync python -m pred_engine.verify
 
+  windows-recovery:
+    name: Recuperacion nativa en Windows
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/preparar
+      - name: Checkpoints, interrupcion y reutilizacion con uno y dos procesos
+        run: >-
+          uv run --no-sync pytest tests/test_unit_checkpoints.py tests/test_run_chart.py
+          --no-cov -ra
+
   run:
     name: Corrida M0-M2 de punta a punta (pred-engine run)
     runs-on: ubuntu-latest

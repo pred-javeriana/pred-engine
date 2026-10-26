@@ -122,7 +122,8 @@ def save_result(path: Path | None, result: ResultadoUnidad[Any]) -> None:
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     escribir_atomico(path, _json(envelope) + "\n")
-    with path.open("rb") as handle:
+    # Windows requiere acceso de escritura para sincronizar el archivo a disco.
+    with path.open("r+b") as handle:
         os.fsync(handle.fileno())
     if os.name != "nt":
         descriptor = os.open(path.parent, os.O_RDONLY)

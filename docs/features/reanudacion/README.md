@@ -10,7 +10,9 @@ en cada intento. Esto causaba los problemas reportados en platform
 
 La CLI activa `UnitCheckpoints` en `runs/{run_id}/checkpoints/{L2,L3}/`. Una unidad exitosa guarda
 un JSON tipado con su resultado y registro temporal, clave de contexto y suma SHA-256.
-La escritura es atómica y sincroniza archivo y directorio antes del evento `unit_finished`.
+La escritura es atómica y sincroniza el archivo antes del evento `unit_finished`; en POSIX
+también sincroniza el directorio. En Windows se abre el archivo con acceso de lectura/escritura,
+porque sincronizar un descriptor abierto solo para lectura produce `Bad file descriptor`.
 El callback se ejecuta dentro del proceso que realizó la unidad, por lo que también se preserva
 una unidad que termina mientras el padre espera el resultado de otra.
 
@@ -64,3 +66,10 @@ Verificación local del 26 de octubre de 2026 en Linux: 1185 pruebas de la suite
 cobertura 94,01 %, 81 pruebas lentas aprobadas, lockfile, Ruff, formato y Pyright correctos.
 `pred_engine.verify` pasó y el smoke M0–M3 publicó correctamente, con telemetría y artefactos/base
 central verificados. La suite principal omite Chronos real sin su extra y el dataset oficial ausente.
+
+También se ejecutaron nativamente en Windows NT 10.0.26300.0 y CPython 3.12.12 las 14 pruebas de
+`test_unit_checkpoints.py` y `test_run_chart.py`, incluidas las de dos procesos. La CLI real y el
+worker de platform se probaron con uno y dos procesos, fallo transitorio, cierre normal,
+detención/reanudación y muerte abrupta del worker. La corrección complementaria de platform espera
+al cierre del árbol completo de procesos antes de reanudar.
+El job `windows-recovery` conserva las regresiones nativas en la CI del motor.
