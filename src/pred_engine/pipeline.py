@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
@@ -57,6 +58,7 @@ from pred_engine.optimizacion.router.contratos import (
     SelectionRequest,
     SelectionResult,
 )
+from pred_engine.unit_checkpoints import UnitCheckpoints, load_result, save_result
 
 StageId = Literal["L1", "L2", "L3", "L4"]
 StageState = Literal["pending", "completed", "blocked", "failed"]
@@ -174,6 +176,7 @@ class UnitExecution:
     sku_id: str
     family: PredictorFamily
     record: RegistroUnidad
+    reused: bool = False
 
     @property
     def failed(self) -> bool:
@@ -392,6 +395,7 @@ class _FitTask:
     decision: RoutingDecision
     factory: FabricaPronosticador
     horizon: int
+    checkpoint: Path | None = None
 
 
 def _fit_unit(task: _FitTask) -> FittedCandidate:
@@ -425,6 +429,7 @@ class _EvaluationTask:
     series: np.ndarray
     factory: FabricaPronosticador
     settings: EvaluationSettings
+    checkpoint: Path | None = None
 
 
 def _evaluate_unit(task: _EvaluationTask) -> ResultadoWalkForward:
@@ -452,13 +457,23 @@ def _evaluate_unit(task: _EvaluationTask) -> ResultadoWalkForward:
     return evidence
 
 
+def _persist_fit(task: _FitTask, result: ResultadoUnidad[FittedCandidate]) -> None:
+    save_result(task.checkpoint, result)
+
+
+def _persist_evaluation(
+    task: _EvaluationTask, result: ResultadoUnidad[ResultadoWalkForward]
+) -> None:
+    save_result(task.checkpoint, result)
+
+
 def _units(
     stage: StageId,
     identities: Sequence[tuple[str, PredictorFamily]],
     results: Sequence[ResultadoUnidad[Any]],
 ) -> tuple[UnitExecution, ...]:
     return tuple(
-        UnitExecution(stage, sku_id, family, result.registro)
+        UnitExecution(stage, sku_id, family, result.registro, reused=result.reutilizado)
         for (sku_id, family), result in zip(identities, results, strict=True)
     )
 
@@ -508,6 +523,7 @@ class Pipeline:
         workers: int = 1,
         progress: str | Path | None = None,
         m2_settings: Mapping[str, Any] | None = None,
+        checkpoints: UnitCheckpoints | None = None,
     ) -> None:
         if type(workers) is not int or workers < 1:
             raise ValueError("workers must be a positive integer")
@@ -521,6 +537,45 @@ class Pipeline:
         self.workers = workers
         # Ruta del flujo de progreso (``progreso.jsonl``); None lo desactiva.
         self.progress = progress
+        self.checkpoints = checkpoints
+
+    def _run_units[T, R](
+        self,
+        function: Callable[[T], R],
+        tasks: Sequence[T],
+        labels: Sequence[EtiquetaUnidad],
+        paths: Sequence[Path | None],
+        persist: Callable[[T, ResultadoUnidad[R]], None],
+    ) -> list[ResultadoUnidad[R]]:
+        restored = [load_result(path) for path in paths]
+        pending = [i for i, result in enumerate(restored) if result is None]
+        for label, result in zip(labels, restored, strict=True):
+            if result is not None:
+                record = result.registro
+                self._emit(
+                    "unit_finished",
+                    **label.como_dict(),
+                    state="completada",
+                    pid=record.pid,
+                    started_at=datetime.fromtimestamp(record.inicio, UTC).isoformat(),
+                    finished_at=datetime.fromtimestamp(record.fin, UTC).isoformat(),
+                    seconds=round(record.duracion_s, 3),
+                    cpu_s=record.cpu_s,
+                    error=None,
+                    code=None,
+                    reused=True,
+                )
+        fresh = ejecutar_unidades(
+            function,
+            [tasks[i] for i in pending],
+            procesos=self.workers,
+            etiquetas=[labels[i] for i in pending],
+            progreso=self.progress,
+            al_completar=persist,
+        )
+        for index, result in zip(pending, fresh, strict=True):
+            restored[index] = result
+        return cast(list[ResultadoUnidad[R]], restored)
 
     def _emit(self, event: str, /, **data: Any) -> None:
         if self.progress is not None:
@@ -664,13 +719,30 @@ class Pipeline:
             self._label("L2", task.request.sku_id, task.decision.family)
             for task in tasks
         ]
+        if self.checkpoints is not None:
+            tasks = [
+                replace(
+                    task,
+                    checkpoint=self.checkpoints.path(
+                        "L2",
+                        {
+                            "request": task.request.model_dump(mode="json"),
+                            "decision": task.decision.model_dump(mode="json"),
+                            "horizon": task.horizon,
+                            "evaluation": asdict(self.settings),
+                            "m2": self.m2_settings,
+                        },
+                    ),
+                )
+                for task in tasks
+            ]
         self._plan("L2", labels)
-        results = ejecutar_unidades(
+        results = self._run_units(
             _fit_unit,
             tasks,
-            procesos=self.workers,
-            etiquetas=labels,
-            progreso=self.progress,
+            labels,
+            [t.checkpoint for t in tasks],
+            _persist_fit,
         )
         units = _units(
             "L2",
@@ -714,13 +786,28 @@ class Pipeline:
             self._label("L3", c.selection.sku_id, c.selection.family)
             for c in fitting.candidates
         ]
+        if self.checkpoints is not None:
+            tasks = [
+                replace(
+                    task,
+                    checkpoint=self.checkpoints.path(
+                        "L3",
+                        {
+                            "selection": task.selection.model_dump(mode="json"),
+                            "series": task.series.tolist(),
+                            "evaluation": asdict(task.settings),
+                        },
+                    ),
+                )
+                for task in tasks
+            ]
         self._plan("L3", labels)
-        results = ejecutar_unidades(
+        results = self._run_units(
             _evaluate_unit,
             tasks,
-            procesos=self.workers,
-            etiquetas=labels,
-            progreso=self.progress,
+            labels,
+            [t.checkpoint for t in tasks],
+            _persist_evaluation,
         )
         units = _units(
             "L3",

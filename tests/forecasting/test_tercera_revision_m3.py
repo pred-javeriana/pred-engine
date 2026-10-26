@@ -10,6 +10,7 @@ from tests._plataforma import crear_base_plataforma
 
 from pred_engine import pipeline as modulo_pipeline
 from pred_engine.cli import main
+from pred_engine.unit_checkpoints import load_result
 
 pytestmark = pytest.mark.slow
 
@@ -99,7 +100,7 @@ def test_valor_no_finito_reservado_omite_contexto_sin_contar_fallos(tmp_path):
     )
 
 
-def test_reintento_publicado_con_ajuste_final_fallido_conserva_ejecucion(
+def test_reintento_publicado_sin_checkpoint_de_ajuste_conserva_ejecucion(
     tmp_path, monkeypatch
 ):
     root, db = tmp_path / "data", crear_base_plataforma(tmp_path / "central.db")
@@ -112,9 +113,17 @@ def test_reintento_publicado_con_ajuste_final_fallido_conserva_ejecucion(
             "SELECT estado, error_json FROM ejecuciones"
         ).fetchall()
     assert ejecucion == [("completada", None)]
+    # Sin el checkpoint ML, esa unidad necesita ajustarse de nuevo. Las demas
+    # deben restaurarse; la publicacion M3 previa sigue siendo inmutable.
+    for path in (root / "runs/corrida/checkpoints/L2").glob("*.json"):
+        checkpoint = load_result(path)
+        if checkpoint.valor.selection.family == "ml":
+            path.unlink()
     original = modulo_pipeline._fit_unit
+    called = []
 
     def ajuste_transitorio(task):
+        called.append(task.decision.family)
         if task.decision.family == "ml":
             raise RuntimeError("dependencia no disponible durante el ajuste final")
         return original(task)
@@ -122,6 +131,7 @@ def test_reintento_publicado_con_ajuste_final_fallido_conserva_ejecucion(
     monkeypatch.setattr(modulo_pipeline, "_fit_unit", ajuste_transitorio)
     # El fallo aislado de M2 se informa; la evidencia y la ejecucion publicadas no.
     assert ejecutar(source, root, db, "classical", "ml") == 8
+    assert called == ["ml"]
     with sqlite3.connect(db) as conn:
         assert {t: conn.execute(f"SELECT * FROM {t}").fetchall() for t in tablas} == (
             antes
