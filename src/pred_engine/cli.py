@@ -696,6 +696,7 @@ def _cmd_run_con_base(
         write_run,
     )
     from pred_engine.run_telemetry import ResourceSampler
+    from pred_engine.unit_checkpoints import UnitCheckpoints
 
     if args.telemetry_interval < 0:
         print("error: --telemetry-interval debe ser >= 0", file=sys.stderr)
@@ -766,6 +767,13 @@ def _cmd_run_con_base(
             hpo_root=run_dir / "hpo",
             session=run_id,
             progress=progress_path,
+            checkpoints=UnitCheckpoints(
+                run_dir / "checkpoints",
+                identity=json.dumps(
+                    {"settings": settings, "versions": library_versions()},
+                    sort_keys=True,
+                ),
+            ),
             validator=ControladorEvaluacion(
                 conn,
                 run_dir,
@@ -856,7 +864,9 @@ def _cmd_run_con_base(
     summary["files"] = sorted(path.name for path in files.values())
     summary["wall_seconds"] = metadata["wall_seconds"]
     summary["parallelism"] = {
-        stage: resumen_paralelismo([u.record for u in result.units if u.stage == stage])
+        stage: resumen_paralelismo(
+            [u.record for u in result.units if u.stage == stage and not u.reused]
+        )
         for stage in ("L2", "L3")
     }
     print(json.dumps(summary, ensure_ascii=False))

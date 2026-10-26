@@ -248,6 +248,7 @@ def write_run(
                 else round(unit.record.cpu_s, 3),
                 "error": unit.record.error,
                 "code": unit.record.codigo,
+                "reused": unit.reused,
             },
             ensure_ascii=False,
         )
@@ -393,10 +394,18 @@ def write_run(
             "candidates": procedencia,
             "parallelism": {
                 "L2": resumen_paralelismo(
-                    [u.record for u in (fitting.units if fitting else ())]
+                    [
+                        u.record
+                        for u in (fitting.units if fitting else ())
+                        if not u.reused
+                    ]
                 ),
                 "L3": resumen_paralelismo(
-                    [u.record for u in (evaluation.units if evaluation else ())]
+                    [
+                        u.record
+                        for u in (evaluation.units if evaluation else ())
+                        if not u.reused
+                    ]
                 ),
             },
             "files": {nombre: ruta.name for nombre, ruta in sorted(archivos.items())},

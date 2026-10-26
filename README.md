@@ -159,7 +159,10 @@ queda en `data/runs/{run_id}/` con el manifiesto tipado de candidatos para M3
 (`candidatos.json`), los pronósticos desde t*, la evidencia walk-forward, la
 traza de cada unidad con su modelo y el uso de CPU y memoria de cada proceso;
 `pred-engine telemetry data/runs/{run_id}` los grafica. Repetir el comando
-retoma los estudios HPO y los orígenes M3 ya confirmados. Los resultados M3
+retoma los estudios HPO y los orígenes M3 ya confirmados; ahora también restaura
+las unidades L2/L3 exitosas desde checkpoints durables, sin repetir sus ajustes
+ni evaluaciones. Ver [reanudación por unidad](docs/features/reanudacion/README.md).
+Los resultados M3
 quedan en SQLite y en exportaciones derivadas. El código de salida es `0` o
 `8` cuando la publicación tiene fallos aislados. Ver
 [EJECUCION_M0_M2.md](docs/features/backend-pipeline/EJECUCION_M0_M2.md).

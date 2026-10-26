@@ -271,7 +271,12 @@ def render_run_chart(run_dir: str | Path, output: str | Path | None = None) -> P
     directorio = Path(run_dir)
     if not (directorio / "unidades.jsonl").exists():
         raise FileNotFoundError(f"{directorio} no tiene unidades.jsonl")
-    unidades = _leer_jsonl(directorio / "unidades.jsonl")
+    # Los tiempos originales de unidades restauradas pertenecen a otro intento.
+    unidades = [
+        u
+        for u in _leer_jsonl(directorio / "unidades.jsonl")
+        if not u.get("reused", False)
+    ]
     corrida_path = directorio / "corrida.json"
     corrida = (
         json.loads(corrida_path.read_text(encoding="utf-8"))

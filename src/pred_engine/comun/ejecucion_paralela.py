@@ -22,7 +22,7 @@ from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -128,6 +128,7 @@ class RegistroUnidad:
 class ResultadoUnidad[R]:
     registro: RegistroUnidad
     valor: R | None = None
+    reutilizado: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +197,7 @@ def _ejecutar_aislada[T, R](
     etiqueta: EtiquetaUnidad | None = None,
     ruta: str | Path | None = None,
     etapa: str | None = None,
+    al_completar: Callable[[T, ResultadoUnidad[R]], None] | None = None,
 ) -> ResultadoUnidad[R]:
     """Unidad de trabajo de nivel de modulo (``pickle`` no serializa closures).
 
@@ -213,6 +215,19 @@ def _ejecutar_aislada[T, R](
             started_at=_iso(time.time()),
         )
     resultado = _correr_aislada(funcion, tarea, etapa)
+    if al_completar is not None and resultado.valor is not None:
+        try:
+            # El resultado debe quedar durable antes de anunciar su finalizacion.
+            al_completar(tarea, resultado)
+        except Exception as exc:
+            resultado = ResultadoUnidad(
+                replace(
+                    resultado.registro,
+                    estado="fallida",
+                    error=describir_error(exc),
+                    codigo=codigo_de(exc, etapa=etapa),
+                )
+            )
     if seguimiento:
         assert etiqueta is not None and ruta is not None
         _evento_fin(ruta, etiqueta, resultado.registro)
@@ -253,6 +268,7 @@ def ejecutar_unidades[T, R](
     procesos: int = 1,
     etiquetas: Sequence[EtiquetaUnidad] | None = None,
     progreso: str | Path | None = None,
+    al_completar: Callable[[T, ResultadoUnidad[R]], None] | None = None,
 ) -> list[ResultadoUnidad[R]]:
     """Ejecuta ``funcion(tarea)`` por tarea y devuelve los resultados en su orden.
 
@@ -282,6 +298,7 @@ def ejecutar_unidades[T, R](
             en_vuelo=max(1, len(tareas)),
             etiquetas=etiquetas,
             progreso=progreso,
+            al_completar=al_completar,
         )
     )
 
@@ -294,6 +311,7 @@ def iterar_unidades[T, R](
     en_vuelo: int | None = None,
     etiquetas: Sequence[EtiquetaUnidad] | None = None,
     progreso: str | Path | None = None,
+    al_completar: Callable[[T, ResultadoUnidad[R]], None] | None = None,
 ) -> Generator[ResultadoUnidad[R]]:
     """Como ``ejecutar_unidades``, pero entrega cada resultado apenas esta listo.
 
@@ -308,7 +326,7 @@ def iterar_unidades[T, R](
     limite = 2 * procesos if en_vuelo is None else en_vuelo
     if type(limite) is not int or limite < 1:
         raise ValueError(f"en_vuelo debe ser un entero >= 1; se recibio {en_vuelo!r}")
-    return _iterar(funcion, tareas, procesos, limite, etiquetas, progreso)
+    return _iterar(funcion, tareas, procesos, limite, etiquetas, progreso, al_completar)
 
 
 def _exigir_procesos(procesos: int) -> None:
@@ -323,6 +341,7 @@ def _iterar[T, R](
     limite: int,
     etiquetas: Sequence[EtiquetaUnidad] | None,
     ruta: str | Path | None,
+    al_completar: Callable[[T, ResultadoUnidad[R]], None] | None,
 ) -> Generator[ResultadoUnidad[R]]:
     def etiqueta_de(indice: int) -> EtiquetaUnidad | None:
         return None if etiquetas is None else etiquetas[indice]
@@ -333,7 +352,12 @@ def _iterar[T, R](
     if procesos == 1:
         for indice, tarea in enumerate(tareas):
             yield _ejecutar_aislada(
-                funcion, tarea, etiqueta_de(indice), ruta, etapa_de(indice)
+                funcion,
+                tarea,
+                etiqueta_de(indice),
+                ruta,
+                etapa_de(indice),
+                al_completar,
             )
         return
 
@@ -361,6 +385,7 @@ def _iterar[T, R](
                                 etiqueta_de(indice),
                                 ruta,
                                 etapa_de(indice),
+                                al_completar,
                             ),
                         )
                     )
@@ -401,9 +426,12 @@ def _enviar[T, R](
     etiqueta: EtiquetaUnidad | None,
     ruta: str | Path | None,
     etapa: str | None = None,
+    al_completar: Callable[[T, ResultadoUnidad[R]], None] | None = None,
 ) -> Future[ResultadoUnidad[R]]:
     try:
-        return ejecutor.submit(_ejecutar_aislada, funcion, tarea, etiqueta, ruta, etapa)
+        return ejecutor.submit(
+            _ejecutar_aislada, funcion, tarea, etiqueta, ruta, etapa, al_completar
+        )
     except BrokenProcessPool as exc:
         # Un hijo ya murio: la tarea queda fallida con esa causa, como las enviadas.
         futuro: Future[ResultadoUnidad[R]] = Future()

@@ -90,6 +90,7 @@ include = [
     "src/pred_engine/comun/reserva.py",
     "src/pred_engine/aumentacion/fase0.py",
     "src/pred_engine/pipeline.py",
+    "src/pred_engine/unit_checkpoints.py",
     "src/pred_engine/run_artifacts.py",
     "src/pred_engine/run_telemetry.py",
     "src/pred_engine/run_chart.py",

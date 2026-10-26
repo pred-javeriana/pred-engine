@@ -39,6 +39,7 @@ from pred_engine.optimizacion.router import (
     StrategyRegistry,
 )
 from pred_engine.pipeline import EvaluationSettings, Pipeline, RetrospectiveValidator
+from pred_engine.unit_checkpoints import UnitCheckpoints
 
 
 class ConfiguredTopologyPolicy:
@@ -82,6 +83,7 @@ def build_pipeline(
     hpo_root: str | Path | None = None,
     session: str | None = None,
     progress: str | Path | None = None,
+    checkpoints: UnitCheckpoints | None = None,
 ) -> Pipeline:
     """Compose core families; foundation is opt-in and requires the foundation extra.
 
@@ -160,5 +162,6 @@ def build_pipeline(
         validator=validator,
         workers=workers,
         progress=progress,
+        checkpoints=checkpoints,
         m2_settings={"families": list(families), "trials": n_trials, "seed": seed},
     )

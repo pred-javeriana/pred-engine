@@ -149,6 +149,19 @@ def test_sin_muestras_de_recursos_dibuja_solo_etapas_y_unidades(tmp_path):
     )
 
 
+def test_restored_units_do_not_appear_as_work_of_the_current_attempt(tmp_path):
+    folder = _corrida(tmp_path / "r")
+    path = folder / "unidades.jsonl"
+    units = [json.loads(line) for line in path.read_text().splitlines()]
+    units[0]["reused"] = True
+    units[0]["started_at"] = _iso(-86400)
+    path.write_text("".join(json.dumps(u) + "\n" for u in units))
+    root = ET.parse(render_run_chart(folder)).getroot()
+    bars = [r for r in root.iter(f"{_SVG}rect") if r.find(f"{_SVG}title") is not None]
+    assert len(bars) == 3
+    assert any("26.0 s · 3 unidades" in t for t in _textos(root))
+
+
 def test_una_corrida_sin_unidades_es_un_error(tmp_path):
     with pytest.raises(FileNotFoundError, match="unidades.jsonl"):
         render_run_chart(tmp_path)
