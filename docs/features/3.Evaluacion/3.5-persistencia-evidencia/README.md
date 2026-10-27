@@ -18,6 +18,7 @@ El motor conserva los textos canónicos:
   `origen_declarado` junto a `datos_sinteticos`.
 
 La plataforma incorpora copias exactas como migraciones 0005 a 0009.
+La plataforma aplica `esquema_m3.sql` como su migración 0005 (el comentario histórico del archivo dice 0002).
 Las versiones anteriores se conservan sin cambios. La versión vigente es 9.
 `aplicar_migraciones_m3` usa el mismo `PRAGMA user_version`. El CLI aplica las
 pendientes sobre una base existente con las migraciones previas de plataforma.
