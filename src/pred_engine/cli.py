@@ -752,14 +752,15 @@ def _cmd_run_con_base(
         fijar_identidad(run_dir, inputs["source"]["sha256"], settings)
         progress_path = run_dir / "progreso.jsonl"
         provider = _build_provider(args)[2] if args.provider is not None else None
+        evaluacion = EvaluationSettings(
+            min_train=args.min_train,
+            horizon=args.horizon,
+            step=args.step,
+            seasonality=args.seasonality,
+            metric=args.metric,
+        )
         pipeline = build_pipeline(
-            EvaluationSettings(
-                min_train=args.min_train,
-                horizon=args.horizon,
-                step=args.step,
-                seasonality=args.seasonality,
-                metric=args.metric,
-            ),
+            evaluacion,
             families=cast(tuple[PredictorFamily, ...], tuple(args.families)),
             n_trials=args.trials,
             seed=args.seed,
@@ -820,6 +821,10 @@ def _cmd_run_con_base(
     metadata = {
         "inputs": inputs,
         "settings": settings | {"workers": args.workers},
+        "evaluation": {
+            "aggregation": evaluacion.aggregation,
+            "trim": evaluacion.trim,
+        },
         "wall_seconds": round(time.time() - started, 3),
         "telemetry": sampler.summary() if sampler is not None else None,
     }
