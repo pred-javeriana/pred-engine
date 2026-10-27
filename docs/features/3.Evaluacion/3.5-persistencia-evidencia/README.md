@@ -16,10 +16,13 @@ El motor conserva los textos canónicos:
 - `esquema_m3_0004.sql`: distingue ausencia de declaración de datos reales.
 - `esquema_m3_0005.sql`: la vista `evidencia_publicada` expone
   `origen_declarado` junto a `datos_sinteticos`.
+- `esquema_m3_0006.sql`: los datos que M4 muestra y M3 publica con la
+  corrida: corte, lanzamientos tardíos, demanda observada y la vista
+  `m3_campeones`.
 
-La plataforma incorpora copias exactas como migraciones 0005 a 0009.
+La plataforma incorpora copias exactas como migraciones 0005 a 0010.
 La plataforma aplica `esquema_m3.sql` como su migración 0005 (el comentario histórico del archivo dice 0002).
-Las versiones anteriores se conservan sin cambios. La versión vigente es 9.
+Las versiones anteriores se conservan sin cambios. La versión vigente es 10.
 `aplicar_migraciones_m3` usa el mismo `PRAGMA user_version`. El CLI aplica las
 pendientes sobre una base existente con las migraciones previas de plataforma.
 No modifica las versiones 0001 a 0004 y rechaza una versión desconocida.
@@ -41,10 +44,27 @@ vigente y su motivo se documentan en ADR-021.
 | `m3_categorias` | Selección, exclusiones, medianas y conteos de veredictos |
 | `m3_cartera` | Distribuciones precalculadas por clase, familia y métrica |
 | `m3_veredictos` | Cinco veredictos por SKU, cobertura, razón, incertidumbre y HLN-DM/BH aparte |
+| `m3_cortes` | Corte t* con que L2 separó la reserva, leído de los metadatos de M1 |
+| `m3_lanzamientos_tardios` | Productos que M1 excluyó por lanzarse después del corte, con su causa |
+| `m3_observaciones` | Demanda real de cada día de la reserva por SKU; NULL sin observación |
+| `m3_campeones` (vista) | SKU por familia campeona, evaluados y no evaluados, por clase y cartera |
 
 `m3_cartera` publica número de SKU e instancias, valores calculables y no
 calculables, media, mediana y percentiles 25 y 75. M4 los lee sin calcular
 métricas evaluativas.
+
+El corte y los lanzamientos tardíos se fijan en la transacción del protocolo,
+con los mismos t* y exclusiones de M1 que usó L2, sin recalcularlos. Un SKU
+lanzado después del corte nunca entra en `m3_skus`; dos disparadores lo
+impiden en ambos sentidos. La demanda observada se escribe con la evaluación,
+desde la misma reserva que puntuó las métricas, para el calendario completo de
+la reserva y para cada SKU del manifiesto. Cada fecha pronosticada tiene su
+fila. `m3_campeones` es una vista sobre `m3_veredictos`: funciona también para
+corridas publicadas antes de la versión 10 y no tiene escritura propia. Las
+filas con `sku_class` NULL son la cartera completa.
+
+Una corrida que pasó de EVALUADA antes de la versión 10 no recibe corte ni
+demanda observada al reanudarse: M4 responde `metadata_missing` para ella.
 
 La identidad usa la referencia M1, configuración, código, corte y versiones de
 política y métricas. No añade otra huella del contenido de la serie. La FK de
@@ -93,7 +113,10 @@ vuelven a ejecutar modelos ni a seleccionar campeones.
 - `tests/forecasting/persistencia_evidencia/`: estados, integridad,
   idempotencia, migraciones y exportación.
 - `tests/forecasting/test_control_evaluacion.py`: flujo real desde M2 y
-  recuperación antes y después de confirmar unidades.
+  recuperación antes y después de confirmar unidades, también del corte y de
+  la demanda observada.
+- `tests/forecasting/test_publicacion_m4.py`: `pred-engine run` publica corte,
+  lanzamientos tardíos, demanda observada y campeones.
 - Pruebas DAL de plataforma: visibilidad solo después de publicar y lecturas
   que no modifican la base.
 
