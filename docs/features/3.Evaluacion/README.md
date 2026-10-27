@@ -112,8 +112,9 @@ el manifiesto autorizado y se consulta antes de restaurar un archivo perdido.
 | 3.7 | Trazabilidad, límites y auditoría | este documento, ADR-021 y documentos de cada capacidad | suite completa y corrida coordinada de integración |
 
 Las rutas de código son relativas a `src/pred_engine/`. La plataforma consume
-la evidencia mediante `pred_platform.dal.evidencia.read_m3_evidence`, sin
-recalcular métricas. Las carpetas de `analisis/` pertenecen a M4.
+la evidencia con las operaciones M3 de su `DataRepository` (contrato de lectura
+M3 v2 de pred-docs), sin recalcular métricas. M4 vive en pred-platform; el
+motor no contiene código de M4.
 
 ## Recuperación
 
