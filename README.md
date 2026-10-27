@@ -41,6 +41,15 @@ uv run pytest -m "not slow"    # fast suite with coverage gate (CI mode)
 uv run pytest -m slow --no-cov # slow tests (benchmarks / model fitting)
 ```
 
+Las pruebas nunca descargan pesos: `tests/conftest.py` fija `HF_HUB_OFFLINE=1`.
+Con el extra `foundation`, las pruebas lentas de Chronos-2 leen los pesos de la
+caché de Hugging Face y fallan con `no se pudo cargar amazon/chronos-2@...` si
+no están. Prepárelos una vez antes de correrlas:
+
+```bash
+uv run python -c "from pred_engine.comun.modelos.modelos_fundacionales import CHRONOS2_ZERO_SHOT, cargar_pipeline; cargar_pipeline(CHRONOS2_ZERO_SHOT)"
+```
+
 ### Equipos con pocos núcleos (4 núcleos, 8 GB)
 
 La sesión de pruebas ya limita la CPU: `tests/conftest.py` fija una hebra de
