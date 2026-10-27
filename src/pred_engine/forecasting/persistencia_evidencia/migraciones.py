@@ -101,3 +101,19 @@ def abrir_base_plataforma(ruta: str | Path) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+@contextmanager
+def abrir_base_lectura(ruta: str | Path) -> Iterator[sqlite3.Connection]:
+    """Abre una base existente en modo ro: no aplica migraciones ni escribe."""
+    path = Path(ruta).expanduser().resolve()
+    try:
+        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=30)
+    except sqlite3.OperationalError as exc:
+        raise BasePlataformaError(
+            f"no existe o no se puede abrir la base de la plataforma: {path}"
+        ) from exc
+    try:
+        yield conn
+    finally:
+        conn.close()

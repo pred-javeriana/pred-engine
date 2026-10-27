@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pred_engine.comun.procedencia import resolver_origen
+from pred_engine.comun.procedencia import origen_ingesta, resolver_origen
 from pred_engine.forecasting.persistencia_evidencia.repositorio import _transaccion
 
 if TYPE_CHECKING:
@@ -33,67 +33,20 @@ _POR_OMISION = {"families": ["classical", "ml", "dl"], "trials": None}
 AJUSTES_OPCIONALES = ("provider", "model", "dm_min_origins", "code")
 
 
-def origen_registrado(conn: sqlite3.Connection, sha: str) -> bool | None:
-    """Solo una declaracion conocida puede fijar el origen de una ingesta."""
-    origenes = {
-        bool(r[0])
-        for r in conn.execute(
-            "SELECT datos_sinteticos FROM m3_ingestas "
-            "WHERE ingesta_sha256=?1 AND origen_declarado=1 "
-            "UNION SELECT datos_sinteticos FROM m3_corridas "
-            "WHERE ingesta_sha256=?1 AND origen_declarado=1",
-            (sha,),
-        )
-    }
-    if len(origenes) > 1:
-        raise ValueError("la ingesta tiene origenes incompatibles")
-    return next(iter(origenes), None)
-
-
-def origen_huella(conn: sqlite3.Connection, ingesta_ref_m1: str) -> bool | None:
-    """Origen declarado de unos bytes Parquet, sea cual sea su ingesta."""
-    origenes = {
-        bool(r[0])
-        for r in conn.execute(
-            "SELECT datos_sinteticos FROM m3_ingestas "
-            "WHERE ingesta_ref_m1 = ? AND origen_declarado = 1",
-            (ingesta_ref_m1,),
-        )
-    }
-    if len(origenes) > 1:
-        raise ValueError("la ingesta tiene origenes incompatibles")
-    return next(iter(origenes), None)
-
-
 def buscar_ingesta(
     conn: sqlite3.Connection, parquet: Path, data_root: Path, ingesta_ref_m1: str
-) -> tuple[str, bool | None] | None:
-    """Reusa el CSV original; las rutas relativas pertenecen a data_root.
+) -> str | None:
+    """Ingesta fuente de un Parquet sin CSV; las rutas relativas son de data_root.
 
-    El origen ya declarado para esos mismos bytes se conserva aunque varias
-    ingestas compartan la huella o ninguna se identifique por su ruta.
+    Solo identifica la ingesta. Su origen lo resuelve ``origen_ingesta``, que
+    tambien hereda el de otras ingestas que publicaron los mismos bytes.
     """
-    por_bytes = origen_huella(conn, ingesta_ref_m1)
-    previa = _buscar_ingesta(conn, parquet, data_root, ingesta_ref_m1)
-    if previa is None:
-        return None if por_bytes is None else (ingesta_ref_m1, por_bytes)
-    return previa[0], resolver_origen(previa[1], por_bytes)
-
-
-def _buscar_ingesta(
-    conn: sqlite3.Connection, parquet: Path, data_root: Path, ingesta_ref_m1: str
-) -> tuple[str, bool | None] | None:
     exactas = conn.execute(
-        "SELECT ingesta_sha256, datos_sinteticos, origen_declarado FROM m3_ingestas "
-        "WHERE ingesta_ref_m1 = ?",
+        "SELECT ingesta_sha256 FROM m3_ingestas WHERE ingesta_ref_m1 = ?",
         (ingesta_ref_m1,),
     ).fetchall()
     if len(exactas) == 1:
-        from pred_engine.ingesta.informe import origen_informe
-
-        sha = exactas[0][0]
-        conocida = origen_registrado(conn, sha)
-        return sha, resolver_origen(conocida, origen_informe(data_root, sha))
+        return exactas[0][0]
     destino = parquet.expanduser().resolve()
     candidatas = set()
     for sha, ruta in conn.execute(
@@ -107,20 +60,16 @@ def _buscar_ingesta(
     if len(candidatas) > 1:
         raise ValueError("la ruta Parquet corresponde a varias ingestas sin huella M1")
     sha = next(iter(candidatas), None)
-    if sha is not None and not _verificar_contenido(
+    # Sin ninguna huella, la ruta no prueba que estos bytes sean esa ingesta.
+    if sha is not None and _verificar_contenido(
         conn, sha, data_root, ingesta_ref_m1, destino
     ):
-        # Sin ninguna huella, la ruta no prueba que estos bytes sean esa ingesta.
-        sha = None
-    conocida = origen_registrado(conn, sha) if sha is not None else None
-    if sha is not None and conocida is not None:
-        return sha, conocida
+        return sha
     from pred_engine.ingesta.informe import IngestReportFile
 
-    declaradas = set()
-    # Un archivo ajeno no es un informe M1. Si ya se conoce la fuente, solo
-    # su informe canonico puede aportar procedencia y se valida estrictamente.
-    patron = f"{sha}.json" if sha is not None else "[0-9a-f]" * 64 + ".json"
+    # Un archivo ajeno no es un informe M1 y cada informe se valida estrictamente.
+    patron = "[0-9a-f]" * 64 + ".json"
+    publicadas: dict[str, bool | None] = {}
     for path in (data_root / "ingestas").glob(patron):
         report = IngestReportFile.model_validate_json(path.read_text())
         if (
@@ -130,15 +79,15 @@ def _buscar_ingesta(
         ):
             if report.ingest_id != report.source_file.sha256:
                 raise ValueError("la procedencia M1 tiene identidades incompatibles")
-            declaradas.add((report.ingest_id, report.source_file.datos_sinteticos))
-    if len(declaradas) > 1:
+            publicadas[report.ingest_id] = report.source_file.datos_sinteticos
+    # Varias ingestas pueden publicar los mismos bytes. Una sin declaracion no
+    # compite con la unica que declaro su origen.
+    declaradas = [i for i, origen in publicadas.items() if origen is not None]
+    if len(publicadas) > 1 and len(declaradas) != 1:
         raise ValueError("el Parquet tiene varias procedencias M1 declaradas")
-    if declaradas:
-        declarada = declaradas.pop()
-        if sha is not None and sha != declarada[0]:
-            raise ValueError("la referencia de plataforma difiere de la procedencia M1")
-        return declarada
-    return (sha, None) if sha is not None else None
+    if publicadas:
+        return declaradas[0] if declaradas else next(iter(publicadas))
+    return None
 
 
 def origen_conocido(
@@ -149,16 +98,17 @@ def origen_conocido(
     data_root: Path,
     ingesta_ref_m1: str,
 ) -> tuple[str, bool | None]:
-    """Fuente M1 y el origen que ya declararon la base o su informe canonico."""
-    from pred_engine.ingesta.informe import origen_informe
-
-    if fuente_sha256 is None:
-        previa = buscar_ingesta(conn, parquet, data_root, ingesta_ref_m1)
-        return previa if previa is not None else (ingesta_ref_m1, None)
-    conocida = resolver_origen(
-        origen_registrado(conn, fuente_sha256), origen_informe(data_root, fuente_sha256)
+    """Fuente M1 y el origen que ya declararon la base o los informes M1."""
+    sha = fuente_sha256
+    if sha is None:
+        sha = buscar_ingesta(conn, parquet, data_root, ingesta_ref_m1) or ingesta_ref_m1
+    return sha, origen_ingesta(
+        conn,
+        data_root=data_root,
+        ingesta_sha256=sha,
+        declarada=None,
+        ingesta_ref_m1=ingesta_ref_m1,
     )
-    return fuente_sha256, resolver_origen(conocida, origen_huella(conn, ingesta_ref_m1))
 
 
 def _ajustes(parametros: Mapping[str, Any]) -> dict[str, Any]:

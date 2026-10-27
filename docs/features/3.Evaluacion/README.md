@@ -62,6 +62,29 @@ registrar la ejecución.
 - Un pipeline de biblioteca sin validador configurado puede conservar L4
   bloqueada. No representa una evaluación realizada.
 
+Un solo veredicto resuelve el origen: `origen_ingesta`
+(`pred_engine.comun.procedencia`). Une las declaraciones de `m3_ingestas` y
+`m3_corridas` con `origen_declarado=1`, el informe M1 de la ingesta, los
+informes aceptados que publicaron los mismos bytes Parquet y el
+`datos_sinteticos` de la configuración de cada ejecución de esas ingestas.
+Una ingesta sin declaración hereda el origen de otra que publicó los mismos
+bytes. `ingest` y `classify` rechazan una declaración contraria a la de otro
+informe aceptado de esos bytes: el informe queda `rejected` con el código
+`provenance.origin_conflict`. `run` y `ControladorEvaluacion` usan el mismo
+veredicto. La plataforma lo consulta antes de encolar una corrida:
+
+```bash
+pred-engine origen --ingest-id <sha> [--datos-sinteticos|--datos-reales] \
+  [--data-root data] [--db-path data/pred.db]
+```
+
+El comando abre la base en modo de solo lectura, no aplica migraciones y no
+escribe nada. Imprime una línea JSON `{"ingest_id", "datos_sinteticos"}` con
+`true`, `false` o `null` y sale con 0. Un conflicto imprime
+`{"code": "provenance.origin_conflict", "detail"}` y sale con 3; otro error
+sale con 1. En frío tarda alrededor de 1 s, sobre todo por las importaciones
+del CLI.
+
 Los días reservados sin observación producen exclusiones de datos, no fallos
 técnicos. Se omiten los orígenes sin contexto y se identifican las ventanas
 sin objetivos completos. No se imputan ceros ni se acorta H. La ejecución de
