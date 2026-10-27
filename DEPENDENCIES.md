@@ -16,10 +16,14 @@ Dependency manifest for `pred-engine` — updated on every dependency change
 | optuna | >=4.0 | Sampler TPE multivariado y `Study`/pruner del motor de HPO (`optimizacion.optimizadores.HPO`) — ver ADR-02-006 |
 | psutil | >=5.9 | CPU y memoria por proceso durante `pred-engine run` (`run_telemetry`, `recursos.jsonl`) |
 
-## Optional extra `foundation`
+## Extra `foundation`
 
-Instalar con `uv sync --extra foundation`. CI no lo instala: las pruebas del
-modelo real llevan `importorskip` y `@pytest.mark.slow`.
+`pred-engine run` corre la familia `foundation` por defecto, así que la
+instalación del README incluye este extra:
+`uv sync --frozen --extra dev --extra foundation`. Sin el extra, la corrida
+necesita `--no-foundation`. CI no lo instala y su corrida de humo pasa
+`--no-foundation`: las pruebas del modelo real llevan `importorskip` y
+`@pytest.mark.slow`.
 
 | Package | Version constraint | Purpose |
 |---------|-------------------|---------|
@@ -27,7 +31,9 @@ modelo real llevan `importorskip` y `@pytest.mark.slow`.
 | torch | >=2.2,<3 | Backend de inferencia de Chronos-2 (CPU, fp32, algoritmos deterministas) |
 
 Pesos: `amazon/chronos-2` (Apache-2.0) en la revision fijada por
-`CHRONOS2_ZERO_SHOT.revision`; se descargan una vez a la cache de Hugging Face.
+`CHRONOS2_ZERO_SHOT.revision`. La primera corrida los descarga una vez a la
+cache de Hugging Face (`~/.cache/huggingface`, o `HF_HOME`) antes de L1; las
+siguientes los leen de esa cache, tambien sin red con `HF_HUB_OFFLINE=1`.
 
 > Direct runtime dependencies are added here as each layer is implemented.
 > Vendor SDKs (google-genai, openai, anthropic) are intentionally not used;

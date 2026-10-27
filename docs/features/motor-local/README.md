@@ -13,9 +13,11 @@ rutas cambiadas ──> niveles ──> corridas ──> recibo ──> comentar
 
 ## Uso
 
-Requisitos: `uv sync --frozen --extra dev`, una copia de `pred-platform` en
-`../pred-platform` (crea la base central y tiene el caso de integración) y,
-para publicar, `gh` con sesión iniciada.
+Requisitos: `uv sync --frozen --extra dev --extra foundation`, una copia de
+`pred-platform` en `../pred-platform` (crea la base central y tiene el caso de
+integración) y, para publicar, `gh` con sesión iniciada. El nivel `muestra22`
+corre Chronos-2: la primera corrida descarga sus pesos a la caché de Hugging
+Face.
 
 1. Haga commit de todo: el comando se niega a correr con cambios sin commit,
    porque el recibo nombra un solo commit.
@@ -45,10 +47,14 @@ regla exige todos los niveles, así una carpeta nueva no evita la corrida.
 | --- | --- | --- | --- | --- |
 | ninguno | `docs/**`, `**/*.md`, `tests/**`, `.github/**` y archivos de repositorio | ninguna | siempre | 0 |
 | `humo` | M0 (`aumentacion/`), telemetría, `verify.py`, `comun/llm/`, `Makefile` | la corrida de CI: `tests/fixtures/semilla_inventario.csv` con M0 `mbb-directo` (8 SKU) | salida 0 u 8, telemetría y `verificar_corrida.py` | 30 s |
-| `muestra22` | el resto de `src/pred_engine/` (L1-L4), `pyproject.toml`, `uv.lock`, `.python-version` | `timing22.csv`: 22 productos reales, `--datos-reales` y ajustes por defecto | salida 0 u 8, `verificar_corrida.py --datos-reales` y un veredicto por producto | 19 min |
+| `muestra22` | el resto de `src/pred_engine/` (L1-L4), `pyproject.toml`, `uv.lock`, `.python-version` | `timing22.csv`: 22 productos reales, `--datos-reales` y ajustes por defecto, con las cuatro familias | salida 0 u 8, `verificar_corrida.py --datos-reales` y un veredicto por producto | 33 min |
 | `plataforma` | `forecasting/persistencia_evidencia/` (junto con `muestra22`) | `tests/test_integracion_motor.py` de pred-platform con este motor | pytest termina sin fallas ni pruebas omitidas | 16 s |
 
 La corrida de los 3.703 productos sigue siendo manual.
+
+Con Chronos-2, `muestra22` tardó 1.996 s fijado a 4 núcleos (antes, sin
+Chronos-2, 1.128 s). El motor usó como máximo 3,9 GB de memoria: 1,2 GB el
+proceso principal y 1,4 GB cada uno de los 2 procesos.
 
 ## Recibo
 
@@ -58,14 +64,14 @@ El recibo queda en `local_data/recibos/<commit>.txt`. Un recibo con
 ```text
 recibo-motor-local/1
 repo: pred-engine
-commit: 0915ede529be21176c43bf2bc551733caf18e887
+commit: 8fb50bbd75011ea0c2513abb1cbade6a226879c8
 niveles: muestra22
 resultado: ok
-motor: 0915ede529be21176c43bf2bc551733caf18e887
-equipo: 4 nucleos, 8 GiB, --workers 2, hebras 4
-fecha: 2026-10-27T18:45Z
+motor: 8fb50bbd75011ea0c2513abb1cbade6a226879c8
+equipo: 4 nucleos, 30 GiB, --workers 2, hebras 4
+fecha: 2026-10-27T21:47Z
 
-muestra22: ok salida=8 duracion_s=1128 muestra=m22-941198f5af6e veredictos=EXPLORATORIO:3,FALLO_TECNICO:1,VALIDADO:18 huella=f26edda9c213
+muestra22: ok salida=8 duracion_s=1996 muestra=m22-941198f5af6e veredictos=VALIDADO:22 huella=563207722702
 ```
 
 `muestra` identifica la entrada: los primeros 12 dígitos del SHA-256 del
