@@ -1,9 +1,10 @@
 """Pronosticador Chronos-2 zero-shot para el contrato `Pronosticador`.
 
 `fit` NO entrena: guarda el contexto. Los pesos vienen preentrenados y no se
-modifican (ADR-015). Asi el Modulo 3 puede enchufar este modelo al mismo
-Walk-Forward que las demas familias sin que `comun.walkforward` sepa que
-existe.
+modifican (`CHRONOS2_ZERO_SHOT` en `configuracion.py`; contrato en
+`docs/features/3.Evaluacion/3.2-adaptador-candidatos/README.md`). Asi el
+Modulo 3 puede enchufar este modelo al mismo Walk-Forward que las demas
+familias sin que `comun.walkforward` sepa que existe.
 """
 
 from __future__ import annotations
