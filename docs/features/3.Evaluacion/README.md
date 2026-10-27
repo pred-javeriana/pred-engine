@@ -113,8 +113,9 @@ el manifiesto autorizado y se consulta antes de restaurar un archivo perdido.
 
 Las rutas de código son relativas a `src/pred_engine/`. La plataforma consume
 la evidencia con las operaciones M3 de su `DataRepository` (contrato de lectura
-M3 v2 de pred-docs), sin recalcular métricas. M4 vive en pred-platform; el
-motor no contiene código de M4.
+M3 v2 de pred-docs), sin recalcular métricas. El motor calcula al publicar M3
+los datos que M4 muestra (`forecasting/persistencia_evidencia`); pred-platform
+los lee y los presenta.
 
 ## Recuperación
 
