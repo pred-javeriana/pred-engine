@@ -50,8 +50,11 @@ from pred_engine.comun.walkforward.protocolos import (
 from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredicto
 from pred_engine.ingesta.categorizacion import classify_panel
 from pred_engine.ingesta.informe import ingest_csv_with_report
-from pred_engine.ingesta.pipeline import run_verify_parquet_with_sha256
-from pred_engine.ingesta.salida import validate_output_contract
+from pred_engine.ingesta.salida import (
+    ClassifiedPublication,
+    read_classified_publication,
+    validate_output_contract,
+)
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degenerada
 from pred_engine.optimizacion.router import SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
@@ -152,8 +155,8 @@ class EvaluationSettings:
 class IngestionArtifact:
     parquet_path: Path
     panel: pd.DataFrame
-    # Metricas por SKU de la clasificacion (G1); vacio si la entrada fue un Parquet
-    # ya clasificado, que no las lleva.
+    # Metricas por SKU de la clasificacion (G1) con el corte de la publicacion
+    # leida; vacio en un artefacto construido a mano.
     topology: tuple[TopologyMetrics, ...] = ()
     source_sha256: str | None = None
     # Origen declarado en la entrada (CSV resuelto con su informe M1, o Parquet).
@@ -380,6 +383,29 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
         for unit in result.failures
     ]
     return summary
+
+
+def _ingestion_artifact(
+    path: Path,
+    publication: ClassifiedPublication,
+    *,
+    source_sha256: str | None = None,
+    datos_sinteticos: bool | None = None,
+) -> IngestionArtifact:
+    """Artefacto L1 cuyas filas, huella, corte, exclusiones y topologia salen
+    de una sola lectura de la publicacion."""
+    meta = publication.metadata
+    topologia = classify_panel(publication.frame, corte=meta.reserve)
+    return IngestionArtifact(
+        path,
+        publication.frame,
+        topology=tuple(topologia.metrics),
+        source_sha256=source_sha256,
+        datos_sinteticos=datos_sinteticos,
+        parquet_sha256=publication.sha256,
+        reserve=meta.reserve,
+        exclusions=meta.exclusions,
+    )
 
 
 class StageUnavailableError(RuntimeError):
@@ -622,17 +648,10 @@ class Pipeline:
         """L1: reuse current ingestion and consume its published 1.4 contract."""
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
-            panel, huella = run_verify_parquet_with_sha256(path)
-            meta = leer_metadatos_parquet(path)
-            topologia = classify_panel(panel, corte=meta.reserve)
-            return IngestionArtifact(
+            return _ingestion_artifact(
                 path,
-                panel,
-                topology=tuple(topologia.metrics),
+                read_classified_publication(path),
                 datos_sinteticos=request.datos_sinteticos,
-                parquet_sha256=huella,
-                reserve=meta.reserve,
-                exclusions=meta.exclusions,
             )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
@@ -645,17 +664,14 @@ class Pipeline:
         if salida.error is not None:
             raise salida.error
         assert salida.result is not None
+        # Se usa la publicacion releida, no el artefacto de la importacion en
+        # memoria: otra publicacion pudo sustituir el archivo entre ambos pasos.
         path = salida.result.parquet_path
-        panel, huella = run_verify_parquet_with_sha256(path)
-        return IngestionArtifact(
+        return _ingestion_artifact(
             path,
-            panel,
-            topology=tuple(salida.result.topology.metrics),
+            read_classified_publication(path),
             source_sha256=salida.report.ingest_id,
             datos_sinteticos=salida.report.source_file.datos_sinteticos,
-            parquet_sha256=huella,
-            reserve=salida.result.topology.reserve,
-            exclusions=salida.result.topology.exclusions,
         )
 
     def _exclusion_cause(

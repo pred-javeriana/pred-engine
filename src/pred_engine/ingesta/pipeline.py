@@ -10,7 +10,6 @@ import pandas as pd
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.logger import get_logger, log_ingestion_event
-from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import (
     TopologyArtifact,
@@ -27,13 +26,13 @@ from pred_engine.ingesta.data import (
 from pred_engine.ingesta.lector import (
     ExtractionArtifact,
     extract_csv,
-    hash_sha256_archivo,
 )
 from pred_engine.ingesta.salida import (
     evaluar_precondiciones_y_exclusiones,
     publish_classified_panel,
     read_classified_parquet,
     read_classified_parquet_with_sha256,
+    read_classified_publication,
 )
 from pred_engine.ingesta.sonda import DiagnosticArtifact, probe_headers
 from pred_engine.ingesta.validador_formato import validate_aligned_frame
@@ -203,14 +202,13 @@ def run_classify_parquet(
     *,
     data_root: str | Path | None = None,
 ) -> tuple[TopologyArtifact, Path]:
-    """Clasifica un panel Parquet 1.2 (columnas canonicas). Sin LLM."""
+    """Reclasifica un artefacto 1.4 publicado con su corte almacenado. Sin LLM."""
     layout = ensure_data_layout(data_root)
     origen = Path(parquet_path).expanduser().resolve()
-    if not origen.is_file():
-        raise FileNotFoundError(origen)
-    meta = leer_metadatos_parquet(origen)
-    marco = pd.read_parquet(origen, engine="pyarrow")
-    canonico = select_canonical_columns(marco)
+    # Filas, huella, corte y exclusiones salen de una sola lectura del archivo.
+    publicacion = read_classified_publication(origen)
+    meta = publicacion.metadata
+    canonico = select_canonical_columns(publicacion.frame)
     topologia = _clasificar_panel_diario(
         canonico, corte=meta.reserve, exclusions=meta.exclusions
     )
@@ -220,7 +218,7 @@ def run_classify_parquet(
         topologia,
         destino,
         data_root=layout.root,
-        file_hash=hash_sha256_archivo(origen),
+        file_hash=publicacion.sha256,
         mensaje="Handoff 1.4 desde Parquet completado",
         reserve=meta.reserve,
         exclusions=meta.exclusions,

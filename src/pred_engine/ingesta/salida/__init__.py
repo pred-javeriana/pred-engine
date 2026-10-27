@@ -13,9 +13,11 @@ from pred_engine.ingesta.salida.precondiciones import (
 )
 from pred_engine.ingesta.salida.preservacion import require_panel_preserved
 from pred_engine.ingesta.salida.publicador import (
+    ClassifiedPublication,
     publish_classified_panel,
     read_classified_parquet,
     read_classified_parquet_with_sha256,
+    read_classified_publication,
 )
 from pred_engine.ingesta.salida.validador import (
     normalize_output_frame,
@@ -23,6 +25,7 @@ from pred_engine.ingesta.salida.validador import (
 )
 
 __all__ = [
+    "ClassifiedPublication",
     "HandoffPreconditionError",
     "MissingCutoffMetadataError",
     "OutputContractError",
@@ -33,6 +36,7 @@ __all__ = [
     "publish_classified_panel",
     "read_classified_parquet",
     "read_classified_parquet_with_sha256",
+    "read_classified_publication",
     "require_panel_preserved",
     "require_positive_demand",
     "validate_output_contract",

@@ -12,7 +12,9 @@ principal stage.
   late-launch exclusion and the five-column immutable Parquet contract. The cutoff
   t* and exclusions are stored in schema key-value metadata (`pred_engine`). A
   classified Parquet without this metadata is refused with an error to re-import
-  from the CSV.
+  from the CSV. One read of the published file supplies its rows, SHA-256, t*,
+  exclusions and topology, so a file replaced at the same path never mixes two
+  publications.
 - **L2:** topology routing, per-family HPO, fitting on history <= t* (read directly
   from file metadata) and the forecast from t*. Excluded products from L1 are
   recorded as 'sin historia admisible: lanzado despues del corte'. Each SKU/family

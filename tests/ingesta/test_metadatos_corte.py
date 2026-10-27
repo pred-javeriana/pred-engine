@@ -10,12 +10,16 @@ Cubre los criterios de aceptacion y casos borde del rediseño F4:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
+from typing import Any, TypeVar, cast
 
 import pandas as pd
 import pyarrow as pa
@@ -36,6 +40,8 @@ from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.pipeline import run_classify_parquet
 from pred_engine.pipeline import PipelineInput
 from pred_engine.verify import verification_pipeline
+
+T = TypeVar("T")
 
 
 def _generar_csv_con_producto_tardio(path: Path) -> Path:
@@ -529,3 +535,177 @@ def test_s1_verify_rechaza_parquet_sin_metadatos(tmp_path: Path) -> None:
     assert proceso.returncode == 6
     assert "re-import from the CSV" in proceso.stderr
     assert "contrato_1_4: accepted" not in proceso.stdout
+
+
+def _generar_csv_sin_tardios(path: Path, dias: int) -> Path:
+    """Dos productos con demanda positiva todos los dias desde 2024-01-01."""
+    filas = []
+    for i, fecha in enumerate(pd.date_range("2024-01-01", periods=dias)):
+        filas.append(
+            {
+                "sku_id": "SKU-ADMITIDO",
+                "timestamp": fecha,
+                "demand_qty": 100.0 + i,
+                "lead_time_days": 3,
+            }
+        )
+        filas.append(
+            {
+                "sku_id": "SKU-OTRO",
+                "timestamp": fecha,
+                "demand_qty": 15.0 + i % 3,
+                "lead_time_days": 3,
+            }
+        )
+    pd.DataFrame(filas).to_csv(path, index=False)
+    return path
+
+
+@contextmanager
+def _reemplazar_en_primera_lectura(
+    vivo: Path, reemplazo: Path, *, antes: bool
+) -> Iterator[list[str]]:
+    """Sustituye ``vivo`` por otra publicacion valida en su primera lectura.
+
+    Con ``antes`` la sustitucion ocurre justo antes de esa lectura; si no, justo
+    despues, de modo que toda lectura posterior de la ruta ve otra publicacion.
+    """
+    disparos: list[str] = []
+    original_bytes = Path.read_bytes
+    original_init = pq.ParquetFile.__init__
+    original_pandas = pd.read_parquet
+
+    def es_vivo(fuente: object) -> bool:
+        return isinstance(fuente, str | os.PathLike) and (
+            Path(fuente).expanduser().resolve() == vivo.resolve()
+        )
+
+    def leer(api: str, fuente: object, lectura: Callable[[], T]) -> T:
+        if disparos or not es_vivo(fuente):
+            return lectura()
+        if antes:
+            disparos.append(api)
+            shutil.copyfile(reemplazo, vivo)
+            return lectura()
+        valor = lectura()
+        disparos.append(api)
+        shutil.copyfile(reemplazo, vivo)
+        return valor
+
+    def read_bytes(self: Path) -> bytes:
+        return leer("Path.read_bytes", self, lambda: original_bytes(self))
+
+    def init(self: pq.ParquetFile, source: Any, *args: Any, **kwargs: Any) -> None:
+        leer(
+            "ParquetFile",
+            source,
+            lambda: original_init(self, source, *args, **kwargs),
+        )
+
+    def read_parquet(path: Any, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        return leer(
+            "read_parquet",
+            path,
+            lambda: original_pandas(path, *args, **kwargs),
+        )
+
+    with pytest.MonkeyPatch.context() as parche:
+        parche.setattr(Path, "read_bytes", read_bytes)
+        parche.setattr(pq.ParquetFile, "__init__", init)
+        parche.setattr(pd, "read_parquet", read_parquet)
+        yield disparos
+
+
+def _demanda(marco: pd.DataFrame, sku_id: str, hasta: pd.Timestamp) -> list[float]:
+    fila = marco.loc[(marco["sku_id"] == sku_id) & (marco["timestamp"] <= hasta)]
+    return fila.sort_values("timestamp")["demand_qty"].astype(float).tolist()
+
+
+@pytest.mark.parametrize(
+    "ruta", ["biblioteca_parquet", "reclasificacion_parquet", "biblioteca_csv"]
+)
+def test_s2_lectura_unica_no_mezcla_publicaciones(tmp_path: Path, ruta: str) -> None:
+    """Una publicacion sustituida entre lecturas no mezcla filas, huella y corte."""
+    # Publicacion A: 100 dias, t*=2024-03-20, SKU-TARDIO excluido.
+    csv_a = _generar_csv_con_producto_tardio(tmp_path / "panel.csv")
+    assert (
+        cli.main(["classify", "--csv", str(csv_a), "--data-root", str(tmp_path / "a")])
+        == 0
+    )
+    # Publicacion B, con el mismo nombre: 125 dias, otro t* y sin exclusiones.
+    (tmp_path / "fuente_b").mkdir()
+    csv_b = _generar_csv_sin_tardios(tmp_path / "fuente_b" / "panel.csv", 125)
+    assert (
+        cli.main(["classify", "--csv", str(csv_b), "--data-root", str(tmp_path / "b")])
+        == 0
+    )
+    pub_a = tmp_path / "a" / "processed" / "panel.parquet"
+    pub_b = tmp_path / "b" / "processed" / "panel.parquet"
+    meta_a, meta_b = leer_metadatos_parquet(pub_a), leer_metadatos_parquet(pub_b)
+    assert meta_a.t_star == pd.Timestamp("2024-03-20")
+    assert meta_b.t_star == pd.Timestamp("2024-04-09")
+    filas_a, filas_b = pd.read_parquet(pub_a), pd.read_parquet(pub_b)
+    sha_b = hashlib.sha256(pub_b.read_bytes()).hexdigest()
+
+    if ruta == "reclasificacion_parquet":
+        vivo = tmp_path / "vivo" / "panel.parquet"
+        vivo.parent.mkdir()
+        shutil.copyfile(pub_a, vivo)
+        salida = tmp_path / "reclasificado"
+        with _reemplazar_en_primera_lectura(vivo, pub_b, antes=False) as disparos:
+            assert (
+                cli.main(
+                    ["classify", "--parquet", str(vivo), "--data-root", str(salida)]
+                )
+                == 0
+            )
+        assert disparos
+        publicado = salida / "processed" / "panel.parquet"
+        # Filas y metadatos de la misma publicacion A, la que se leyo primero.
+        pd.testing.assert_frame_equal(pd.read_parquet(publicado), filas_a)
+        assert leer_metadatos_parquet(publicado) == meta_a
+        return
+
+    pipeline = verification_pipeline()
+    if ruta == "biblioteca_parquet":
+        # La primera lectura obtiene A; despues la ruta ya contiene B.
+        vivo = tmp_path / "vivo" / "panel.parquet"
+        vivo.parent.mkdir()
+        shutil.copyfile(pub_a, vivo)
+        esperado, meta, filas = (
+            hashlib.sha256(pub_a.read_bytes()).hexdigest(),
+            meta_a,
+            filas_a,
+        )
+        with _reemplazar_en_primera_lectura(vivo, pub_b, antes=False) as disparos:
+            ingestion = pipeline.ingest(PipelineInput(parquet_path=vivo))
+    else:
+        # La importacion publica A; otra publicacion la sustituye antes de releerla.
+        datos = tmp_path / "datos_csv"
+        vivo = datos / "processed" / "panel.parquet"
+        esperado, meta, filas = sha_b, meta_b, filas_b
+        with _reemplazar_en_primera_lectura(vivo, pub_b, antes=True) as disparos:
+            ingestion = pipeline.ingest(PipelineInput(csv_path=csv_a, data_root=datos))
+    assert disparos
+
+    assert ingestion.parquet_sha256 == esperado
+    assert ingestion.reserve == meta.reserve
+    assert ingestion.exclusions == meta.exclusions
+    assert len(ingestion.panel) == len(filas)
+    assert sorted(m.sku_id for m in ingestion.topology) == sorted(
+        filas["sku_id"].unique()
+    )
+
+    fitted = pipeline.fit(ingestion)
+    assert fitted.reserve == meta.reserve
+    excluidos_l1 = [
+        e.sku_id
+        for e in fitted.exclusions
+        if e.code == "eligibility.no_admissible_history"
+    ]
+    assert excluidos_l1 == [e.sku_id for e in meta.exclusions]
+    entrenamiento = {c.selection.sku_id: c.series.tolist() for c in fitted.candidates}
+    assert entrenamiento
+    for sku_id, serie in entrenamiento.items():
+        # Ninguna observacion reservada de la publicacion leida llega al ajuste.
+        assert serie == _demanda(filas, sku_id, meta.t_star)

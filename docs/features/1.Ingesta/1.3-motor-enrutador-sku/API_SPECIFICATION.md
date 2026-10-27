@@ -89,7 +89,10 @@ Sin LLM. Lee CSV (extras ERP permitidas), valida, remuestrea, clasifica.
 
 ### `run_classify_parquet(parquet_path, *, data_root) -> (TopologyArtifact, Path)`
 
-Sin LLM. Proyecta columnas canonicas y clasifica el panel.
+Sin LLM. Lee una vez un artefacto 1.4 publicado (filas, huella, t* y
+exclusiones de los mismos bytes), proyecta columnas canonicas y reclasifica el
+panel con el corte almacenado. Sin metadatos `pred_engine` lo rechaza pidiendo
+reimportar desde el CSV.
 
 ## CLI
 
