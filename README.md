@@ -22,8 +22,16 @@ MIT licence to allow institutional publication.
 
 ```bash
 # Requires uv — https://docs.astral.sh/uv/
-uv sync --frozen --extra dev
+uv sync --frozen --extra dev --extra foundation
 ```
+
+`pred-engine run` corre las cuatro familias, incluida `foundation`
+(Chronos-2), así que la instalación incluye el extra `foundation` (torch y
+chronos-forecasting). La primera corrida descarga los pesos de Chronos-2 en la
+revisión fijada a la caché de Hugging Face (`~/.cache/huggingface`, o
+`HF_HOME`). Las corridas siguientes leen los pesos de esa caché, también sin
+red con `HF_HUB_OFFLINE=1`. En un equipo sin espacio o memoria para Chronos-2,
+instale sin `--extra foundation` y pase `--no-foundation` a `pred-engine run`.
 
 ## Running tests
 
@@ -87,8 +95,9 @@ uv run pre-commit run --all-files  # run manually
 
 `pred_engine.pipeline.Pipeline` owns the four-stage transition path. Existing
 stage APIs remain independently callable. The default composition routes the
-core classical, ML and DL families using the existing topology matrix;
-foundation is opt-in and requires the `foundation` extra.
+classical, ML, DL and foundation families using the existing topology matrix;
+foundation requires the `foundation` extra and the Chronos-2 weights. Pass
+`families` without `"foundation"` to compose only the other three.
 
 ```python
 from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion

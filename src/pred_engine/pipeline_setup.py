@@ -75,7 +75,7 @@ def model_factories() -> Mapping[PredictorFamily, FabricaPronosticador]:
 def build_pipeline(
     evaluation: EvaluationSettings,
     *,
-    families: tuple[PredictorFamily, ...] = ("classical", "ml", "dl"),
+    families: tuple[PredictorFamily, ...] = PREDICTOR_FAMILIES,
     n_trials: int | None = None,
     seed: int = 0,
     validator: RetrospectiveValidator | None = None,
@@ -85,7 +85,7 @@ def build_pipeline(
     progress: str | Path | None = None,
     checkpoints: UnitCheckpoints | None = None,
 ) -> Pipeline:
-    """Compose core families; foundation is opt-in and requires the foundation extra.
+    """Compose the four families; foundation needs the foundation extra and weights.
 
     With n_trials=None the original strategy budgets are preserved. Evaluation
     settings also define HPO windows. Pipeline's L2 gate assumes these windows

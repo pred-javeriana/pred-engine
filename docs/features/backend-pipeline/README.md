@@ -11,9 +11,10 @@ principal stage.
   classification and the five-column immutable Parquet contract. A classified
   Parquet can enter directly without republishing raw data.
 - **L2:** topology routing, per-family HPO, fitting on history <= t* and the
-  forecast from t*. Each SKU/family is an isolated unit. Core families are
-  SARIMA, LightGBM and NumPy MLP. Chronos-2 is opt-in, CPU-only and requires
-  its optional dependencies and fixed local weights.
+  forecast from t*. Each SKU/family is an isolated unit. The families are
+  SARIMA, LightGBM, NumPy MLP and Chronos-2. Chronos-2 runs by default
+  (`--no-foundation` drops it), is CPU-only and requires the `foundation`
+  extra and fixed local weights.
 - **L3:** causal walk-forward evaluation on the same admissible history used
   by HPO. Each window has a new fit. `selection_scope="same_history"` makes
   the limitation explicit. These diagnostic metrics are not a holdout verdict.

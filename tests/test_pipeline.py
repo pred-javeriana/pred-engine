@@ -59,6 +59,7 @@ from pred_engine.verify import (
     verification_pipeline,
     verify_pipeline,
 )
+from tests._dobles import PipelineFalso
 from tests._plataforma import crear_base_plataforma
 
 
@@ -377,7 +378,13 @@ def core_request_at(root: Path) -> PipelineInput:
     return PipelineInput(csv_path=source, data_root=root / "data")
 
 
-def test_default_core_composition_fits_and_evaluates_all_families(tmp_path):
+def test_default_composition_fits_and_evaluates_all_four_families(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "pred_engine.comun.modelos.modelos_fundacionales.chronos2.cargar_pipeline",
+        lambda config: PipelineFalso(),
+    )
     pipeline = build_pipeline(
         EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae"),
         n_trials=1,
@@ -388,10 +395,11 @@ def test_default_core_composition_fits_and_evaluates_all_families(tmp_path):
         "classical",
         "ml",
         "dl",
+        "foundation",
     ]
     assert [
         c.walk_forward.n_ventanas_evaluadas for c in result.evaluation.candidates
-    ] == [4, 4, 4]
+    ] == [4, 4, 4, 4]
     assert [s.state for s in result.stages] == [
         "completed",
         "completed",
@@ -408,7 +416,7 @@ def test_default_core_composition_fits_and_evaluates_all_families(tmp_path):
         assert candidate.walk_forward.ventanas[0].y_real.tolist() == [32.0, 33.35]
 
 
-def test_real_cli_default_composition_publishes_m3(tmp_path, capsys):
+def test_real_cli_core_composition_publishes_m3(tmp_path, capsys):
     crear_base_plataforma(tmp_path / "data" / "pred.db")
     request = core_request_at(tmp_path)
     code = main(
@@ -432,6 +440,7 @@ def test_real_cli_default_composition_publishes_m3(tmp_path, capsys):
             "17",
             "--workers",
             "2",
+            "--no-foundation",
         ]
     )
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -462,6 +471,7 @@ def test_cli_reports_same_honest_blocker(tmp_path, monkeypatch, capsys):
             str(request.data_root),
             "--workers",
             "2",
+            "--no-foundation",
         ]
     )
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -470,6 +480,78 @@ def test_cli_reports_same_honest_blocker(tmp_path, monkeypatch, capsys):
     assert report["blocked_stage"] == "L4"
     assert [s["id"] for s in report["stages"]] == ["L1", "L2", "L3", "L4"]
     assert report["stages"][2]["maturity"] == "partial"
+
+
+def test_cli_runs_all_four_families_unless_foundation_is_dropped(
+    tmp_path, monkeypatch, capsys
+):
+    crear_base_plataforma(tmp_path / "data" / "pred.db")
+    families = []
+
+    def capture(*args, **kwargs):
+        families.append(kwargs["families"])
+        return verification_pipeline()
+
+    monkeypatch.setattr("pred_engine.pipeline_setup.build_pipeline", capture)
+    monkeypatch.setattr(
+        "pred_engine.comun.modelos.modelos_fundacionales.cargar_pipeline",
+        lambda config: PipelineFalso(),
+    )
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    args = [
+        "run",
+        "--csv",
+        str(request_at(tmp_path).csv_path),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--workers",
+        "1",
+    ]
+    assert main([*args, "--no-foundation"]) == 7
+    assert "HF_HUB_OFFLINE" not in os.environ
+    assert main(args) == 7
+    # Chronos-2 cargo antes de la corrida: sus procesos leen la cache sin red.
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert families == [
+        ("classical", "ml", "dl"),
+        ("classical", "ml", "dl", "foundation"),
+    ]
+    with pytest.raises(SystemExit):
+        main([*args, "--no-foundation", "--families", "ml"])
+
+
+def test_cli_stops_before_the_run_when_chronos_cannot_load(
+    tmp_path, monkeypatch, capsys
+):
+    from pred_engine.comun.modelos.modelos_fundacionales import (
+        ModeloFundacionalNoDisponibleError,
+    )
+
+    def missing_model(config):
+        raise ModeloFundacionalNoDisponibleError("pesos ausentes")
+
+    monkeypatch.setattr(
+        "pred_engine.comun.modelos.modelos_fundacionales.cargar_pipeline",
+        missing_model,
+    )
+    monkeypatch.setattr(
+        "pred_engine.pipeline_setup.build_pipeline",
+        lambda *args, **kwargs: pytest.fail("the run must not start"),
+    )
+    code = main(
+        [
+            "run",
+            "--csv",
+            str(request_at(tmp_path).csv_path),
+            "--data-root",
+            str(tmp_path / "data"),
+        ]
+    )
+    assert code == 1
+    assert capsys.readouterr().err == (
+        "error: pesos ausentes; para correr sin Chronos-2 use --no-foundation\n"
+    )
+    assert not (tmp_path / "data").exists()
 
 
 @pytest.mark.parametrize(
@@ -948,6 +1030,7 @@ def test_cli_reports_isolated_unit_failures_with_exit_code_8(
             str(request.data_root),
             "--workers",
             "2",
+            "--no-foundation",
         ]
     )
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -979,6 +1062,7 @@ def test_cli_resource_sampling_can_be_disabled(tmp_path, monkeypatch, capsys):
         str(request.data_root),
         "--workers",
         "2",
+        "--no-foundation",
     ]
 
     assert main([*args, "--telemetry-interval", "-1"]) == 1
@@ -1001,6 +1085,7 @@ def test_cli_seed_errors_are_reported_without_traceback(tmp_path, capsys):
             str(tmp_path / "missing.csv"),
             "--data-root",
             str(tmp_path / "data"),
+            "--no-foundation",
         ]
     )
     captured = capsys.readouterr()
