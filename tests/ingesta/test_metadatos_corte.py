@@ -846,3 +846,62 @@ def test_s3_topologia_cuenta_las_mismas_exclusiones_que_el_resumen(
     assert resumen["excluded_count"] == esperado
     assert topologia["excluded_count"] == resumen["excluded_count"]
     assert topologia["t_star"] == resumen["reserve"]["t_star"] == "2024-03-20"
+
+
+@pytest.mark.parametrize("fuente", ["csv", "parquet"])
+def test_s4_resumen_de_l2_fallida_conserva_su_reserva(
+    tmp_path: Path, fuente: str
+) -> None:
+    """Una corrida que falla en L2 guarda el corte que L1 ya conocia."""
+    filas = []
+    for i, fecha in enumerate(pd.date_range("2024-01-01", periods=35)):
+        filas.append(
+            {
+                "sku_id": "SKU-CORTO",
+                "timestamp": fecha,
+                "demand_qty": 10.0 + i % 4,
+                "lead_time_days": 3,
+            }
+        )
+        filas.append(
+            {
+                "sku_id": "SKU-TARDIO",
+                "timestamp": fecha,
+                "demand_qty": 0.0 if i < 28 else 6.0,
+                "lead_time_days": 3,
+            }
+        )
+    csv = tmp_path / "corto.csv"
+    pd.DataFrame(filas).to_csv(csv, index=False)
+    raiz = tmp_path / "data"
+    if fuente == "parquet":
+        assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+        entrada = ["--parquet", str(raiz / "processed" / "corto.parquet")]
+    else:
+        entrada = ["--csv", str(csv)]
+
+    assert _correr(tmp_path, raiz, *entrada) == 1
+    resumen, topologia = _corrida(raiz)
+
+    assert resumen["complete"] is False
+    assert [e["state"] for e in resumen["stages"]] == [
+        "completed",
+        "failed",
+        "pending",
+        "pending",
+    ]
+    assert resumen["reserve"] == {
+        "fraction": 0.2,
+        "t_star": "2024-01-28",
+        "first_reserved": "2024-01-29",
+        "last_observed": "2024-02-04",
+        "reserved_days": 7,
+    }
+    assert resumen["exclusions"] == [
+        {
+            "sku_id": "SKU-TARDIO",
+            "cause": "lanzado despues del corte",
+            "code": None,
+        }
+    ]
+    assert topologia["t_star"] == resumen["reserve"]["t_star"]
