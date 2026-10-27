@@ -28,7 +28,7 @@ rutas = [
 niveles = ["muestra22", "plataforma"]
 rutas = ["src/pred_engine/forecasting/persistencia_evidencia/**"]
 
-# M0, telemetria, prueba integrada, analisis y comandos de desarrollo.
+# M0, telemetria, prueba integrada y comandos de desarrollo.
 [[reglas]]
 niveles = ["humo"]
 rutas = [
@@ -37,7 +37,6 @@ rutas = [
   "src/pred_engine/run_telemetry.py",
   "src/pred_engine/verify.py",
   "src/pred_engine/comun/llm/**",
-  "src/pred_engine/analisis/**",
   "Makefile",
 ]
 

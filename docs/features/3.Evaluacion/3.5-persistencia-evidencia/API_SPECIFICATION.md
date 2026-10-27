@@ -122,10 +122,13 @@ SQLite y Parquet siguen siendo la referencia tipada.
 
 ## Lectura de plataforma
 
-`pred_platform.dal.evidencia.read_m3_evidence(db_path, run_id, sku=None)` acepta
-la identidad M2 o M3 y devuelve registros precalculados solo de corridas
-PUBLICADA. `m3_run_status` devuelve estado, causa y avance sin métricas
-parciales. Ambas funciones abren SQLite en modo de solo lectura.
+pred-platform lee esta evidencia con las operaciones M3 de `DataRepository`,
+que devuelven documentos del contrato de lectura M3 v2 de pred-docs.
+`list_m3_runs` acepta la referencia M2 y resuelve la corrida PUBLICADA más
+nueva; las demás operaciones exigen el `run_id` M3 exacto y devuelven registros
+precalculados solo de corridas PUBLICADA. `get_m3_run_status` devuelve estado,
+causa y avance sin métricas parciales. Todas abren SQLite en modo de solo
+lectura.
 
 `EstadoCorridaError` rechaza escrituras en una fase incorrecta o cerrada.
 `EvidenciaInconsistenteError` rechaza incoherencias de datos. Un error SQLite
