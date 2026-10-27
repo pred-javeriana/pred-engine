@@ -784,6 +784,7 @@ def _cmd_run_con_base(
                 politica=politica,
                 configuracion_m2=settings,
                 procesos=args.workers,
+                progreso=progress_path,
             ),
         )
         request = PipelineInput(

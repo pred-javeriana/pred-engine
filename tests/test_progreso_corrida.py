@@ -77,7 +77,7 @@ def test_la_corrida_deja_un_flujo_completo_y_coherente(
     ]
     assert etapas[:2] == [("L1", "stage_started"), ("L1", "stage_finished")]
     planes = {e["stage"]: e["units"] for e in eventos if e["event"] == "planned"}
-    assert set(planes) == {"L2", "L3"}
+    assert set(planes) == {"L2", "L3", "L4"}
 
     # Cada unidad planeada termina una vez y coincide con unidades.jsonl.
     finales = {
@@ -91,11 +91,36 @@ def test_la_corrida_deja_un_flujo_completo_y_coherente(
         json.loads(linea)
         for linea in (carpeta / "unidades.jsonl").read_text().splitlines()
     ]
+    # L4 todavia no anota unit_started ni entra a unidades.jsonl (bloque 4).
+    finales_m2 = {k: v for k, v in finales.items() if k[0] != "L4"}
     assert {
         (u["stage"], u["sku_id"], u["family"]): u["state"] for u in unidades
-    } == finales
+    } == finales_m2
     iniciadas = [e for e in eventos if e["event"] == "unit_started"]
-    assert len(iniciadas) == len(planeadas)
+    assert len(iniciadas) == len(finales_m2)
+
+
+def test_m3_anuncia_su_plan_y_cada_sku_guardado_en_el_progreso(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    resumen = _correr(tmp_path, capsys)
+    m3 = [e for e in _eventos(Path(resumen["run_dir"])) if e.get("stage") == "L4"]
+
+    # Mismo formato que M2: una unidad por SKU x candidato, con familia y modelo.
+    esperadas = {("sku-a", "classical", "sarima"), ("sku-b", "classical", "sarima")}
+    orden = [e["event"] for e in m3]
+    assert (orden[0], orden[1], orden[-1]) == (
+        "stage_started",
+        "planned",
+        "stage_finished",
+    )
+    (plan,) = [e for e in m3 if e["event"] == "planned"]
+    assert {(u["sku_id"], u["family"], u["model"]) for u in plan["units"]} == esperadas
+    fines = [e for e in m3 if e["event"] == "unit_finished"]
+    assert sorted((e["sku_id"], e["family"], e["model"]) for e in fines) == sorted(
+        esperadas
+    )
+    assert {e["state"] for e in fines} == {"completada"}
 
 
 def test_un_sku_sin_historia_suficiente_se_anota_como_excluido(

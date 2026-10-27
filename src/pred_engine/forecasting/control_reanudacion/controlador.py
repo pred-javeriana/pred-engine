@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from pred_engine.comun.ejecucion_paralela import iterar_unidades
+from pred_engine.comun.ejecucion_paralela import (
+    EtiquetaUnidad,
+    emitir_evento,
+    iterar_unidades,
+)
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos import SkuClass
 from pred_engine.comun.modelos.manifiesto_candidatos import (
@@ -117,6 +121,8 @@ class ControladorEvaluacion:
     Todo resultado, tambien un lote rechazado, queda en esa misma base.
     ``procesos`` es la cantidad de procesos que pronostican los SKU; con 1
     todo corre en el proceso actual. Solo este proceso escribe en la base.
+    Con ``progreso`` (ruta de ``progreso.jsonl``) anota el plan de L4 y el fin
+    de cada candidato, con el formato de L2 y L3, una vez guardado su SKU.
     """
 
     nativo = True
@@ -134,6 +140,7 @@ class ControladorEvaluacion:
         configuracion_m2: Mapping[str, Any] | None = None,
         fabricas: Mapping[str, FabricaAdaptador] = FABRICAS,
         procesos: int = 1,
+        progreso: str | Path | None = None,
     ) -> None:
         if type(procesos) is not int or procesos < 1:
             raise ValueError("procesos debe ser un entero positivo")
@@ -147,6 +154,7 @@ class ControladorEvaluacion:
         self.configuracion_m2 = dict(configuracion_m2 or {})
         self.fabricas = fabricas
         self.procesos = procesos
+        self.progreso = progreso
 
     def __call__(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
         ingesta = evaluation.fitting.ingestion
@@ -580,6 +588,22 @@ class ControladorEvaluacion:
                     base,
                 )
 
+        def etiqueta(candidato: Candidato) -> EtiquetaUnidad:
+            return EtiquetaUnidad(
+                "L4", candidato.sku, candidato.familia, candidato.modelo
+            )
+
+        # Solo este proceso escribe el progreso de L4: no hay escrituras concurrentes.
+        if self.progreso is not None:
+            emitir_evento(
+                self.progreso,
+                "planned",
+                stage="L4",
+                units=[
+                    {k: v for k, v in etiqueta(c).como_dict().items() if k != "stage"}
+                    for c in handoff.candidatos
+                ],
+            )
         with closing(
             iterar_unidades(_pronosticar_sku, tareas(), procesos=self.procesos)
         ) as resultados:
@@ -614,6 +638,15 @@ class ControladorEvaluacion:
                             if not np.isfinite(p.valores).all()
                         },
                     )
+                if self.progreso is not None:
+                    # El SKU ya es durable: se anuncia el fin de cada candidato suyo.
+                    for candidato in (c for c in handoff.candidatos if c.sku == sku):
+                        emitir_evento(
+                            self.progreso,
+                            "unit_finished",
+                            **etiqueta(candidato).como_dict(),
+                            state="completada",
+                        )
 
     def _artefacto(
         self,
