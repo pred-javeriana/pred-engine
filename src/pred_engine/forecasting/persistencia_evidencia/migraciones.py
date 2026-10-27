@@ -22,6 +22,9 @@ MIGRACIONES_M3 = (
     (9, "esquema_m3_0005.sql"),
 )
 VERSION_ESQUEMA_M3 = MIGRACIONES_M3[-1][0]
+# Ultima version de la base unica que el motor conoce. La 10 es de la plataforma
+# (estado finalizo_m2 de las tareas): el motor la acepta, pero no la aplica.
+VERSION_PLATAFORMA = 10
 
 
 class BasePlataformaError(ValueError):
@@ -62,10 +65,10 @@ def aplicar_migraciones_m3(conn: sqlite3.Connection) -> tuple[int, ...]:
         conn.execute("BEGIN IMMEDIATE")
         try:
             actual = conn.execute("PRAGMA user_version").fetchone()[0]
-            if actual < 4 or actual > VERSION_ESQUEMA_M3:
+            if actual < 4 or actual > VERSION_PLATAFORMA:
                 raise BasePlataformaError(
                     f"base de plataforma con version {actual}; se requiere entre 4 y "
-                    f"{VERSION_ESQUEMA_M3}. Ejecute sus migraciones de plataforma"
+                    f"{VERSION_PLATAFORMA}. Ejecute sus migraciones de plataforma"
                 )
             if actual < version:
                 for sentencia in _sentencias(texto):
