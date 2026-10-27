@@ -207,8 +207,11 @@ def _resultado_m3(corrida: CorridaM3, muestra: str) -> Resultado:
 
 
 def humo(contexto: Contexto) -> Resultado:
-    """La corrida de CI: M0 `mbb-directo` sobre la semilla de 4 productos (8 SKU)."""
-    entrada = ["--seed-csv", str(SEMILLA), *M0_HUMO.split()]
+    """La corrida de CI: M0 `mbb-directo` sobre la semilla de 4 productos (8 SKU).
+
+    Como CI, que no instala el extra foundation, corre sin Chronos-2.
+    """
+    entrada = ["--seed-csv", str(SEMILLA), "--no-foundation", *M0_HUMO.split()]
     corrida = _corrida_m3(contexto, "humo", entrada, reales=False)
     return _resultado_m3(corrida, f"humo-{_sha256(SEMILLA)[:12]}")
 

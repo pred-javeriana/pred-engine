@@ -7,10 +7,18 @@ NumPy, asi que fija una hebra igual que el motor lo hace en cada hijo del pool.
 
 Las pruebas que corren la CLI pasan ``--workers`` explicito (1 o 2): el valor
 por defecto, ``nucleos - 1``, ocuparia la maquina entera con una sola prueba.
+
+Las pruebas nunca descargan los pesos de Chronos-2: ``HF_HUB_OFFLINE=1`` se fija
+antes de importar Hugging Face, asi que las pruebas del modelo real leen la
+cache y fallan si los pesos no estan (ver README, "Running tests").
 """
 
 from __future__ import annotations
 
-from pred_engine.comun.ejecucion_paralela import fijar_una_hebra_blas
+import os
+
+os.environ["HF_HUB_OFFLINE"] = "1"
+
+from pred_engine.comun.ejecucion_paralela import fijar_una_hebra_blas  # noqa: E402
 
 fijar_una_hebra_blas()

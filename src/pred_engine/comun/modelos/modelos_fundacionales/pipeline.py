@@ -73,7 +73,7 @@ def cargar_pipeline(config: ConfiguracionFundacional) -> PipelineFundacional:
     except ImportError as exc:
         raise ModeloFundacionalNoDisponibleError(
             "el modelo fundacional requiere el extra 'foundation' "
-            "(uv sync --extra foundation)"
+            "(uv sync --frozen --extra dev --extra foundation)"
         ) from exc
     return _cargar(config, chronos, torch)  # pragma: no cover
 

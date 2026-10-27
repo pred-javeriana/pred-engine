@@ -147,6 +147,7 @@ def test_parquet_sin_metadatos_rechazado_por_pipeline_e_ingesta_y_cli(
     codigo_run = cli.main(
         [
             "run",
+            "--no-foundation",
             "--parquet",
             str(ruta_parquet),
             "--db-path",
@@ -239,6 +240,7 @@ def test_run_parquet_y_pipeline_usan_metadatos_del_archivo(tmp_path: Path):
     codigo_run = cli.main(
         [
             "run",
+            "--no-foundation",
             "--parquet",
             str(parquet),
             "--db-path",
@@ -277,6 +279,7 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
         cli.main(
             [
                 "run",
+                "--no-foundation",
                 "--parquet",
                 str(parquet_a),
                 "--db-path",
@@ -295,6 +298,7 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
         cli.main(
             [
                 "run",
+                "--no-foundation",
                 "--csv",
                 str(csv),
                 "--db-path",
