@@ -59,3 +59,77 @@ def test_rechaza_cambios_sin_commit(repo):
     (repo / "src/pred_engine/cli.py").write_text("cambio\n")
     with pytest.raises(SystemExit):
         motor_local.main(["--base", "main", "--plan"])
+
+
+@pytest.fixture(autouse=True)
+def cerrojo_aislado(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    lock = tmp_path / "pred-motor-local.lock"
+    monkeypatch.setattr(motor_local, "CERROJO", lock, raising=False)
+    return lock
+
+
+def test_cerrojo_impide_segunda_corrida_concurrente(repo, monkeypatch, tmp_path):
+    cerrojo = getattr(motor_local, "CERROJO", tmp_path / "pred-motor-local.lock")
+    cerrojo.mkdir(parents=True, exist_ok=True)
+
+    runner_llamado = False
+
+    def fake_humo(ctx):
+        nonlocal runner_llamado
+        runner_llamado = True
+        return motor_local.Resultado(True, 0, 1.0, "humo-123")
+
+    monkeypatch.setitem(motor_local.NIVELES, "humo", fake_humo)
+
+    plat_dir = tmp_path / "plat"
+    (plat_dir / "src" / "pred_platform").mkdir(parents=True)
+
+    with pytest.raises(SystemExit) as excinfo:
+        motor_local.main(
+            ["--base", "main", "--nivel", "humo", "--plataforma", str(plat_dir)]
+        )
+
+    assert excinfo.value.code != 0
+    assert not runner_llamado
+
+
+def test_cerrojo_se_libera_en_finally_ante_excepcion(repo, monkeypatch, tmp_path):
+    cerrojo = getattr(motor_local, "CERROJO", tmp_path / "pred-motor-local.lock")
+
+    def fake_falla(ctx):
+        assert cerrojo.exists()
+        raise RuntimeError("falla en runner")
+
+    monkeypatch.setitem(motor_local.NIVELES, "humo", fake_falla)
+
+    plat_dir = tmp_path / "plat"
+    (plat_dir / "src" / "pred_platform").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="falla en runner"):
+        motor_local.main(
+            ["--base", "main", "--nivel", "humo", "--plataforma", str(plat_dir)]
+        )
+
+    assert not cerrojo.exists()
+
+
+def test_muestra22_crea_directorio_padre_inexistente(tmp_path):
+    filas = ["sku_id,timestamp,demand_qty"]
+    for i in range(25):
+        for dia in range(1, 11):
+            filas.append(f"sku_{i:02d},2025-01-{dia:02d},10")
+    origen = tmp_path / "panel_origen.csv"
+    origen.write_text("\n".join(filas) + "\n", encoding="utf-8")
+
+    destino = tmp_path / "subcarpeta" / "anidada" / "timing22.csv"
+    assert not destino.parent.exists()
+
+    resultado = subprocess.run(
+        [sys.executable, str(SCRIPTS / "muestra22.py"), str(origen), str(destino)],
+        capture_output=True,
+        text=True,
+    )
+    assert resultado.returncode == 0
+    assert destino.is_file()
+    assert destino.stat().st_size > 0
+    assert "m22-" in resultado.stdout

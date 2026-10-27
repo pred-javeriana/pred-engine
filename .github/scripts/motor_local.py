@@ -20,6 +20,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -43,6 +44,7 @@ M0_HUMO = (
 )
 WORKERS = "2"
 HEBRAS = "4"
+CERROJO = Path(tempfile.gettempdir()) / "pred-motor-local.lock"
 
 
 @dataclass(frozen=True)
@@ -344,46 +346,59 @@ def main(argv: list[str] | None = None) -> int:
     if args.publicar and shutil.which("gh") is None:
         parser.error("--publicar necesita gh; sin gh, pegue el recibo en el PR")
 
-    lineas, corridos, ok = [], [], True
-    for nivel, correr in NIVELES.items():
-        if nivel not in requeridos:
-            continue
-        print(f"{nivel}: corriendo...", flush=True)
-        resultado = correr(contexto)
-        lineas.append(resultado.linea(nivel))
-        corridos.append(nivel)
-        print(lineas[-1], flush=True)
-        if not resultado.ok:
-            ok = False
-            print(f"registros en {contexto.trabajo / nivel}", file=sys.stderr)
-            break
-
-    recibo = escribir_recibo(
-        {
-            "repo": mapa.repo,
-            "commit": commit,
-            "niveles": nombres(corridos),
-            "resultado": "ok" if ok else "fallo",
-            "motor": _git(MOTOR, "rev-parse", "HEAD"),
-            "equipo": _equipo(),
-            "fecha": datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ"),
-        },
-        lineas,
-    )
-    archivo = raiz / "local_data" / "recibos" / f"{commit}.txt"
-    archivo.parent.mkdir(parents=True, exist_ok=True)
-    archivo.write_text(recibo, encoding="utf-8")
-    print(f"\n{recibo}\nrecibo en {archivo}")
-    if args.publicar:
-        cuerpo = f"Recibo de `make motor-local`:\n\n```text\n{recibo}```\n"
-        subprocess.run(
-            ["gh", "pr", "comment", "--body-file", "-"],
-            cwd=raiz,
-            input=cuerpo,
-            text=True,
-            check=True,
+    try:
+        os.mkdir(CERROJO)
+    except FileExistsError:
+        print(
+            f"error: ya hay una corrida de motor-local en curso ({CERROJO}); "
+            f"espere a que termine o elimine el cerrojo si el proceso anterior murió",
+            file=sys.stderr,
         )
-    return 0 if ok else 1
+        sys.exit(1)
+
+    try:
+        lineas, corridos, ok = [], [], True
+        for nivel, correr in NIVELES.items():
+            if nivel not in requeridos:
+                continue
+            print(f"{nivel}: corriendo...", flush=True)
+            resultado = correr(contexto)
+            lineas.append(resultado.linea(nivel))
+            corridos.append(nivel)
+            print(lineas[-1], flush=True)
+            if not resultado.ok:
+                ok = False
+                print(f"registros en {contexto.trabajo / nivel}", file=sys.stderr)
+                break
+
+        recibo = escribir_recibo(
+            {
+                "repo": mapa.repo,
+                "commit": commit,
+                "niveles": nombres(corridos),
+                "resultado": "ok" if ok else "fallo",
+                "motor": _git(MOTOR, "rev-parse", "HEAD"),
+                "equipo": _equipo(),
+                "fecha": datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ"),
+            },
+            lineas,
+        )
+        archivo = raiz / "local_data" / "recibos" / f"{commit}.txt"
+        archivo.parent.mkdir(parents=True, exist_ok=True)
+        archivo.write_text(recibo, encoding="utf-8")
+        print(f"\n{recibo}\nrecibo en {archivo}")
+        if args.publicar:
+            cuerpo = f"Recibo de `make motor-local`:\n\n```text\n{recibo}```\n"
+            subprocess.run(
+                ["gh", "pr", "comment", "--body-file", "-"],
+                cwd=raiz,
+                input=cuerpo,
+                text=True,
+                check=True,
+            )
+        return 0 if ok else 1
+    finally:
+        shutil.rmtree(CERROJO, ignore_errors=True)
 
 
 if __name__ == "__main__":

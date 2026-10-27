@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -28,6 +29,7 @@ def main(origen: str, destino: str) -> None:
     ]
     elegibles = pd.Series(sorted(set(con_demanda)))
     elegidos = set(elegibles.sample(N_SKUS, random_state=SEMILLA))
+    Path(destino).parent.mkdir(parents=True, exist_ok=True)
     panel[panel["sku_id"].isin(elegidos)].to_csv(destino, index=False)
     with open(destino, "rb") as archivo:
         print(f"m22-{hashlib.sha256(archivo.read()).hexdigest()[:12]}")

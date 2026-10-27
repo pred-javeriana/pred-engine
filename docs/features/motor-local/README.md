@@ -28,6 +28,12 @@ Opciones: `--base` (por defecto `origin/main`), `--plataforma RUTA`,
 `--nivel NIVEL`, que agrega un nivel y nunca quita los que exigen las rutas.
 Cada corrida usa una base nueva en `local_data/motor-local/<nivel>/` con 4
 hebras de BLAS y `--workers 2`, así que cabe en un equipo de 4 núcleos y 8 GB.
+Solo puede haber una corrida activa a la vez por máquina. El comando adquiere un
+cerrojo en el directorio temporal del sistema (`/tmp/pred-motor-local.lock` en
+Linux) antes de iniciar los niveles y lo libera al terminar. Si un proceso
+previo fue terminado abruptamente (por ejemplo con `kill -9`), elimine el
+cerrojo huérfano antes de volver a correr: `rmdir /tmp/pred-motor-local.lock`
+(o `rm -rf /tmp/pred-motor-local.lock`).
 
 ## Niveles
 
