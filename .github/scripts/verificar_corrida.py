@@ -1,15 +1,17 @@
 """Verifica los artefactos de una corrida de `pred-engine run` en CI.
 
-Uso: `python .github/scripts/verificar_corrida.py RUN_DIR DB_PATH`. Cada falla
-nombra el archivo de la corrida que la produjo y se informa como anotacion de
-GitHub Actions; el codigo de salida es 1 si hubo alguna.
+Uso: `python .github/scripts/verificar_corrida.py RUN_DIR DB_PATH [--datos-reales]`.
+Por defecto exige la publicacion sintetica de CI, sin inferencia DM; con
+`--datos-reales` exige una publicacion real con inferencia DM (`make motor-local`).
+Cada falla nombra el archivo de la corrida que la produjo y se informa como
+anotacion de GitHub Actions; el codigo de salida es 1 si hubo alguna.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sqlite3
-import sys
 import xml.etree.ElementTree as ET
 from contextlib import closing
 from datetime import date
@@ -34,7 +36,7 @@ ARCHIVOS = (
 )
 
 
-def verificar(run_dir: Path, db_path: Path) -> list[str]:
+def verificar(run_dir: Path, db_path: Path, datos_reales: bool = False) -> list[str]:
     faltan = [
         f"{nombre}: falta o esta vacio"
         for nombre in ARCHIVOS
@@ -80,8 +82,9 @@ def verificar(run_dir: Path, db_path: Path) -> list[str]:
                 "SELECT estado, datos_sinteticos FROM m3_corridas WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
-            == ("PUBLICADA", 1),
-            "base central: falta publicacion sintetica M3",
+            == ("PUBLICADA", 0 if datos_reales else 1),
+            "base central: falta publicacion "
+            f"{'real' if datos_reales else 'sintetica'} M3",
         )
         previstas = conn.execute(
             "SELECT n_unidades_previstas FROM m3_protocolos WHERE run_id = ?", (run_id,)
@@ -117,14 +120,19 @@ def verificar(run_dir: Path, db_path: Path) -> list[str]:
             > 1,
             "base central: faltan veredictos multi-SKU",
         )
-        exigir(
-            not conn.execute(
+        con_inferencia = bool(
+            conn.execute(
                 "SELECT 1 FROM m3_veredictos WHERE run_id = ? "
                 "AND (dm_p_valor IS NOT NULL OR dm_p_ajustado IS NOT NULL)",
                 (run_id,),
-            ).fetchall(),
-            "base central: inferencia sobre datos sinteticos",
+            ).fetchall()
         )
+        if datos_reales:
+            exigir(con_inferencia, "base central: sin inferencia DM sobre datos reales")
+        else:
+            exigir(
+                not con_inferencia, "base central: inferencia sobre datos sinteticos"
+            )
         exigir(bool(m3["archivos"]), "corrida.json: faltan exportaciones M3")
         for tabla, ruta in m3["archivos"].items():
             quoted = '"' + tabla.replace('"', '""') + '"'
@@ -136,7 +144,7 @@ def verificar(run_dir: Path, db_path: Path) -> list[str]:
                 f"{tabla}.parquet: difiere de SQLite",
             )
             exigir(
-                len(pd.read_csv(m3["csv"][tabla])) == filas,
+                len(pd.read_csv(m3["csv"][tabla], low_memory=False)) == filas,
                 f"{tabla}.csv: difiere de SQLite",
             )
     unidades = resumen["units"]
@@ -229,8 +237,13 @@ def verificar(run_dir: Path, db_path: Path) -> list[str]:
 
 
 def main() -> int:
-    run_dir = Path(sys.argv[1])
-    errores = verificar(run_dir, Path(sys.argv[2]))
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("run_dir", type=Path)
+    parser.add_argument("db_path", type=Path)
+    parser.add_argument("--datos-reales", action="store_true")
+    args = parser.parse_args()
+    run_dir = args.run_dir
+    errores = verificar(run_dir, args.db_path, args.datos_reales)
     for error in errores:
         print(f"::error title=Corrida {run_dir.name}::{error}")
     if not errores:

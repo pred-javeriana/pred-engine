@@ -54,7 +54,6 @@ markers = [
 [tool.coverage.run]
 source = ["src/pred_engine"]
 omit = [
-    "src/pred_engine/analisis/*",
     "src/pred_engine/optimizacion/optimizadores/*",
     "src/pred_engine/config/*",
     "src/pred_engine/ingesta/validador_tipo_archivo/*",
