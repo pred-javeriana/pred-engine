@@ -674,6 +674,7 @@ def _cmd_run_con_base(
         emitir_evento,
         resumen_paralelismo,
     )
+    from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
     from pred_engine.comun.procedencia import resolver_origen
     from pred_engine.comun.reserva import RESERVE_FRACTION
     from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
@@ -721,6 +722,8 @@ def _cmd_run_con_base(
                 "reused": fase0.reutilizada,
             }
         source = Path(csv_path if csv_path is not None else args.parquet)
+        if args.parquet is not None:
+            leer_metadatos_parquet(source)
         inputs["source"] = {
             "path": str(source.resolve()),
             "sha256": sha256_file(source),

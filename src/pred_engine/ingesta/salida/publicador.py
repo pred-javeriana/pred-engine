@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import io
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
 import pandas as pd
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
+from pred_engine.comun.metadatos_parquet import empaquetar_metadatos_schema
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.lector import export_parquet
 from pred_engine.ingesta.salida.errores import OutputContractError
 from pred_engine.ingesta.salida.preservacion import require_panel_preserved
@@ -28,6 +32,8 @@ def publish_classified_panel(
     *,
     data_root: str | Path | None = None,
     daily_panel: pd.DataFrame,
+    reserve: ReserveCut | None = None,
+    exclusions: Sequence[SkuExclusion] = (),
 ) -> Path:
     """Valida preservacion + contrato y escribe Parquet en processed/.
 
@@ -40,7 +46,19 @@ def publish_classified_panel(
     require_panel_preserved(daily_panel, classified)
     validate_output_contract(classified)
     normalizado = normalize_output_frame(classified)
-    escrito = export_parquet(normalizado, destino, data_root=data_root)
+    if reserve is None:
+        try:
+            reserve = ReserveCut.of(daily_panel)
+        except Exception:
+            reserve = None
+    metadata = (
+        empaquetar_metadatos_schema(reserve, exclusions)
+        if reserve is not None
+        else None
+    )
+    escrito = export_parquet(
+        normalizado, destino, data_root=data_root, metadata=metadata
+    )
     _logger.info(
         "Artefacto 1.4 publicado ruta=%s filas=%s skus=%s",
         escrito,

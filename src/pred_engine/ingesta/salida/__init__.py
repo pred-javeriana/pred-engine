@@ -2,11 +2,15 @@
 
 from pred_engine.ingesta.salida.errores import (
     HandoffPreconditionError,
+    MissingCutoffMetadataError,
     OutputContractError,
     OutputHandoffError,
     PanelPreservationError,
 )
-from pred_engine.ingesta.salida.precondiciones import require_positive_demand
+from pred_engine.ingesta.salida.precondiciones import (
+    evaluar_precondiciones_y_exclusiones,
+    require_positive_demand,
+)
 from pred_engine.ingesta.salida.preservacion import require_panel_preserved
 from pred_engine.ingesta.salida.publicador import (
     publish_classified_panel,
@@ -20,9 +24,11 @@ from pred_engine.ingesta.salida.validador import (
 
 __all__ = [
     "HandoffPreconditionError",
+    "MissingCutoffMetadataError",
     "OutputContractError",
     "OutputHandoffError",
     "PanelPreservationError",
+    "evaluar_precondiciones_y_exclusiones",
     "normalize_output_frame",
     "publish_classified_panel",
     "read_classified_parquet",

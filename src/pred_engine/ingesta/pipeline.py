@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.logger import get_logger, log_ingestion_event
+from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import (
     TopologyArtifact,
     classify_daily_panel,
@@ -27,10 +30,10 @@ from pred_engine.ingesta.lector import (
     hash_sha256_archivo,
 )
 from pred_engine.ingesta.salida import (
+    evaluar_precondiciones_y_exclusiones,
     publish_classified_panel,
     read_classified_parquet,
     read_classified_parquet_with_sha256,
-    require_positive_demand,
 )
 from pred_engine.ingesta.sonda import DiagnosticArtifact, probe_headers
 from pred_engine.ingesta.validador_formato import validate_aligned_frame
@@ -73,10 +76,20 @@ def deposit_raw_csv(source: str | Path, *, data_root: str | Path | None = None) 
     return deposit_raw(source, data_root=data_root, on_conflict="reject").path
 
 
-def _clasificar_panel_diario(panel: pd.DataFrame) -> TopologyArtifact:
+def _clasificar_panel_diario(
+    panel: pd.DataFrame,
+    corte: ReserveCut | None = None,
+    exclusions: tuple[SkuExclusion, ...] = (),
+) -> TopologyArtifact:
     """Gate de demanda positiva y clasificador real de 1.3 (sin stub)."""
-    require_positive_demand(panel)
-    return classify_daily_panel(panel)
+    if corte is None:
+        admitido, corte_calc, exclusiones_calc = evaluar_precondiciones_y_exclusiones(
+            panel
+        )
+        topologia = classify_daily_panel(admitido, corte=corte_calc)
+        return replace(topologia, reserve=corte_calc, exclusions=exclusiones_calc)
+    topologia = classify_daily_panel(panel, corte=corte)
+    return replace(topologia, reserve=corte, exclusions=exclusions)
 
 
 def _publicar_handoff(
@@ -87,6 +100,8 @@ def _publicar_handoff(
     data_root: Path,
     file_hash: str,
     mensaje: str,
+    reserve: ReserveCut,
+    exclusions: tuple[SkuExclusion, ...] = (),
 ) -> Path:
     """Preserva, valida el contrato 1.4 y persiste el Parquet."""
     escrito = publish_classified_panel(
@@ -94,6 +109,8 @@ def _publicar_handoff(
         destino,
         data_root=data_root,
         daily_panel=panel_diario,
+        reserve=reserve,
+        exclusions=exclusions,
     )
     log_ingestion_event(
         _logger,
@@ -116,7 +133,10 @@ def run_semantic_pipeline(
     validado = validate_aligned_frame(canonico)
     panel = resample_daily(validado)
     topologia = _clasificar_panel_diario(panel)
-    return diagnostico, validado, panel, topologia
+    admitido = panel.loc[
+        ~panel["sku_id"].astype("string").isin([e.sku_id for e in topologia.exclusions])
+    ]
+    return diagnostico, validado, admitido, topologia
 
 
 def ingest_canonical_csv(
@@ -142,14 +162,20 @@ def ingest_canonical_csv(
     validado = validate_aligned_frame(canonico)
     panel = resample_daily(validado)
     topologia = _clasificar_panel_diario(panel)
+    admitido = panel.loc[
+        ~panel["sku_id"].astype("string").isin([e.sku_id for e in topologia.exclusions])
+    ]
     destino = layout.processed / f"{deposito.path.stem}.parquet"
+    assert topologia.reserve is not None
     _publicar_handoff(
-        panel,
+        admitido,
         topologia,
         destino,
         data_root=layout.root,
         file_hash=deposito.sha256,
         mensaje="Handoff 1.4 desde CSV completado",
+        reserve=topologia.reserve,
+        exclusions=topologia.exclusions,
     )
     return CsvIngestResult(
         source_sha256=deposito.sha256,
@@ -182,9 +208,12 @@ def run_classify_parquet(
     origen = Path(parquet_path).expanduser().resolve()
     if not origen.is_file():
         raise FileNotFoundError(origen)
+    meta = leer_metadatos_parquet(origen)
     marco = pd.read_parquet(origen, engine="pyarrow")
     canonico = select_canonical_columns(marco)
-    topologia = _clasificar_panel_diario(canonico)
+    topologia = _clasificar_panel_diario(
+        canonico, corte=meta.reserve, exclusions=meta.exclusions
+    )
     destino = layout.processed / f"{origen.stem}.parquet"
     _publicar_handoff(
         canonico,
@@ -193,6 +222,8 @@ def run_classify_parquet(
         data_root=layout.root,
         file_hash=hash_sha256_archivo(origen),
         mensaje="Handoff 1.4 desde Parquet completado",
+        reserve=meta.reserve,
+        exclusions=meta.exclusions,
     )
     return topologia, destino
 
@@ -228,6 +259,7 @@ def run_ingest(
         timeout=timeout,
     )
     destino = layout.processed / f"{crudo.stem}.parquet"
+    assert topologia.reserve is not None
     _publicar_handoff(
         panel,
         topologia,
@@ -235,6 +267,8 @@ def run_ingest(
         data_root=layout.root,
         file_hash=extraido.sha256,
         mensaje="Pipeline 1.4 completado",
+        reserve=topologia.reserve,
+        exclusions=topologia.exclusions,
     )
     return IngestResult(
         source=extraido,

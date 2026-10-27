@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from pred_engine.comun.errores_handoff import (
+    MissingCutoffMetadataError,
+    OutputHandoffError,
+)
 
-class OutputHandoffError(ValueError):
-    """Frontera 1.4: el panel no puede publicarse hacia los modulos 2 y 3."""
+__all__ = [
+    "HandoffPreconditionError",
+    "MissingCutoffMetadataError",
+    "OutputContractError",
+    "OutputHandoffError",
+    "PanelPreservationError",
+]
 
 
 class OutputContractError(OutputHandoffError):

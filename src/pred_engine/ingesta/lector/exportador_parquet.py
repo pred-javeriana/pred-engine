@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from pred_engine.comun.logger import get_logger
 from pred_engine.ingesta.data import (
@@ -26,6 +30,7 @@ def export_parquet(
     destination: str | Path,
     *,
     data_root: str | Path | None = None,
+    metadata: Mapping[Any, Any] | None = None,
 ) -> Path:
     """Escribe un DataFrame como Parquet comprimido con motor pyarrow."""
     logger = get_logger(__name__)
@@ -42,13 +47,15 @@ def export_parquet(
                 f"{layout.processed.resolve()}, no en {destino.resolve()}"
             )
         destino.parent.mkdir(parents=True, exist_ok=True)
-        # index=False conserva exactamente las columnas del marco de entrada.
-        frame.to_parquet(
-            destino,
-            engine="pyarrow",
-            compression="snappy",
-            index=False,
-        )
+        table = pa.Table.from_pandas(frame, preserve_index=False)
+        if metadata:
+            meta_dict = dict(table.schema.metadata or {})
+            for k, v in metadata.items():
+                k_b = k.encode("utf-8") if isinstance(k, str) else k
+                v_b = v.encode("utf-8") if isinstance(v, str) else v
+                meta_dict[k_b] = v_b
+            table = table.replace_schema_metadata(meta_dict)
+        pq.write_table(table, destino, compression="snappy")
         logger.info(
             "Exportacion Parquet completada: %s (%s filas)",
             destino,

@@ -37,7 +37,9 @@ from pred_engine.comun.errores_codigo import (
     ELEGIBILIDAD_SIN_RESERVA,
     codigo_de,
 )
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm import LlmProvider
+from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
 from pred_engine.comun.reserva import ReserveCut
@@ -46,6 +48,7 @@ from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
 from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredicto
+from pred_engine.ingesta.categorizacion import classify_panel
 from pred_engine.ingesta.informe import ingest_csv_with_report
 from pred_engine.ingesta.pipeline import run_verify_parquet_with_sha256
 from pred_engine.ingesta.salida import validate_output_contract
@@ -157,15 +160,8 @@ class IngestionArtifact:
     datos_sinteticos: bool | None = None
     # SHA-256 de los bytes Parquet de los que se cargo ``panel``.
     parquet_sha256: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SkuExclusion:
-    """SKU descartado antes de L2 con su causa registrada (3.1)."""
-
-    sku_id: str
-    cause: str
-    code: str | None = None
+    reserve: ReserveCut | None = None
+    exclusions: tuple[SkuExclusion, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,7 +340,17 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     }
     if result.validation is not None:
         summary["m3"] = dict(result.validation.audit_bundle)
+    ingestion = result.ingestion
     if fitting is None:
+        if ingestion is not None and ingestion.exclusions:
+            summary["excluded_count"] = len(ingestion.exclusions)
+            summary["exclusions"] = [
+                {"sku_id": item.sku_id, "cause": item.cause, "code": item.code}
+                for item in ingestion.exclusions
+            ]
+        else:
+            summary["excluded_count"] = 0
+            summary["exclusions"] = []
         return summary
     reserve = fitting.reserve
     evaluation = result.evaluation
@@ -358,6 +364,7 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     summary["units"] = {"L2": _unit_counts(fitting.units)}
     if evaluation is not None:
         summary["units"]["L3"] = _unit_counts(evaluation.units)
+    summary["excluded_count"] = len(fitting.exclusions)
     summary["exclusions"] = [
         {"sku_id": item.sku_id, "cause": item.cause, "code": item.code}
         for item in fitting.exclusions
@@ -616,11 +623,17 @@ class Pipeline:
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
             panel, huella = run_verify_parquet_with_sha256(path)
+            meta = leer_metadatos_parquet(path)
+            topologia = classify_panel(panel, corte=meta.reserve)
             return IngestionArtifact(
                 path,
                 panel,
+                topology=tuple(topologia.metrics),
+                source_sha256=huella,
                 datos_sinteticos=request.datos_sinteticos,
                 parquet_sha256=huella,
+                reserve=meta.reserve,
+                exclusions=meta.exclusions,
             )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
@@ -642,6 +655,8 @@ class Pipeline:
             source_sha256=salida.report.ingest_id,
             datos_sinteticos=salida.report.source_file.datos_sinteticos,
             parquet_sha256=huella,
+            reserve=salida.result.topology.reserve,
+            exclusions=salida.result.topology.exclusions,
         )
 
     def _exclusion_cause(
@@ -685,9 +700,24 @@ class Pipeline:
         """L2: corte t*, una unidad por SKU x familia y pronostico de la reserva."""
         panel = ingestion.panel
         validate_output_contract(panel)
-        reserve = ReserveCut.of(panel)
+        if ingestion.reserve is not None:
+            reserve = ingestion.reserve
+            exclusions_l1 = ingestion.exclusions
+        else:
+            meta = leer_metadatos_parquet(ingestion.parquet_path)
+            reserve = meta.reserve
+            exclusions_l1 = meta.exclusions
         tasks: list[_FitTask] = []
-        exclusions: list[SkuExclusion] = []
+        exclusions: list[SkuExclusion] = [
+            SkuExclusion(
+                e.sku_id,
+                f"sin historia admisible: {e.cause}",
+                code=ELEGIBILIDAD_SIN_HISTORIA,
+            )
+            for e in exclusions_l1
+        ]
+        for item in exclusions:
+            self._emit("excluded", sku_id=item.sku_id, cause=item.cause, code=item.code)
         for sku_id, group in panel.groupby("sku_id", sort=True):
             ordered = group.sort_values("timestamp")
             admissible = ordered.loc[ordered["timestamp"] <= reserve.t_star]

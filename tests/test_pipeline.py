@@ -15,6 +15,7 @@ import pytest
 
 from pred_engine.cli import diagnose_pipeline, main
 from pred_engine.comun.modelos import ClassifiedObservation
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 from pred_engine.optimizacion.optimizadores.modelos_deep_learning.espacio_dl import (
     EspacioDL,
@@ -220,7 +221,7 @@ def _panel_with_admissible_days(pipeline, root, days):
             "sku_class": ingestion.panel["sku_class"].iloc[0],
         }
     )[list(ingestion.panel.columns)]
-    return replace(ingestion, panel=panel)
+    return replace(ingestion, panel=panel, reserve=ReserveCut.of(panel))
 
 
 def test_l2_excludes_history_below_the_hpo_minimum_windows(tmp_path):
