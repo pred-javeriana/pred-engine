@@ -12,7 +12,10 @@ import pandas as pd
 
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
-from pred_engine.comun.metadatos_parquet import empaquetar_metadatos_schema
+from pred_engine.comun.metadatos_parquet import (
+    empaquetar_metadatos_schema,
+    leer_metadatos_parquet,
+)
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.lector import export_parquet
 from pred_engine.ingesta.salida.errores import OutputContractError
@@ -74,7 +77,11 @@ def read_classified_parquet(path: str | Path) -> pd.DataFrame:
 
 
 def read_classified_parquet_with_sha256(path: str | Path) -> tuple[pd.DataFrame, str]:
-    """Como ``read_classified_parquet``, con el SHA-256 de los mismos bytes leidos."""
+    """Como ``read_classified_parquet``, con el SHA-256 de los mismos bytes leidos.
+
+    Un artefacto sin los metadatos de corte de pred_engine no es un handoff
+    valido: se rechaza pidiendo reimportar desde el CSV.
+    """
     origen = Path(path).expanduser().resolve()
     if not origen.is_file():
         raise FileNotFoundError(origen)
@@ -83,6 +90,7 @@ def read_classified_parquet_with_sha256(path: str | Path) -> tuple[pd.DataFrame,
     datos = origen.read_bytes()
     marco = pd.read_parquet(io.BytesIO(datos), engine="pyarrow")
     validate_output_contract(marco)
+    leer_metadatos_parquet(datos)
     _logger.info(
         "Artefacto 1.4 verificado ruta=%s filas=%s skus=%s",
         origen,

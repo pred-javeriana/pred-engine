@@ -67,7 +67,9 @@ Destino `.csv` o ruta bajo `raw/` se rechaza. No importa el paquete
 
 ### `read_classified_parquet(path) -> DataFrame`
 
-Lee con pyarrow y vuelve a imponer `validate_output_contract`. No escribe.
+Lee con pyarrow y vuelve a imponer `validate_output_contract`. Exige los
+metadatos `pred_engine` del mismo archivo; sin ellos lanza
+`MissingCutoffMetadataError` pidiendo reimportar desde el CSV. No escribe.
 
 ### Excepciones
 
@@ -88,7 +90,7 @@ tras el handoff 1.4.
 
 ### `run_verify_parquet(parquet_path) -> DataFrame`
 
-Relectura + contrato. Sin LLM y sin escritura.
+Relectura + contrato + metadatos `pred_engine`. Sin LLM y sin escritura.
 
 ## CLI
 
@@ -103,7 +105,8 @@ Stdout incluye `contrato_1_4: accepted`.
 pred-engine verify --parquet PATH
 ```
 
-Exit `0` ok, `6` contrato/preservacion/precondicion, `1` archivo ausente.
+Exit `0` ok, `6` contrato/preservacion/precondicion o metadatos `pred_engine`
+ausentes, `1` archivo ausente.
 
 ### `pred-engine ingest`
 

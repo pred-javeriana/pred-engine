@@ -11,6 +11,9 @@ Cubre los criterios de aceptacion y casos borde del rediseño F4:
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -494,3 +497,35 @@ def test_todos_los_productos_tardios_rechazan_panel_completo(tmp_path: Path):
     codigo = cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)])
     assert codigo == 6
     assert not (raiz / "processed" / "todos_tardios.parquet").exists()
+
+
+def test_s1_verify_rechaza_parquet_sin_metadatos(tmp_path: Path) -> None:
+    """``verify --parquet`` aplica la misma guarda de metadatos que run y classify."""
+    ruta_parquet = tmp_path / "sin_metadatos.parquet"
+    pq.write_table(
+        pa.Table.from_pandas(
+            pd.DataFrame(
+                {
+                    "sku_id": ["SKU-1"] * 10,
+                    "timestamp": pd.date_range("2024-01-01", periods=10),
+                    "demand_qty": [10.0] * 10,
+                    "lead_time_days": [2] * 10,
+                    "sku_class": ["smooth"] * 10,
+                }
+            )
+        ),
+        ruta_parquet,
+    )
+    ejecutable = shutil.which("pred-engine", path=str(Path(sys.executable).parent))
+    assert ejecutable is not None
+
+    proceso = subprocess.run(
+        [ejecutable, "verify", "--parquet", str(ruta_parquet)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proceso.returncode == 6
+    assert "re-import from the CSV" in proceso.stderr
+    assert "contrato_1_4: accepted" not in proceso.stdout
