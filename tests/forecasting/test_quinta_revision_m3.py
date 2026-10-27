@@ -5,6 +5,8 @@ import shutil
 import sqlite3
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from tests._plataforma import crear_base_plataforma
 from tests.forecasting.test_tercera_revision_m3 import fuente
@@ -73,9 +75,10 @@ def test_parquet_registrado_con_otro_contenido_no_hereda_su_origen_real(
     report = json.loads((root / "ingestas" / f"{sha256_file(source)}.json").read_text())
     parquet = root / report["published"]["parquet_path"]
     # El mismo archivo con otras demandas ya no es la ingesta declarada real.
+    meta = pq.read_table(parquet).schema.metadata
     panel = pd.read_parquet(parquet)
     panel["demand_qty"] = panel["demand_qty"] * 2 + 1
-    panel.to_parquet(parquet, index=False)
+    pq.write_table(pa.Table.from_pandas(panel).replace_schema_metadata(meta), parquet)
     antes = estado(db)
     capsys.readouterr()
     assert correr(db, root, "reemplazo", "--parquet", str(parquet)) == 1

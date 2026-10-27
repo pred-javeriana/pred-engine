@@ -629,7 +629,6 @@ class Pipeline:
                 path,
                 panel,
                 topology=tuple(topologia.metrics),
-                source_sha256=huella,
                 datos_sinteticos=request.datos_sinteticos,
                 parquet_sha256=huella,
                 reserve=meta.reserve,
