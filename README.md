@@ -58,7 +58,7 @@ unos 2 núcleos y `pytest -m slow` unos 2. Para no saturar el equipo:
 
 3. Antes de pedir revisión, corra la verificación local del motor y publique
    su recibo en el PR. Elige la muestra según las rutas que cambió la rama
-   (de nada para docs hasta 22 productos reales, unos 19 min) y usa
+   (de nada para docs hasta 22 productos reales, unos 33 min) y usa
    `--workers 2`. Necesita una copia de `pred-platform` en `../pred-platform`:
 
    ```bash
