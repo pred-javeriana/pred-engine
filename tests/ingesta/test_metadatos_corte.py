@@ -759,3 +759,90 @@ def test_s1_fit_rechaza_artefacto_sin_corte_y_no_relee_la_ruta(tmp_path: Path) -
     for candidato in fitted.candidates:
         sku_id = candidato.selection.sku_id
         assert candidato.series.tolist() == _demanda(filas_a, sku_id, meta_a.t_star)
+
+
+def _corrida(raiz: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    (corrida,) = (raiz / "runs").glob("*/corrida.json")
+    topologia = corrida.parent / "topologia.json"
+    return (
+        json.loads(corrida.read_text("utf-8"))["summary"],
+        json.loads(topologia.read_text("utf-8")),
+    )
+
+
+def _correr(tmp_path: Path, raiz: Path, *fuente: str) -> int:
+    base = crear_base_plataforma(tmp_path / f"{raiz.name}.sqlite")
+    return cli.main(
+        [
+            "run",
+            *fuente,
+            "--db-path",
+            str(base),
+            "--data-root",
+            str(raiz),
+            "--families",
+            "ml",
+            "--trials",
+            "1",
+            "--workers",
+            "1",
+            "--min-train",
+            "40",
+            "--horizon",
+            "2",
+            "--step",
+            "7",
+            "--seed",
+            "17",
+            "--telemetry-interval",
+            "0",
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("tardio", "esperado"), [(True, 2), (False, 1)], ids=["mixto", "control"]
+)
+def test_s3_topologia_cuenta_las_mismas_exclusiones_que_el_resumen(
+    tmp_path: Path, tardio: bool, esperado: int
+) -> None:
+    """topologia.json y corrida.json declaran el mismo excluded_count."""
+    filas = []
+    for i, fecha in enumerate(pd.date_range("2024-01-01", periods=100)):
+        filas.append(
+            {
+                "sku_id": "SKU-ADMITIDO",
+                "timestamp": fecha,
+                "demand_qty": 20.0 + 0.5 * (i % 20),
+                "lead_time_days": 3,
+            }
+        )
+        if tardio:
+            filas.append(
+                {
+                    "sku_id": "SKU-TARDIO",
+                    "timestamp": fecha,
+                    "demand_qty": 0.0 if i < 80 else 15.0,
+                    "lead_time_days": 3,
+                }
+            )
+        if i < 30:
+            # Termina antes de t*: L1 lo conserva y L2 lo excluye.
+            filas.append(
+                {
+                    "sku_id": "SKU-CORTO",
+                    "timestamp": fecha,
+                    "demand_qty": 9.0,
+                    "lead_time_days": 3,
+                }
+            )
+    csv = tmp_path / "mixto.csv"
+    pd.DataFrame(filas).to_csv(csv, index=False)
+
+    raiz = tmp_path / "data"
+    assert _correr(tmp_path, raiz, "--csv", str(csv)) == 0
+    resumen, topologia = _corrida(raiz)
+
+    assert resumen["excluded_count"] == esperado
+    assert topologia["excluded_count"] == resumen["excluded_count"]
+    assert topologia["t_star"] == resumen["reserve"]["t_star"] == "2024-03-20"

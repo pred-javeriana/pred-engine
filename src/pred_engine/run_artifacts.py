@@ -258,17 +258,15 @@ def write_run(
 
     fitting, evaluation = result.fitting, result.evaluation
     ingestion = result.ingestion
+    # Un solo resumen alimenta corrida.json y topologia.json: ambos declaran
+    # el mismo excluded_count.
+    summary = summarize_run(result)
     if ingestion is not None and ingestion.topology:
         # La topologia es de L1: se guarda aunque L2 o L3 hayan fallado.
         # El corte viaja con el artefacto; la ruta nunca se relee.
         corte = ingestion.reserve
         if corte is None and fitting is not None:
             corte = fitting.reserve
-        excl_count = (
-            len(ingestion.exclusions)
-            if ingestion.exclusions
-            else (len(fitting.exclusions) if fitting is not None else 0)
-        )
         archivos["topologia"] = destino / "topologia.json"
         _escribir_json(
             {
@@ -276,7 +274,7 @@ def write_run(
                 "source_sha256": ingestion.source_sha256,
                 "t_star": (None if corte is None else corte.t_star.date().isoformat()),
                 "reserved_days": None if corte is None else corte.reserved_days,
-                "excluded_count": excl_count,
+                "excluded_count": summary["excluded_count"],
                 "thresholds": {"adi": ADI_THRESHOLD, "cv2": CV2_THRESHOLD},
                 "metrics": [m.model_dump() for m in ingestion.topology],
             },
@@ -388,7 +386,7 @@ def write_run(
             "run_id": run_id,
             "written_at": datetime.now(UTC).isoformat(),
             **metadata,
-            "summary": summarize_run(result),
+            "summary": summary,
             "stage_times": {
                 stage.definition.id: {
                     "started_at": _instante(stage.started_at),
