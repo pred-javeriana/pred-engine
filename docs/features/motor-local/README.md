@@ -38,7 +38,7 @@ regla exige todos los niveles, así una carpeta nueva no evita la corrida.
 | Nivel | Rutas que lo exigen | Muestra | Pasa si | Tiempo medido (7900X, 4 núcleos) |
 | --- | --- | --- | --- | --- |
 | ninguno | `docs/**`, `**/*.md`, `tests/**`, `.github/**` y archivos de repositorio | ninguna | siempre | 0 |
-| `humo` | M0 (`aumentacion/`), telemetría, `verify.py`, `comun/llm/`, `analisis/`, `Makefile` | la corrida de CI: `tests/fixtures/semilla_inventario.csv` con M0 `mbb-directo` (8 SKU) | salida 0 u 8, telemetría y `verificar_corrida.py` | 30 s |
+| `humo` | M0 (`aumentacion/`), telemetría, `verify.py`, `comun/llm/`, `Makefile` | la corrida de CI: `tests/fixtures/semilla_inventario.csv` con M0 `mbb-directo` (8 SKU) | salida 0 u 8, telemetría y `verificar_corrida.py` | 30 s |
 | `muestra22` | el resto de `src/pred_engine/` (L1-L4), `pyproject.toml`, `uv.lock`, `.python-version` | `timing22.csv`: 22 productos reales, `--datos-reales` y ajustes por defecto | salida 0 u 8, `verificar_corrida.py --datos-reales` y un veredicto por producto | 19 min |
 | `plataforma` | `forecasting/persistencia_evidencia/` (junto con `muestra22`) | `tests/test_integracion_motor.py` de pred-platform con este motor | pytest termina sin fallas ni pruebas omitidas | 16 s |
 
