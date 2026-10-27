@@ -40,6 +40,7 @@ from pred_engine.ingesta.categorizacion import (
 from pred_engine.ingesta.lector import extract_csv
 from pred_engine.ingesta.salida import OutputHandoffError
 from pred_engine.ingesta.sonda import SemanticAlignmentError, probe_headers
+from pred_engine.optimizacion.router import PREDICTOR_FAMILIES
 
 if TYPE_CHECKING:
     from pred_engine.forecasting.evaluaciones.veredictos import PoliticaSeleccion
@@ -275,11 +276,21 @@ def build_parser() -> argparse.ArgumentParser:
             "conservar ambos (el nuevo con el hash en el nombre) en vez de fallar"
         ),
     )
-    run.add_argument(
+    familias = run.add_mutually_exclusive_group()
+    familias.add_argument(
         "--families",
         nargs="+",
-        default=["classical", "ml", "dl"],
-        choices=["classical", "ml", "dl", "foundation"],
+        default=list(PREDICTOR_FAMILIES),
+        choices=PREDICTOR_FAMILIES,
+        help="Familias de la matriz de enrutamiento (por defecto, las cuatro)",
+    )
+    familias.add_argument(
+        "--no-foundation",
+        action="store_true",
+        help=(
+            "Corre sin la familia foundation (Chronos-2), para equipos sin el "
+            "extra foundation o con poca memoria"
+        ),
     )
     run.add_argument("--trials", type=int, default=None)
     run.add_argument("--min-train", type=int, default=40)
@@ -639,6 +650,27 @@ _RUN_SETTINGS = (
 )
 
 
+def _modelo_fundacional_ausente() -> str | None:
+    """Carga Chronos-2 antes de la corrida: falla aqui y no en cada unidad.
+
+    La primera carga descarga los pesos de la revision fijada a la cache de
+    Hugging Face. Despues, los procesos de la corrida los leen solo de la cache:
+    sin red, cada carga en linea esperaria reintentos.
+    """
+    from pred_engine.comun.modelos.modelos_fundacionales import (
+        CHRONOS2_ZERO_SHOT,
+        ModeloFundacionalNoDisponibleError,
+        cargar_pipeline,
+    )
+
+    try:
+        cargar_pipeline(CHRONOS2_ZERO_SHOT)
+    except ModeloFundacionalNoDisponibleError as exc:
+        return str(exc)
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    return None
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     from pred_engine.forecasting.persistencia_evidencia import (
         BasePlataformaError,
@@ -647,6 +679,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     if args.telemetry_interval < 0:
         print("error: --telemetry-interval debe ser >= 0", file=sys.stderr)
+        return 1
+    if args.no_foundation:
+        args.families = [f for f in args.families if f != "foundation"]
+    if "foundation" in args.families and (error := _modelo_fundacional_ausente()):
+        print(
+            f"error: {error}; para correr sin Chronos-2 use --no-foundation",
+            file=sys.stderr,
+        )
         return 1
     ruta = (
         args.db_path

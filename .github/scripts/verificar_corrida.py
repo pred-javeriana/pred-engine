@@ -222,10 +222,14 @@ def verificar(run_dir: Path, db_path: Path, datos_reales: bool = False) -> list[
     with (run_dir / "recursos.jsonl").open() as archivo:
         roles = {json.loads(linea)["role"] for linea in archivo}
     exigir("worker" in roles, "recursos.jsonl: sin muestras de los procesos del pool")
+    # La familia foundation no se optimiza: sus unidades L2 no tienen estudio.
+    optimizadas = sum(
+        1 for u in traza if u["stage"] == "L2" and u["family"] != "foundation"
+    )
     estudios = list((run_dir / "hpo").glob("*/manifiesto.json"))
     exigir(
-        len(estudios) == unidades["L2"]["total"],
-        f"hpo/: {len(estudios)} estudios para {unidades['L2']['total']} unidades L2",
+        len(estudios) == optimizadas,
+        f"hpo/: {len(estudios)} estudios para {optimizadas} unidades L2 con HPO",
     )
 
     try:

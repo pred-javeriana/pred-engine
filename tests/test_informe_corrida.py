@@ -25,6 +25,7 @@ _ARGS = [
     "mae",
     "--seed",
     "17",
+    "--no-foundation",
 ]
 
 
