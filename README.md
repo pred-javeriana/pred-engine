@@ -22,8 +22,16 @@ MIT licence to allow institutional publication.
 
 ```bash
 # Requires uv — https://docs.astral.sh/uv/
-uv sync --frozen --extra dev
+uv sync --frozen --extra dev --extra foundation
 ```
+
+`pred-engine run` corre las cuatro familias, incluida `foundation`
+(Chronos-2), así que la instalación incluye el extra `foundation` (torch y
+chronos-forecasting). La primera corrida descarga los pesos de Chronos-2 en la
+revisión fijada a la caché de Hugging Face (`~/.cache/huggingface`, o
+`HF_HOME`). Las corridas siguientes leen los pesos de esa caché, también sin
+red con `HF_HUB_OFFLINE=1`. En un equipo sin espacio o memoria para Chronos-2,
+instale sin `--extra foundation` y pase `--no-foundation` a `pred-engine run`.
 
 ## Running tests
 
@@ -31,6 +39,15 @@ uv sync --frozen --extra dev
 uv run pytest                  # runs the suite with an 80% coverage gate
 uv run pytest -m "not slow"    # fast suite with coverage gate (CI mode)
 uv run pytest -m slow --no-cov # slow tests (benchmarks / model fitting)
+```
+
+Las pruebas nunca descargan pesos: `tests/conftest.py` fija `HF_HUB_OFFLINE=1`.
+Con el extra `foundation`, las pruebas lentas de Chronos-2 leen los pesos de la
+caché de Hugging Face y fallan con `no se pudo cargar amazon/chronos-2@...` si
+no están. Prepárelos una vez antes de correrlas:
+
+```bash
+uv run python -c "from pred_engine.comun.modelos.modelos_fundacionales import CHRONOS2_ZERO_SHOT, cargar_pipeline; cargar_pipeline(CHRONOS2_ZERO_SHOT)"
 ```
 
 ### Equipos con pocos núcleos (4 núcleos, 8 GB)
@@ -50,7 +67,7 @@ unos 2 núcleos y `pytest -m slow` unos 2. Para no saturar el equipo:
 
 3. Antes de pedir revisión, corra la verificación local del motor y publique
    su recibo en el PR. Elige la muestra según las rutas que cambió la rama
-   (de nada para docs hasta 22 productos reales, unos 19 min) y usa
+   (de nada para docs hasta 22 productos reales, unos 33 min) y usa
    `--workers 2`. Necesita una copia de `pred-platform` en `../pred-platform`:
 
    ```bash
@@ -87,8 +104,9 @@ uv run pre-commit run --all-files  # run manually
 
 `pred_engine.pipeline.Pipeline` owns the four-stage transition path. Existing
 stage APIs remain independently callable. The default composition routes the
-core classical, ML and DL families using the existing topology matrix;
-foundation is opt-in and requires the `foundation` extra.
+classical, ML, DL and foundation families using the existing topology matrix;
+foundation requires the `foundation` extra and the Chronos-2 weights. Pass
+`families` without `"foundation"` to compose only the other three.
 
 ```python
 from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion

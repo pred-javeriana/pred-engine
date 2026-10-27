@@ -12,7 +12,7 @@ actual también ejecuta M3 y aplica sus migraciones pendientes en esa base;
 los detalles de evaluación están en [M3](../3.Evaluacion/README.md).
 
 ```bash
-uv sync --frozen --extra dev
+uv sync --frozen --extra dev --extra foundation
 uv run --frozen pred-engine run --seed-csv inventory_data.csv --data-root data --db-path data/pred.db \
   --m0-metodo mbb-directo \
   --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
@@ -55,7 +55,8 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
 
 | Opción | Por defecto | Efecto |
 | --- | --- | --- |
-| `--families` | `classical ml dl` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. |
+| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. |
+| `--no-foundation` | apagada | Corre sin la familia `foundation`, igual que `--families classical ml dl`; para equipos sin el extra `foundation` o con poca memoria. No se combina con `--families`. |
 | `--trials` | presupuesto por perfil | Trials de HPO por estudio; con presupuestos chicos algunos SKU pueden quedar sin trial completo. |
 | `--workers` | núcleos - 1 | Procesos para las unidades de L2 y L3 y para los pronósticos por SKU de L4. |
 | `--min-train`, `--horizon`, `--step`, `--seasonality`, `--metric` | 40, 7, 7, 7, rmse | Ventanas walk-forward del HPO y de L3. |
@@ -168,7 +169,7 @@ unidades.
 | --- | --- |
 | 0 | L1-L4 completas y evaluación M3 PUBLICADA. |
 | 8 | Publicación completa con fallos técnicos aislados, actuales o conservados como FALLO_TECNICO en una publicación reutilizada. |
-| 1 | Error de entrada, base, identidad o etapa sin resultados. |
+| 1 | Error de entrada, base, identidad, Chronos-2 que no carga o etapa sin resultados. |
 | 7 | Solo para un pipeline de biblioteca sin validador configurado; el CLI requiere base central. |
 
 ## Referencia histórica en la máquina de la tesis
@@ -204,14 +205,14 @@ presupuesto por defecto:
 
 - Con la semilla Kaggle la política no enruta DL: DL solo aplica a SKU
   `smooth` y `erratic`.
-- Con `foundation` deshabilitada, la política 2.2 enruta los SKU `lumpy`
+- Con `--no-foundation`, la política 2.2 enruta los SKU `lumpy`
   solo a la familia clásica. Si esa
   unidad falla, el SKU queda sin candidato: 2 de 110 con la semilla Kaggle
   (`100::syn009` y `105::syn005`). Elegir el siguiente trial elegible cuando
   el ganador falla en L2 es una decisión pendiente (ADR-020).
-- La familia `foundation` queda fuera de las corridas de referencia: necesita
-  el extra `foundation` y los pesos de Chronos-2, que no están instalados en
-  la máquina de la tesis.
+- Las corridas de referencia de esta guía se midieron sin la familia
+  `foundation`, antes de que fuera parte de las familias por defecto. Con las
+  cuatro familias cambian los conteos de candidatos y unidades.
 - La corrida actual ejecuta L4/M3 con ventanas reservadas, recuperación y
   publicación en la base central. La interfaz visual M4 no forma parte de
   esta ruta. Los resultados históricos anteriores no sustituyen esa prueba.

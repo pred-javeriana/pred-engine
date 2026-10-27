@@ -18,8 +18,9 @@ principal stage.
 - **L2:** topology routing, per-family HPO, fitting on history <= t* (read directly
   from file metadata) and the forecast from t*. Excluded products from L1 are
   recorded as 'sin historia admisible: lanzado despues del corte'. Each SKU/family
-  is an isolated unit. Core families are SARIMA, LightGBM and NumPy MLP. Chronos-2
-  is opt-in, CPU-only and requires its optional dependencies and fixed local weights.
+  is an isolated unit. The families are SARIMA, LightGBM, NumPy MLP and Chronos-2.
+  Chronos-2 runs by default (`--no-foundation` drops it), is CPU-only and requires
+  the `foundation` extra and fixed local weights.
 - **L3:** causal walk-forward evaluation on the same admissible history used
   by HPO. Each window has a new fit. `selection_scope="same_history"` makes
   the limitation explicit. These diagnostic metrics are not a holdout verdict.

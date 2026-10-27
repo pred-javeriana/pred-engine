@@ -85,7 +85,8 @@ def test_run_csv_publica_corte_tardios_observaciones_y_campeones(tmp_path: Path)
     panel = _panel_con_producto_tardio(csv)
     raiz = tmp_path / "data"
     db = crear_base_plataforma(tmp_path / "pred.db")
-    args = ["run", "--csv", str(csv), "--db-path", str(db), "--data-root", str(raiz)]
+    args = ["run", "--no-foundation", "--csv", str(csv), "--db-path", str(db)]
+    args += ["--data-root", str(raiz)]
 
     assert cli.main(args) == 0
 
