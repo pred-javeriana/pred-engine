@@ -31,11 +31,16 @@ y anade `sku_class: SkuClass`. Una fila del artefacto final.
 
 ## `pred_engine.ingesta.salida`
 
+### `evaluar_precondiciones_y_exclusiones(panel, corte=None) -> tuple[DataFrame, ReserveCut, list[SkuExclusion]]`
+
+Fail-closed. Calcula el corte t* del calendario completo (ADR-019). Excluye
+cada producto sin demanda positiva en la historia admisible (t <= t*) con la
+causa "lanzado despues del corte". Si ningun SKU resulta admitido, lanza
+`HandoffPreconditionError`. Se ejecuta **antes** de `classify_daily_panel`.
+
 ### `require_positive_demand(panel) -> None`
 
-Fail-closed. Cada `sku_id` debe tener al menos un `demand_qty > 0` en su
-historia hasta t* (ADR-019). Se ejecuta **antes** de `classify_daily_panel`.
-No calcula ADI/CV².
+Alias/metodo de conveniencia para verificar que al menos un SKU tiene demanda positiva.
 
 ### `require_panel_preserved(daily_panel, classified) -> None`
 
@@ -53,15 +58,18 @@ panel completo (`OutputContractError`).
 
 Copia con `PANEL_FIELDS` y `PANEL_DTYPES`. El origen queda intacto.
 
-### `publish_classified_panel(classified, destination, *, data_root, daily_panel) -> Path`
+### `publish_classified_panel(classified, destination, *, data_root, daily_panel, reserve=None, exclusions=()) -> Path`
 
-Preserva → valida → normaliza → `export_parquet` en `processed/`.
+Preserva → valida → normaliza → empaqueta metadatos (`reserve` y `exclusions`
+en schema metadata de pyarrow bajo `pred_engine`) → `export_parquet` en `processed/`.
 Destino `.csv` o ruta bajo `raw/` se rechaza. No importa el paquete
 `categorizacion`.
 
 ### `read_classified_parquet(path) -> DataFrame`
 
-Lee con pyarrow y vuelve a imponer `validate_output_contract`. No escribe.
+Lee con pyarrow y vuelve a imponer `validate_output_contract`. Exige los
+metadatos `pred_engine` del mismo archivo; sin ellos lanza
+`MissingCutoffMetadataError` pidiendo reimportar desde el CSV. No escribe.
 
 ### Excepciones
 
@@ -82,7 +90,7 @@ tras el handoff 1.4.
 
 ### `run_verify_parquet(parquet_path) -> DataFrame`
 
-Relectura + contrato. Sin LLM y sin escritura.
+Relectura + contrato + metadatos `pred_engine`. Sin LLM y sin escritura.
 
 ## CLI
 
@@ -97,7 +105,8 @@ Stdout incluye `contrato_1_4: accepted`.
 pred-engine verify --parquet PATH
 ```
 
-Exit `0` ok, `6` contrato/preservacion/precondicion, `1` archivo ausente.
+Exit `0` ok, `6` contrato/preservacion/precondicion o metadatos `pred_engine`
+ausentes, `1` archivo ausente.
 
 ### `pred-engine ingest`
 

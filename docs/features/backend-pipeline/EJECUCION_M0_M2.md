@@ -36,16 +36,20 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
    `data/logs/`. Repetir el comando reutiliza el artefacto si la configuración
    no cambió; con otra configuración falla por WORM y hay que usar otro
    `--m0-nombre` u otro `--data-root`.
-2. **M1 (L1).** Valida el contrato, clasifica cada SKU (Syntetos-Boylan) con
-   su historia hasta t*, sin los días reservados (ADR-019), y publica
-   `data/processed/panel_sintetico_fase0.parquet` (contrato 1.4).
-3. **M2 (L2-L3).** Calcula el corte t* (los últimos `ceil(0.2 × días)` días
-   quedan reservados para M3), excluye con causa los SKU no elegibles y corre
-   cada SKU × familia como unidad: HPO (TPE + ASHA sobre walk-forward), ajuste
-   final en la historia admisible y pronóstico de los días reservados. El HPO
-   solo elige configuraciones que ajustan en todas las ventanas, y un
-   pronóstico final degenerado (regla #3) hace fallar su unidad (ADR-020). L3
-   vuelve a evaluar cada candidato con walk-forward causal.
+2. **M1 (L1).** Valida el contrato, calcula el corte t* una sola vez desde
+   el calendario completo (los últimos `ceil(0.2 × días)` días quedan reservados
+   para M3, ADR-019), excluye con causa ("lanzado despues del corte") los productos
+   sin demanda positiva hasta t*, clasifica cada SKU admitido (Syntetos-Boylan) y
+   publica `data/processed/panel_sintetico_fase0.parquet` (contrato 1.4) guardando
+   t* y las exclusiones en los metadatos de esquema `pred_engine`.
+3. **M2 (L2-L3).** Consume t* y las exclusiones directamente de los metadatos
+   del archivo Parquet (sin recalcular t*), registra los excluidos de L1 como
+   'sin historia admisible: lanzado despues del corte' y corre cada SKU × familia
+   admitido como unidad: HPO (TPE + ASHA sobre walk-forward), ajuste final en la
+   historia admisible y pronóstico de los días reservados. El HPO solo elige
+   configuraciones que ajustan en todas las ventanas, y un pronóstico final
+   degenerado (regla #3) hace fallar su unidad (ADR-020). L3 vuelve a evaluar cada
+   candidato con walk-forward causal.
 
 ## Opciones de M2
 

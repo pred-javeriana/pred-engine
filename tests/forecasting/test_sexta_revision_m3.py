@@ -6,6 +6,8 @@ import sqlite3
 from contextlib import contextmanager
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from tests._plataforma import crear_base_plataforma
 from tests.forecasting.test_quinta_revision_m3 import correr, estado
@@ -71,9 +73,10 @@ def test_ruta_sin_huella_conocida_no_hereda_un_origen_historico(tmp_path):
     report["published"]["sha256"] = None
     informe(root, source).write_text(json.dumps(report))
     parquet = parquet_de(root, source)
+    meta = pq.read_table(parquet).schema.metadata
     panel = pd.read_parquet(parquet)
     panel["demand_qty"] = panel["demand_qty"] * 2 + 1
-    panel.to_parquet(parquet, index=False)
+    pq.write_table(pa.Table.from_pandas(panel).replace_schema_metadata(meta), parquet)
     assert correr(db, root, "reemplazo", "--parquet", str(parquet)) == 0
     with sqlite3.connect(db) as conn:
         assert conn.execute(
@@ -168,9 +171,10 @@ def test_biblioteca_registra_la_huella_de_los_bytes_evaluados(tmp_path):
     )
     parquet = parquet_de(root, source)
     original = parquet.read_bytes()
+    meta = pq.read_table(parquet).schema.metadata
     panel = pd.read_parquet(parquet)
     panel["demand_qty"] = panel["demand_qty"] * 2 + 1
-    panel.to_parquet(parquet, index=False)
+    pq.write_table(pa.Table.from_pandas(panel).replace_schema_metadata(meta), parquet)
     reemplazo = sha256_file(parquet)
     with biblioteca(root, db, "intercambio") as p:
         ingestion = p.ingest(PipelineInput(parquet_path=parquet, data_root=root))

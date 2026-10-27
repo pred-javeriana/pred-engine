@@ -7,6 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from pred_engine import cli
@@ -248,12 +250,20 @@ def test_cli_verify_parquet_rechaza_sku_class_binaria(
     )
     raiz = tmp_path / "data"
     assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
-    panel = pd.read_parquet(raiz / "processed" / "mini.parquet")
+    publicado = raiz / "processed" / "mini.parquet"
+    corte = pq.read_schema(publicado).metadata[b"pred_engine"]
+    panel = pd.read_parquet(publicado)
     panel["sku_class"] = pd.Series(
         [etiquetas(str(clase)) for clase in panel["sku_class"]], dtype=object
     )
     externo = tmp_path / "externo.parquet"
-    panel.to_parquet(externo)
+    tabla = pa.Table.from_pandas(panel)
+    pq.write_table(
+        tabla.replace_schema_metadata(
+            {**(tabla.schema.metadata or {}), b"pred_engine": corte}
+        ),
+        externo,
+    )
     capsys.readouterr()
 
     codigo = cli.main(["verify", "--parquet", str(externo)])

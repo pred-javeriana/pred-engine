@@ -37,7 +37,9 @@ from pred_engine.comun.errores_codigo import (
     ELEGIBILIDAD_SIN_RESERVA,
     codigo_de,
 )
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm import LlmProvider
+from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
 from pred_engine.comun.reserva import ReserveCut
@@ -46,9 +48,13 @@ from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
 from pred_engine.forecasting.evaluaciones.veredictos import VEREDICTOS, Veredicto
+from pred_engine.ingesta.categorizacion import classify_panel
 from pred_engine.ingesta.informe import ingest_csv_with_report
-from pred_engine.ingesta.pipeline import run_verify_parquet_with_sha256
-from pred_engine.ingesta.salida import validate_output_contract
+from pred_engine.ingesta.salida import (
+    ClassifiedPublication,
+    read_classified_publication,
+    validate_output_contract,
+)
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degenerada
 from pred_engine.optimizacion.router import SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
@@ -149,23 +155,16 @@ class EvaluationSettings:
 class IngestionArtifact:
     parquet_path: Path
     panel: pd.DataFrame
-    # Metricas por SKU de la clasificacion (G1); vacio si la entrada fue un Parquet
-    # ya clasificado, que no las lleva.
+    # Metricas por SKU de la clasificacion (G1) con el corte de la publicacion
+    # leida; vacio en un artefacto construido a mano.
     topology: tuple[TopologyMetrics, ...] = ()
     source_sha256: str | None = None
     # Origen declarado en la entrada (CSV resuelto con su informe M1, o Parquet).
     datos_sinteticos: bool | None = None
     # SHA-256 de los bytes Parquet de los que se cargo ``panel``.
     parquet_sha256: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SkuExclusion:
-    """SKU descartado antes de L2 con su causa registrada (3.1)."""
-
-    sku_id: str
-    cause: str
-    code: str | None = None
+    reserve: ReserveCut | None = None
+    exclusions: tuple[SkuExclusion, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,7 +343,17 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     }
     if result.validation is not None:
         summary["m3"] = dict(result.validation.audit_bundle)
+    ingestion = result.ingestion
     if fitting is None:
+        if ingestion is not None and ingestion.exclusions:
+            summary["excluded_count"] = len(ingestion.exclusions)
+            summary["exclusions"] = [
+                {"sku_id": item.sku_id, "cause": item.cause, "code": item.code}
+                for item in ingestion.exclusions
+            ]
+        else:
+            summary["excluded_count"] = 0
+            summary["exclusions"] = []
         return summary
     reserve = fitting.reserve
     evaluation = result.evaluation
@@ -358,6 +367,7 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     summary["units"] = {"L2": _unit_counts(fitting.units)}
     if evaluation is not None:
         summary["units"]["L3"] = _unit_counts(evaluation.units)
+    summary["excluded_count"] = len(fitting.exclusions)
     summary["exclusions"] = [
         {"sku_id": item.sku_id, "cause": item.cause, "code": item.code}
         for item in fitting.exclusions
@@ -373,6 +383,29 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
         for unit in result.failures
     ]
     return summary
+
+
+def _ingestion_artifact(
+    path: Path,
+    publication: ClassifiedPublication,
+    *,
+    source_sha256: str | None = None,
+    datos_sinteticos: bool | None = None,
+) -> IngestionArtifact:
+    """Artefacto L1 cuyas filas, huella, corte, exclusiones y topologia salen
+    de una sola lectura de la publicacion."""
+    meta = publication.metadata
+    topologia = classify_panel(publication.frame, corte=meta.reserve)
+    return IngestionArtifact(
+        path,
+        publication.frame,
+        topology=tuple(topologia.metrics),
+        source_sha256=source_sha256,
+        datos_sinteticos=datos_sinteticos,
+        parquet_sha256=publication.sha256,
+        reserve=meta.reserve,
+        exclusions=meta.exclusions,
+    )
 
 
 class StageUnavailableError(RuntimeError):
@@ -615,12 +648,10 @@ class Pipeline:
         """L1: reuse current ingestion and consume its published 1.4 contract."""
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
-            panel, huella = run_verify_parquet_with_sha256(path)
-            return IngestionArtifact(
+            return _ingestion_artifact(
                 path,
-                panel,
+                read_classified_publication(path),
                 datos_sinteticos=request.datos_sinteticos,
-                parquet_sha256=huella,
             )
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
@@ -633,15 +664,14 @@ class Pipeline:
         if salida.error is not None:
             raise salida.error
         assert salida.result is not None
+        # Se usa la publicacion releida, no el artefacto de la importacion en
+        # memoria: otra publicacion pudo sustituir el archivo entre ambos pasos.
         path = salida.result.parquet_path
-        panel, huella = run_verify_parquet_with_sha256(path)
-        return IngestionArtifact(
+        return _ingestion_artifact(
             path,
-            panel,
-            topology=tuple(salida.result.topology.metrics),
+            read_classified_publication(path),
             source_sha256=salida.report.ingest_id,
             datos_sinteticos=salida.report.source_file.datos_sinteticos,
-            parquet_sha256=huella,
         )
 
     def _exclusion_cause(
@@ -685,9 +715,24 @@ class Pipeline:
         """L2: corte t*, una unidad por SKU x familia y pronostico de la reserva."""
         panel = ingestion.panel
         validate_output_contract(panel)
-        reserve = ReserveCut.of(panel)
+        if ingestion.reserve is not None:
+            reserve = ingestion.reserve
+            exclusions_l1 = ingestion.exclusions
+        else:
+            meta = leer_metadatos_parquet(ingestion.parquet_path)
+            reserve = meta.reserve
+            exclusions_l1 = meta.exclusions
         tasks: list[_FitTask] = []
-        exclusions: list[SkuExclusion] = []
+        exclusions: list[SkuExclusion] = [
+            SkuExclusion(
+                e.sku_id,
+                f"sin historia admisible: {e.cause}",
+                code=ELEGIBILIDAD_SIN_HISTORIA,
+            )
+            for e in exclusions_l1
+        ]
+        for item in exclusions:
+            self._emit("excluded", sku_id=item.sku_id, cause=item.cause, code=item.code)
         for sku_id, group in panel.groupby("sku_id", sort=True):
             ordered = group.sort_values("timestamp")
             admissible = ordered.loc[ordered["timestamp"] <= reserve.t_star]
