@@ -50,9 +50,12 @@ class SarimaForecaster(BaseForecaster):
     def fit(self, y: np.ndarray) -> SarimaForecaster:
         from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-        serie = self._validar_serie_1d(y)
+        # Un refit fallido nunca deja utilizable el modelo de un prefijo anterior.
         self._fitted = False
         self._resultado_ajuste = None
+        serie = self._validar_serie_1d(y)
+        if not np.all(np.isfinite(serie)):
+            raise ValueError("y contiene valores no finitos")
 
         modelo = SARIMAX(
             serie,
@@ -78,8 +81,10 @@ class SarimaForecaster(BaseForecaster):
                 f"SARIMA{self.order}x{self.seasonal_order} no convergio: {exc}"
             ) from exc
 
+        # Los polinomios reducidos incluyen los factores estacionales: una raiz
+        # estacional en el borde tambien se rechaza.
         modulo = modulo_minimo_de_raices(
-            resultado.polynomial_ar, resultado.polynomial_ma
+            resultado.polynomial_reduced_ar, resultado.polynomial_reduced_ma
         )
         if modulo < MODULO_MINIMO_RAIZ:
             raise AjusteModeloError(

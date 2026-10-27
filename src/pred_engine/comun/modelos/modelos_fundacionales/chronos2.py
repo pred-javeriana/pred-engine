@@ -44,6 +44,10 @@ class Chronos2Forecaster(BaseForecaster):
         self._contexto: np.ndarray | None = None
 
     def fit(self, y: np.ndarray) -> Chronos2Forecaster:
+        # Un refit fallido nunca deja utilizable el contexto anterior. El pipeline
+        # se conserva: sus pesos no dependen del contexto.
+        self._fitted = False
+        self._contexto = None
         serie = self._validar_serie_1d(y)
         if serie.size == 0:
             raise ValueError("y no puede estar vacio")
