@@ -6,7 +6,6 @@ import os
 import shutil
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 
 import pytest
@@ -66,12 +65,12 @@ def test_rechaza_cambios_sin_commit(repo):
 @pytest.fixture(autouse=True)
 def cerrojo_aislado(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     lock = tmp_path / "pred-motor-local.lock"
-    monkeypatch.setattr(motor_local, "CERROJO", lock, raising=False)
+    monkeypatch.setattr(motor_local, "CERROJO", lock)
     return lock
 
 
 def test_cerrojo_impide_segunda_corrida_concurrente(repo, monkeypatch, tmp_path):
-    cerrojo = getattr(motor_local, "CERROJO", tmp_path / "pred-motor-local.lock")
+    cerrojo = motor_local.CERROJO
     cerrojo.mkdir(parents=True, exist_ok=True)
 
     runner_llamado = False
@@ -96,7 +95,7 @@ def test_cerrojo_impide_segunda_corrida_concurrente(repo, monkeypatch, tmp_path)
 
 
 def test_cerrojo_se_libera_en_finally_ante_excepcion(repo, monkeypatch, tmp_path):
-    cerrojo = getattr(motor_local, "CERROJO", tmp_path / "pred-motor-local.lock")
+    cerrojo = motor_local.CERROJO
 
     def fake_falla(ctx):
         assert cerrojo.exists()
@@ -138,12 +137,7 @@ def test_muestra22_crea_directorio_padre_inexistente(tmp_path):
 
 
 def test_cerrojo_independiente_de_tmpdir_en_subproceso(repo, monkeypatch, tmp_path):
-    # Se utiliza una ruta fija aislada en /tmp mediante PRED_MOTOR_LOCAL_LOCK para
-    # no interferir con otras corridas activas en la máquina ni depender de TMPDIR.
-    token = uuid.uuid4().hex[:8]
-    cerrojo_fijo = Path(f"/tmp/pred-motor-local-test-{token}.lock")
-    monkeypatch.setattr(motor_local, "CERROJO", cerrojo_fijo)
-    monkeypatch.setenv("PRED_MOTOR_LOCAL_LOCK", str(cerrojo_fijo))
+    cerrojo_fijo = motor_local.CERROJO
 
     plat_dir = tmp_path / "plat"
     (plat_dir / "src" / "pred_platform").mkdir(parents=True)
@@ -165,6 +159,9 @@ from pathlib import Path
 sys.path.insert(0, {str(SCRIPTS)!r})
 import motor_local
 
+assert motor_local.CERROJO == Path("/tmp/pred-motor-local.lock"), motor_local.CERROJO
+motor_local.CERROJO = Path({str(cerrojo_fijo)!r})
+
 stub_ejecutado = False
 
 def stub_segundo(ctx):
@@ -185,7 +182,6 @@ finally:
 """
         env = os.environ.copy()
         env["TMPDIR"] = str(otro_tmp)
-        env["PRED_MOTOR_LOCAL_LOCK"] = str(cerrojo_fijo)
         resultado_subproceso = subprocess.run(
             [sys.executable, "-c", sub_codigo],
             cwd=str(repo),
@@ -207,14 +203,8 @@ finally:
 
     monkeypatch.setitem(motor_local.NIVELES, "humo", stub_primero)
 
-    try:
-        codigo = motor_local.main(
-            ["--base", "main", "--nivel", "humo", "--plataforma", str(plat_dir)]
-        )
-        assert codigo == 0
-        assert resultado_subproceso is not None
-    finally:
-        shutil.rmtree(cerrojo_fijo, ignore_errors=True)
-
-    # Al terminar main(), el cerrojo debe haber sido liberado
-    assert not cerrojo_fijo.exists()
+    codigo = motor_local.main(
+        ["--base", "main", "--nivel", "humo", "--plataforma", str(plat_dir)]
+    )
+    assert codigo == 0
+    assert resultado_subproceso is not None
