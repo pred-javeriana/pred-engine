@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -133,3 +135,86 @@ def test_muestra22_crea_directorio_padre_inexistente(tmp_path):
     assert destino.is_file()
     assert destino.stat().st_size > 0
     assert "m22-" in resultado.stdout
+
+
+def test_cerrojo_independiente_de_tmpdir_en_subproceso(repo, monkeypatch, tmp_path):
+    # Se utiliza una ruta fija aislada en /tmp mediante PRED_MOTOR_LOCAL_LOCK para
+    # no interferir con otras corridas activas en la máquina ni depender de TMPDIR.
+    token = uuid.uuid4().hex[:8]
+    cerrojo_fijo = Path(f"/tmp/pred-motor-local-test-{token}.lock")
+    monkeypatch.setattr(motor_local, "CERROJO", cerrojo_fijo)
+    monkeypatch.setenv("PRED_MOTOR_LOCAL_LOCK", str(cerrojo_fijo))
+
+    plat_dir = tmp_path / "plat"
+    (plat_dir / "src" / "pred_platform").mkdir(parents=True)
+
+    otro_tmp = tmp_path / "otro_tmpdir"
+    otro_tmp.mkdir()
+
+    resultado_subproceso: subprocess.CompletedProcess[str] | None = None
+
+    def stub_primero(ctx):
+        nonlocal resultado_subproceso
+        assert cerrojo_fijo.exists()
+        # Con el cerrojo activo en el proceso principal, lanzamos un segundo proceso
+        # con un TMPDIR diferente para verificar que no toma un cerrojo separado.
+        sub_codigo = f"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, {str(SCRIPTS)!r})
+import motor_local
+
+stub_ejecutado = False
+
+def stub_segundo(ctx):
+    global stub_ejecutado
+    stub_ejecutado = True
+    return motor_local.Resultado(True, 0, 1.0, "humo-sub")
+
+motor_local.NIVELES["humo"] = stub_segundo
+
+try:
+    ret = motor_local.main(
+        ["--base", "main", "--nivel", "humo", "--plataforma", {str(plat_dir)!r}]
+    )
+    sys.exit(ret)
+finally:
+    if stub_ejecutado:
+        sys.exit(99)
+"""
+        env = os.environ.copy()
+        env["TMPDIR"] = str(otro_tmp)
+        env["PRED_MOTOR_LOCAL_LOCK"] = str(cerrojo_fijo)
+        resultado_subproceso = subprocess.run(
+            [sys.executable, "-c", sub_codigo],
+            cwd=str(repo),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        # El segundo proceso sale con error antes de entrar a su stub
+        assert resultado_subproceso.returncode != 0
+        assert resultado_subproceso.returncode != 99
+        assert (
+            "error: ya hay una corrida de motor-local en curso"
+            in resultado_subproceso.stderr
+        )
+        assert str(cerrojo_fijo) in resultado_subproceso.stderr
+        # El cerrojo del primer proceso sigue intacto mientras este ejecuta
+        assert cerrojo_fijo.exists()
+        return motor_local.Resultado(True, 0, 1.0, "humo-1")
+
+    monkeypatch.setitem(motor_local.NIVELES, "humo", stub_primero)
+
+    try:
+        codigo = motor_local.main(
+            ["--base", "main", "--nivel", "humo", "--plataforma", str(plat_dir)]
+        )
+        assert codigo == 0
+        assert resultado_subproceso is not None
+    finally:
+        shutil.rmtree(cerrojo_fijo, ignore_errors=True)
+
+    # Al terminar main(), el cerrojo debe haber sido liberado
+    assert not cerrojo_fijo.exists()

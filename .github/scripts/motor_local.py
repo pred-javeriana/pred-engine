@@ -20,7 +20,6 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -44,7 +43,7 @@ M0_HUMO = (
 )
 WORKERS = "2"
 HEBRAS = "4"
-CERROJO = Path(tempfile.gettempdir()) / "pred-motor-local.lock"
+CERROJO = Path(os.environ.get("PRED_MOTOR_LOCAL_LOCK", "/tmp/pred-motor-local.lock"))
 
 
 @dataclass(frozen=True)
