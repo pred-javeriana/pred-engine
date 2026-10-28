@@ -68,8 +68,9 @@ Destino `.csv` o ruta bajo `raw/` se rechaza. No importa el paquete
 ### `read_classified_parquet(path) -> DataFrame`
 
 Lee con pyarrow y vuelve a imponer `validate_output_contract`. Exige los
-metadatos `pred_engine` del mismo archivo; sin ellos lanza
-`MissingCutoffMetadataError` pidiendo reimportar desde el CSV. No escribe.
+metadatos `pred_engine` del mismo archivo; sin ellos, o con una `fraction`
+fuera de (0, 1), lanza `MissingCutoffMetadataError` pidiendo reimportar desde
+el CSV. No escribe.
 
 ### Excepciones
 
