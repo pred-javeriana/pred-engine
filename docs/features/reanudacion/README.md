@@ -33,6 +33,23 @@ ajustes. La API de biblioteca es optativa: quien proporcione `UnitCheckpoints(id
 identificar también código, dependencias y configuración externa de sus estrategias y fábricas.
 Una clave incompatible no se reutiliza y un archivo corrupto falla explícitamente sin sobrescribirlo.
 
+## Recuperación de M3 sin archivos locales
+
+Si se pierden `candidatos.json` y los checkpoints de L2, M3 busca primero el protocolo
+congelado por la ejecución central ya validada. Comprueba entrada, código, ajustes y
+partición antes de restaurar el manifiesto. No usa los candidatos reconstruidos para
+buscar una publicación anterior ni cambia su identidad.
+
+Una corrida `PUBLICADA` conserva toda su evidencia aunque un ajuste final falle durante
+el reintento. Una corrida activa continúa con la receta congelada si faltan candidatos
+por fallos técnicos del reintento. Los candidatos reconstruidos con éxito deben coincidir
+con esa receta. Una deriva de candidatos, protocolo o partición rechaza la corrida activa
+con estado `RECHAZADA` y una causa durable, sin crear otro protocolo.
+
+Si una ejecución ya tiene varios protocolos M3, el reintento falla explícitamente con
+`la ejecucion tiene varios protocolos M3 durables`. No elige uno ni modifica su evidencia.
+La recuperación no elimina publicaciones duplicadas existentes.
+
 ## Compatibilidad y límites
 
 - Conservar la base central y el directorio completo de la corrida, incluidos HPO y M3.

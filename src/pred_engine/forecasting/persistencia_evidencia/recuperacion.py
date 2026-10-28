@@ -27,6 +27,7 @@ from pred_engine.forecasting.generador_pronosticos import (
     FalloPronostico,
     UnidadPronostico,
 )
+from pred_engine.forecasting.persistencia_evidencia.contratos import IdentidadCorrida
 from pred_engine.forecasting.persistencia_evidencia.repositorio import (
     _exigir_estado,
     _inconsistente,
@@ -278,6 +279,28 @@ def candidatos_con_fallos(
             (run_id, sku),
         )
     )
+
+
+def protocolo_de_ejecucion(
+    conn: sqlite3.Connection, ejecucion_id: int
+) -> tuple[IdentidadCorrida, dict[str, Any]] | None:
+    """Busca la autoridad durable sin depender de archivos ni candidatos de M2."""
+    filas = conn.execute(
+        "SELECT c.run_id, c.identidad FROM m3_protocolos p "
+        "JOIN m3_corridas c ON c.run_id = p.run_id WHERE p.ejecucion_id = ?",
+        (ejecucion_id,),
+    ).fetchall()
+    if len(filas) > 1:
+        raise _inconsistente("la ejecucion tiene varios protocolos M3 durables")
+    if not filas:
+        return None
+    run_id, texto = filas[0]
+    identidad = IdentidadCorrida.model_validate_json(texto)
+    if identidad.run_id != run_id:
+        raise _inconsistente("identidad incompatible con el protocolo durable")
+    guardado = protocolo_guardado(conn, run_id)
+    assert guardado is not None
+    return identidad, guardado
 
 
 def protocolo_guardado(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
