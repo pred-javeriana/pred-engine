@@ -23,9 +23,12 @@ aunque un SKU falle y poder retomarse sin repetir el HPO ya terminado.
 
 ## Decision
 
-1. **Reserva (ADR-03-003, 3.1).** `ReserveCut` calcula un corte unificado t*:
-   los últimos `ceil(0.2 × días del calendario del panel)` días quedan
-   reservados para M3. L2 y L3 solo leen observaciones con fecha ≤ t*. Un SKU
+1. **Reserva (ADR-03-003, 3.1).** La importación calcula una sola vez con
+   `ReserveCut` el corte t* sobre el calendario completo del CSV importado:
+   los últimos `ceil(0.2 × días del calendario completo)` días quedan
+   reservados para M3. Los consumidores leen el corte y la reserva de los
+   metadatos `pred_engine` del Parquet, sin derivarlos del panel restante tras
+   las exclusiones. L2 y L3 solo leen observaciones con fecha ≤ t*. Un SKU
    sin historia admisible suficiente, con huecos de calendario, con demanda no
    finita o cuya serie termina antes de t* se excluye con su causa registrada.
    La historia admisible mínima es `min_train + horizonte + 3 × paso`: las 4
