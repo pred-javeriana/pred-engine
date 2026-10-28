@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from pred_engine.comun.ejecucion_paralela import (
+    CONTEXTO_MP,
     EtiquetaUnidad,
     ejecutar_unidades,
     emitir_evento,
@@ -32,6 +35,21 @@ def _mata_al_proceso(x: int) -> int:
     return x
 
 
+def _la_primera_espera_la_senal(tarea: tuple[int, str]) -> int:
+    indice, senal = tarea
+    limite = time.monotonic() + 30
+    while indice == 0 and not Path(senal).exists():
+        if time.monotonic() > limite:
+            raise TimeoutError("la senal no llego")
+        time.sleep(0.01)
+    return indice
+
+
+def _escribir_eventos(ruta: str, proceso: int, cantidad: int) -> None:
+    for i in range(cantidad):
+        emitir_evento(ruta, "unit_started", proceso=proceso, i=i, relleno="x" * 200)
+
+
 def _eventos(ruta: Path) -> list[dict[str, Any]]:
     return [
         json.loads(linea) for linea in ruta.read_text(encoding="utf-8").splitlines()
@@ -51,6 +69,34 @@ def test_emitir_evento_agrega_una_linea_json(tmp_path: Path) -> None:
     assert (primero["event"], primero["stage"]) == ("stage_started", "L1")
     assert segundo["state"] == "completed"
     assert primero["t"].endswith("+00:00")
+
+
+def test_muchos_procesos_escribiendo_a_la_vez_no_pierden_ni_rompen_lineas(
+    tmp_path: Path,
+) -> None:
+    ruta = tmp_path / "progreso.jsonl"
+    procesos, cantidad = 4, 200
+    hijos = [
+        CONTEXTO_MP.Process(target=_escribir_eventos, args=(str(ruta), p, cantidad))
+        for p in range(procesos)
+    ]
+    for hijo in hijos:
+        hijo.start()
+    for hijo in hijos:
+        hijo.join()
+
+    lineas = ruta.read_text(encoding="utf-8", errors="replace").splitlines()
+    validas = []
+    for linea in lineas:
+        try:
+            validas.append(json.loads(linea))
+        except ValueError:
+            pass
+    assert len(validas) == len(lineas)  # ninguna linea rota
+    # Cada evento de cada proceso, una sola vez.
+    assert sorted((e["proceso"], e["i"]) for e in validas) == [
+        (p, i) for p in range(procesos) for i in range(cantidad)
+    ]
 
 
 def test_un_fallo_al_escribir_no_interrumpe(tmp_path: Path) -> None:
@@ -88,6 +134,34 @@ def test_una_unidad_fallida_anota_su_error_y_las_demas_siguen(tmp_path: Path) ->
         ("SKU-2", "completada"),
     ]
     assert fines[1]["error"] == "ValueError: tres no vale"
+
+
+def test_el_fin_de_una_unidad_se_escribe_mientras_otra_sigue_corriendo(
+    tmp_path: Path,
+) -> None:
+    ruta, senal = tmp_path / "progreso.jsonl", tmp_path / "senal"
+    corrida = threading.Thread(
+        target=ejecutar_unidades,
+        args=(_la_primera_espera_la_senal, [(0, str(senal)), (1, str(senal))]),
+        kwargs={"procesos": 2, "etiquetas": _etiquetas(2), "progreso": ruta},
+    )
+
+    def terminadas() -> set[str]:
+        lineas = ruta.read_text(encoding="utf-8").splitlines() if ruta.exists() else []
+        eventos = [json.loads(linea) for linea in lineas if linea.endswith("}")]
+        return {e["sku_id"] for e in eventos if e["event"] == "unit_finished"}
+
+    corrida.start()
+    try:
+        limite = time.monotonic() + 20
+        while "SKU-1" not in terminadas() and time.monotonic() < limite:
+            time.sleep(0.05)
+        # SKU-1 ya termino y esta escrito aunque SKU-0, antes en la lista, siga.
+        assert terminadas() == {"SKU-1"}
+    finally:
+        senal.touch()
+        corrida.join(timeout=30)
+    assert terminadas() == {"SKU-0", "SKU-1"}
 
 
 def test_en_paralelo_cada_hijo_anota_su_unidad(tmp_path: Path) -> None:

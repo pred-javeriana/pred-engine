@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import sys
 import threading
 import time
 from collections import deque
@@ -29,6 +30,9 @@ from typing import Any, Literal
 
 from pred_engine.comun.errores_codigo import codigo_de
 from pred_engine.comun.logger import get_logger
+
+if sys.platform == "win32":
+    import msvcrt
 
 _logger = get_logger(__name__)
 
@@ -153,11 +157,42 @@ def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat()
 
 
+if sys.platform == "win32":
+    # En Windows O_APPEND no es atomico entre procesos (busca el final y despues
+    # escribe): cada linea se agrega bajo un candado sobre un byte que nadie lee,
+    # mas alla del final. El CRT ubica ese byte con una posicion de 32 bits.
+    _BYTE_DEL_CANDADO = 2**31 - 2
+
+    def _agregar(descriptor: int, datos: bytes) -> None:
+        # LK_LOCK reintenta cada 1 s; aqui se reintenta cada ~1 ms, hasta 10 s.
+        limite = time.monotonic() + 10
+        while True:
+            os.lseek(descriptor, _BYTE_DEL_CANDADO, os.SEEK_SET)
+            try:
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                if time.monotonic() >= limite:
+                    raise
+                time.sleep(0.001)
+        try:
+            os.write(descriptor, datos)
+        finally:
+            os.lseek(descriptor, _BYTE_DEL_CANDADO, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+
+else:
+
+    def _agregar(descriptor: int, datos: bytes) -> None:
+        os.write(descriptor, datos)  # en POSIX una linea corta en O_APPEND no se pisa
+
+
 def emitir_evento(ruta: str | Path, evento: str, /, **datos: Any) -> None:
     """Agrega una linea JSON a ``ruta`` con una sola escritura ``O_APPEND``.
 
-    El progreso es observabilidad: un fallo al escribirlo se registra y nunca
-    interrumpe el trabajo.
+    En Windows la escritura va bajo un candado entre procesos. El progreso es
+    observabilidad: un fallo al escribirlo se registra y nunca interrumpe el
+    trabajo.
     """
     registro = {"event": evento, "t": _iso(time.time()), **datos}
     try:
@@ -166,7 +201,7 @@ def emitir_evento(ruta: str | Path, evento: str, /, **datos: Any) -> None:
             os.fspath(ruta), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644
         )
         try:
-            os.write(descriptor, linea.encode("utf-8"))
+            _agregar(descriptor, linea.encode("utf-8"))
         finally:
             os.close(descriptor)
     except OSError as exc:
