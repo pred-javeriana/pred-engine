@@ -207,6 +207,9 @@ class FittingArtifact:
     policy: RoutingPolicy | None = None
     # Ajustes de M2 que cambian resultados (familias, ensayos, semilla).
     m2_settings: Mapping[str, Any] = field(default_factory=dict)
+    # Exclusiones de M1 (lanzados despues del corte) que L2 leyo con ``reserve``;
+    # M3 las publica tal cual, sin recalcularlas.
+    late_launches: tuple[SkuExclusion, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -812,6 +815,7 @@ class Pipeline:
             tuple(exclusions),
             getattr(self.router, "policy", None),
             dict(self.m2_settings),
+            tuple(exclusions_l1),
         )
 
     def evaluate(self, fitting: FittingArtifact) -> EvaluationArtifact:
