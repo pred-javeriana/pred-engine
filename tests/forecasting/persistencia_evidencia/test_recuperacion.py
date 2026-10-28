@@ -8,6 +8,7 @@ import pytest
 from tests._evidencia import base, corrida, handoff, identidad
 from tests._manifiestos import manifiesto
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.forecasting.base import SeasonalNaiveStub
 from pred_engine.forecasting.generador_pronosticos import (
@@ -45,6 +46,8 @@ def _preparar():
         procedencia={},
         reserva_abierta_en=datetime.now(UTC),
         n_unidades_previstas=18,
+        t_star=pd.Timestamp("2024-01-14"),
+        lanzamientos_tardios=(),
     )
     corte = ReserveCut(
         pd.Timestamp("2024-01-14"),
@@ -147,6 +150,8 @@ def test_protocolo_distinto_no_reemplaza_el_anterior():
             procedencia={},
             reserva_abierta_en=datetime.now(UTC),
             n_unidades_previstas=18,
+            t_star=pd.Timestamp("2024-01-14"),
+            lanzamientos_tardios=(),
         )
     assert conn.execute("SELECT COUNT(*) FROM m3_protocolos").fetchone()[0] == 1
     assert (
@@ -170,4 +175,42 @@ def test_no_se_puede_recualificar_una_ingesta_sintetica_como_real():
             datos_sinteticos=False,
         )
     assert conn.execute("SELECT datos_sinteticos FROM m3_corridas").fetchall() == [(1,)]
+    conn.close()
+
+
+def _fijar_de_nuevo(conn, rid, protocolo, texto, **corte):
+    fijar_protocolo(
+        conn,
+        rid,
+        protocolo=protocolo,
+        manifiesto=texto,
+        procedencia={},
+        reserva_abierta_en=datetime.now(UTC),
+        n_unidades_previstas=18,
+        **{"t_star": pd.Timestamp("2024-01-14"), "lanzamientos_tardios": ()} | corte,
+    )
+
+
+def test_el_corte_fijado_no_cambia_ni_admite_otra_causa():
+    conn, rid, _, _, _, _, protocolo, texto = _preparar()
+    _fijar_de_nuevo(conn, rid, protocolo, texto)
+    with pytest.raises(EvidenciaInconsistenteError, match="corte"):
+        _fijar_de_nuevo(conn, rid, protocolo, texto, t_star=pd.Timestamp("2024-01-15"))
+    tardio = SkuExclusion("TARDE", "lanzado despues del corte")
+    with pytest.raises(EvidenciaInconsistenteError, match="lanzamientos tardios"):
+        _fijar_de_nuevo(conn, rid, protocolo, texto, lanzamientos_tardios=(tardio,))
+    with pytest.raises(EvidenciaInconsistenteError, match="otra causa"):
+        _fijar_de_nuevo(
+            conn,
+            rid,
+            protocolo,
+            texto,
+            lanzamientos_tardios=(SkuExclusion("TARDE", "sin historia admisible"),),
+        )
+    assert conn.execute("SELECT run_id, t_star FROM m3_cortes").fetchall() == [
+        (rid, "2024-01-14")
+    ]
+    assert conn.execute("SELECT COUNT(*) FROM m3_lanzamientos_tardios").fetchone() == (
+        0,
+    )
     conn.close()

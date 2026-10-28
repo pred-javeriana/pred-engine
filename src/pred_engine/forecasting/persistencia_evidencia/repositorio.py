@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
 from pred_engine.forecasting.adaptador_candidatos import (
     HandoffValidado,
@@ -58,14 +59,19 @@ TABLAS_POR_SKU = (
     "m3_pronosticos",
     "m3_metricas",
     "m3_veredictos",
+    "m3_observaciones",
 )
 TABLAS = (
     "m3_corridas",
     "m3_protocolos",
     "m3_categorias",
     "m3_cartera",
+    "m3_cortes",
+    "m3_lanzamientos_tardios",
     *TABLAS_POR_SKU,
 )
+# Unica causa de M1 que M3 publica como lanzamiento tardio (contrato v2, seccion 5).
+CAUSA_LANZAMIENTO_TARDIO = "lanzado despues del corte"
 
 _METRICAS = ("n_pares", "mae", "rmse", "me", "mase", "razon_sn")
 _CONTEOS = ("n_ventanas_totales", "n_ventanas_validas", "n_pronosticos_validos")
@@ -403,13 +409,18 @@ def guardar_evaluacion(
     run_id: str,
     evaluaciones: Sequence[EvaluacionSku],
     resultado: ResultadoEvaluacion,
+    *,
+    observaciones: Mapping[str, pd.Series],
 ) -> None:
-    """Metricas, seleccion y veredictos de 3.4: EVALUADA -> SELECCIONADA.
+    """Metricas, seleccion, veredictos y demanda observada: EVALUADA -> SELECCIONADA.
 
     Todo en una transaccion; en una corrida ya SELECCIONADA no escribe nada.
     Las versiones de politica y metricas deben ser las de la identidad, el
     origen de los datos el de la corrida, y cada modelo evaluado con ventanas,
     incluida la linea base, debe tener sus pronosticos confirmados.
+    ``observaciones`` es la reserva real de cada SKU del manifiesto, la misma
+    que puntuo las metricas; M4 la muestra frente a los pronosticos, asi que
+    cada fecha pronosticada necesita su fila (``valor`` NULL sin observacion).
     """
     with _transaccion(conn):
         estado = _exigir_estado(
@@ -543,6 +554,7 @@ def guardar_evaluacion(
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             _filas_cartera(run_id, evaluaciones),
         )
+        _insertar_observaciones(conn, run_id, observaciones)
         _cambiar_estado(conn, run_id, "SELECCIONADA")
 
 
@@ -711,6 +723,103 @@ def _cambiar_estado(conn: sqlite3.Connection, run_id: str, destino: str) -> None
         "UPDATE m3_corridas SET estado = ? WHERE run_id = ?", (destino, run_id)
     )
     _logger.info("Corrida run_id=%s pasa a %s", run_id, destino)
+
+
+def _fijar_corte(
+    conn: sqlite3.Connection,
+    run_id: str,
+    estado: EstadoCorrida,
+    t_star: pd.Timestamp,
+    lanzamientos_tardios: Sequence[SkuExclusion],
+) -> None:
+    """Corte y lanzamientos tardios de M1, dentro de la transaccion del llamador.
+
+    Se escriben una sola vez y despues solo se comparan. Una corrida que ya paso
+    de EVALUADA sin ellos (anterior a la version 10) no los recibe: sus
+    observaciones tampoco existen y M4 responde ``metadata_missing``.
+    """
+    tardias = sorted({e.sku_id for e in lanzamientos_tardios})
+    otras = sorted({e.cause for e in lanzamientos_tardios} - {CAUSA_LANZAMIENTO_TARDIO})
+    if otras or len(tardias) != len(lanzamientos_tardios):
+        raise _inconsistente(
+            f"corrida {run_id}: lanzamientos tardios duplicados o con otra causa"
+        )
+    previo = conn.execute(
+        "SELECT t_star FROM m3_cortes WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    if previo is None:
+        if estado not in ("EN_CURSO", "EVALUADA"):
+            return
+        conn.execute(
+            "INSERT INTO m3_cortes (run_id, t_star) VALUES (?, ?)",
+            (run_id, _fecha(t_star)),
+        )
+        conn.executemany(
+            "INSERT INTO m3_lanzamientos_tardios (run_id, sku, causa) VALUES (?, ?, ?)",
+            [(run_id, sku, CAUSA_LANZAMIENTO_TARDIO) for sku in tardias],
+        )
+        return
+    guardadas = [
+        sku
+        for (sku,) in conn.execute(
+            "SELECT sku FROM m3_lanzamientos_tardios WHERE run_id = ? ORDER BY sku",
+            (run_id,),
+        )
+    ]
+    if (previo[0], guardadas) != (_fecha(t_star), tardias):
+        raise _inconsistente(
+            f"corrida {run_id}: corte o lanzamientos tardios distintos de los fijados"
+        )
+
+
+def _insertar_observaciones(
+    conn: sqlite3.Connection, run_id: str, observaciones: Mapping[str, pd.Series]
+) -> None:
+    skus = {
+        s
+        for (s,) in conn.execute("SELECT sku FROM m3_skus WHERE run_id = ?", (run_id,))
+    }
+    if set(observaciones) != skus:
+        raise _inconsistente(
+            f"corrida {run_id}: la demanda observada no cubre exactamente los SKU "
+            "del manifiesto"
+        )
+    if (
+        conn.execute("SELECT 1 FROM m3_cortes WHERE run_id = ?", (run_id,)).fetchone()
+        is None
+    ):
+        raise _inconsistente(f"corrida {run_id}: sin corte fijado para la reserva")
+    filas = []
+    for sku in sorted(observaciones):
+        serie = observaciones[sku]
+        if not isinstance(serie.index, pd.DatetimeIndex) or serie.index.has_duplicates:
+            raise _inconsistente(f"corrida {run_id}: fechas invalidas en {sku}")
+        valores = serie.to_numpy(dtype=float, na_value=np.nan)
+        filas.extend(
+            (run_id, sku, _fecha(fecha), float(v) if np.isfinite(v) else None)
+            for fecha, v in zip(serie.index, valores, strict=True)
+        )
+    try:
+        conn.executemany(
+            "INSERT INTO m3_observaciones (run_id, sku, fecha, valor) "
+            "VALUES (?, ?, ?, ?)",
+            filas,
+        )
+    except sqlite3.IntegrityError as exc:
+        raise _inconsistente(
+            f"corrida {run_id}: demanda observada fuera de la reserva: {exc}"
+        ) from exc
+    sin_observacion = conn.execute(
+        "SELECT sku, fecha FROM m3_pronosticos WHERE run_id = ?1 EXCEPT "
+        "SELECT sku, fecha FROM m3_observaciones WHERE run_id = ?1 "
+        "ORDER BY sku, fecha LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    if sin_observacion is not None:
+        raise _inconsistente(
+            f"corrida {run_id}: fecha pronosticada sin fila de demanda observada, "
+            f"por ejemplo {sin_observacion}"
+        )
 
 
 def _inconsistente(mensaje: str) -> EvidenciaInconsistenteError:

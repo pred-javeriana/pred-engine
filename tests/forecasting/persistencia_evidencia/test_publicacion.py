@@ -8,7 +8,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from tests._evaluaciones import pronostico, serie
-from tests._evidencia import base, corrida, corrida_evaluada, fallo, filas
+from tests._evidencia import (
+    base,
+    corrida,
+    corrida_evaluada,
+    fallo,
+    filas,
+    observaciones,
+)
 
 from pred_engine.forecasting.evaluaciones.diebold_mariano import PruebaDM
 from pred_engine.forecasting.persistencia_evidencia import (
@@ -31,7 +38,9 @@ def _seleccionada(conn, *fallos, prueba_s1: PruebaDM | None = None):
             for v in resultado.skus
         )
         resultado = replace(resultado, skus=skus)
-    guardar_evaluacion(conn, run_id, evaluaciones, resultado)
+    guardar_evaluacion(
+        conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
+    )
     return run_id
 
 

@@ -13,6 +13,8 @@ import pytest
 
 from pred_engine import cli
 from pred_engine.comun.llm import LlmProviderError
+from pred_engine.pipeline import Pipeline
+from tests._plataforma import crear_base_plataforma
 
 
 class FakeLlmProvider:
@@ -269,3 +271,122 @@ def test_cli_verify_parquet_rechaza_sku_class_binaria(
     assert codigo == codigo_esperado
     if codigo_esperado:
         assert "violacion Pydantic en fila 0" in capsys.readouterr().err
+
+
+_FIXTURE_SEMILLA = Path(__file__).parent / "fixtures" / "semilla_inventario.csv"
+
+
+def _args_run_base(raiz: Path, db: Path, run_id: str) -> list[str]:
+    return [
+        "run",
+        "--seed-csv",
+        str(_FIXTURE_SEMILLA),
+        "--data-root",
+        str(raiz),
+        "--db-path",
+        str(db),
+        "--run-id",
+        run_id,
+        "--families",
+        "classical",
+        "--trials",
+        "1",
+        "--min-train",
+        "40",
+        "--horizon",
+        "2",
+        "--step",
+        "14",
+        "--metric",
+        "mae",
+        "--seed",
+        "17",
+        "--workers",
+        "2",
+        "--telemetry-interval",
+        "0",
+        "--m0-metodo",
+        "mbb-directo",
+        "--m0-n-series",
+        "1",
+        "--m0-minimo-filas",
+        "0",
+        "--m0-columna",
+        "sku_id=Item_ID",
+        "--m0-columna",
+        "timestamp=Date",
+        "--m0-columna",
+        "demand_qty=Avg_Usage_Per_Day",
+        "--m0-columna",
+        "lead_time_days=Restock_Lead_Time",
+    ]
+
+
+def test_cli_run_graba_ajuste_evaluacion_en_corrida_json(tmp_path: Path) -> None:
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "data"
+    run_id = "test-eval-settings"
+    args = _args_run_base(raiz, db, run_id)
+
+    codigo = cli.main(args)
+
+    assert codigo in (0, 8)
+    corrida_path = raiz / "runs" / run_id / "corrida.json"
+    assert corrida_path.exists()
+    corrida = json.loads(corrida_path.read_text(encoding="utf-8"))
+    assert corrida["evaluation"] == {"aggregation": "media_recortada", "trim": 0.1}
+
+
+def test_cli_run_reanudacion_tras_interrupcion_conserva_identidad(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "data"
+    run_id = "test-resume-identity"
+    args = _args_run_base(raiz, db, run_id)
+
+    def interrumpir(*_a: object, **_kw: object) -> None:
+        raise KeyboardInterrupt("interrupcion simulada en primera ejecucion")
+
+    monkeypatch.setattr(cli, "_run_pipeline", interrumpir)
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(args)
+
+    run_dir = raiz / "runs" / run_id
+    identidad_path = run_dir / "identidad.json"
+    assert identidad_path.exists()
+    identidad_previa = json.loads(identidad_path.read_text(encoding="utf-8"))
+    assert "evaluation" not in identidad_previa["settings"]
+
+    monkeypatch.undo()
+    codigo = cli.main(args)
+
+    assert codigo in (0, 8)
+    identidad_reanudada = json.loads(identidad_path.read_text(encoding="utf-8"))
+    assert identidad_reanudada == identidad_previa
+    corrida = json.loads((run_dir / "corrida.json").read_text(encoding="utf-8"))
+    assert corrida["evaluation"] == {"aggregation": "media_recortada", "trim": 0.1}
+
+
+def test_cli_run_falla_l2_graba_ajuste_evaluacion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "data"
+    run_id = "test-l2-failure"
+    args = _args_run_base(raiz, db, run_id)
+
+    def fallar_fit(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("fallo provocado en la seleccion de modelos L2")
+
+    monkeypatch.setattr(Pipeline, "fit", fallar_fit)
+    codigo = cli.main(args)
+
+    assert codigo == 1
+    corrida_path = raiz / "runs" / run_id / "corrida.json"
+    assert corrida_path.exists()
+    corrida = json.loads(corrida_path.read_text(encoding="utf-8"))
+    assert corrida["evaluation"] == {"aggregation": "media_recortada", "trim": 0.1}
+    assert corrida["summary"]["complete"] is False
+    etapas = {s["id"]: s["state"] for s in corrida["summary"]["stages"]}
+    assert etapas["L2"] == "failed"
