@@ -240,7 +240,18 @@ def plataforma(contexto: Contexto) -> Resultado:
     log = raiz / "integracion.log"
     inicio = time.monotonic()
     salida = _correr(
-        ["uv", "run", "pytest", "-m", "integration", "--no-cov", "-ra"],
+        [
+            "uv",
+            "run",
+            "--frozen",
+            "--extra",
+            "dev",
+            "pytest",
+            "-m",
+            "integration",
+            "--no-cov",
+            "-ra",
+        ],
         contexto.plataforma,
         log,
         PRED_ENGINE_CMD=shlex.join([_pred_engine()]),
