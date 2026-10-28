@@ -70,6 +70,7 @@ def buscar_ingesta(
     # Un archivo ajeno no es un informe M1 y cada informe se valida estrictamente.
     patron = "[0-9a-f]" * 64 + ".json"
     publicadas: dict[str, bool | None] = {}
+    por_ruta = set()
     for path in (data_root / "ingestas").glob(patron):
         report = IngestReportFile.model_validate_json(path.read_text())
         if (
@@ -80,14 +81,23 @@ def buscar_ingesta(
             if report.ingest_id != report.source_file.sha256:
                 raise ValueError("la procedencia M1 tiene identidades incompatibles")
             publicadas[report.ingest_id] = report.source_file.datos_sinteticos
-    # Varias ingestas pueden publicar los mismos bytes. Una sin declaracion no
-    # compite con la unica que declaro su origen.
+            publicado = Path(report.published.parquet_path).expanduser()
+            if not publicado.is_absolute():
+                publicado = data_root / publicado
+            if publicado.resolve() == destino:
+                por_ruta.add(report.ingest_id)
+    # Varias ingestas pueden publicar los mismos bytes; aqui solo se elige la
+    # identidad y ``origen_ingesta`` une sus declaraciones. Se prefiere la unica
+    # cuya ruta publicada es la entrada y luego la unica que declaro su origen.
+    # Si quedan varias, la huella Parquet identifica los bytes.
     declaradas = [i for i, origen in publicadas.items() if origen is not None]
-    if len(publicadas) > 1 and len(declaradas) != 1:
-        raise ValueError("el Parquet tiene varias procedencias M1 declaradas")
-    if publicadas:
-        return declaradas[0] if declaradas else next(iter(publicadas))
-    return None
+    if len(por_ruta) == 1:
+        return next(iter(por_ruta))
+    if len(publicadas) == 1:
+        return next(iter(publicadas))
+    if len(declaradas) == 1:
+        return declaradas[0]
+    return ingesta_ref_m1 if publicadas else None
 
 
 def origen_conocido(
