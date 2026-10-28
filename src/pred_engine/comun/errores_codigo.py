@@ -93,6 +93,12 @@ _TABLA: Final[tuple[tuple[str, str, str], ...]] = (
         "handoff.missing_metadata",
     ),
     ("pred_engine.comun.llm.errores", "LlmError", "ingest.llm_provider"),
+    # Origen real o sintetico de una ingesta (pred-engine origen sale con 3).
+    (
+        "pred_engine.comun.procedencia",
+        "OrigenIncompatibleError",
+        "provenance.origin_conflict",
+    ),
     # L2: seleccion y reanudacion
     (
         "pred_engine.optimizacion.router.errores",
@@ -191,11 +197,6 @@ _TABLA: Final[tuple[tuple[str, str, str], ...]] = (
         CODIGO_EVALUACION_FALLIDA,
     ),
     # Pipeline
-    (
-        "pred_engine.comun.procedencia",
-        "OrigenIncompatibleError",
-        "provenance.origin_conflict",
-    ),
     ("pred_engine.pipeline", "StageUnavailableError", "pipeline.stage_unavailable"),
     # L0: Fase 0
     (

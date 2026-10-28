@@ -53,7 +53,8 @@ Varios informes M1 aceptados de los mismos bytes no bloquean `run --parquet`:
 el motor combina sus declaraciones y solo rechaza orígenes contrarios
 (`provenance.origin_conflict`). Para identificar la fuente, prefiere el único
 informe cuya ruta publicada coincide con la entrada. Si no hay coincidencia,
-usa la única fuente aceptada; si quedan varias fuentes, usa la huella Parquet.
+usa la única fuente aceptada o la única que declaró su origen; si quedan varias
+fuentes, usa la huella Parquet.
 Dos declaraciones nulas conservan el origen desconocido, nunca declaran datos
 reales. M3 registra la huella de los bytes que L1 leyó, no la del archivo al llegar a
 L4; un `IngestionArtifact` construido a mano sin `parquet_sha256` se rechaza
@@ -69,6 +70,29 @@ registrar la ejecución.
 - Salida 1: entrada, identidad, base o etapa inválida.
 - Un pipeline de biblioteca sin validador configurado puede conservar L4
   bloqueada. No representa una evaluación realizada.
+
+Un solo veredicto resuelve el origen: `origen_ingesta`
+(`pred_engine.comun.procedencia`). Une las declaraciones de `m3_ingestas` y
+`m3_corridas` con `origen_declarado=1`, el informe M1 de la ingesta, los
+informes aceptados que publicaron los mismos bytes Parquet y el
+`datos_sinteticos` de la configuración de cada ejecución de esas ingestas.
+Una ingesta sin declaración hereda el origen de otra que publicó los mismos
+bytes. `ingest` y `classify` rechazan una declaración contraria a la de otro
+informe aceptado de esos bytes: el informe queda `rejected` con el código
+`provenance.origin_conflict`. `run` y `ControladorEvaluacion` usan el mismo
+veredicto. La plataforma lo consulta antes de encolar una corrida:
+
+```bash
+pred-engine origen --ingest-id <sha> [--datos-sinteticos|--datos-reales] \
+  [--data-root data] [--db-path data/pred.db]
+```
+
+El comando abre la base en modo de solo lectura, no aplica migraciones y no
+escribe nada. Imprime una línea JSON `{"ingest_id", "datos_sinteticos"}` con
+`true`, `false` o `null` y sale con 0. Un conflicto imprime
+`{"code": "provenance.origin_conflict", "detail"}` y sale con 3; otro error
+sale con 1. En frío tarda alrededor de 1 s, sobre todo por las importaciones
+del CLI.
 
 Los días reservados sin observación producen exclusiones de datos, no fallos
 técnicos. Se omiten los orígenes sin contexto y se identifican las ventanas

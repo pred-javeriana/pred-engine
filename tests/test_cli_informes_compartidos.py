@@ -126,7 +126,13 @@ def test_run_parquet_con_informes_de_los_mismos_bytes(tmp_path, origenes, ruta):
         assert codigo_de(error.value) == "provenance.origin_conflict"
         return
     assert result.returncode == 0, result.stdout + result.stderr
-    esperado_sha = sha256_file(source) if ruta == "publicada" else sha256_file(parquet)
+    declaradas = [csv for csv, o in zip((source, otra), origenes) if o is not None]
+    if ruta == "publicada":
+        esperado_sha = sha256_file(source)
+    elif len(declaradas) == 1:
+        esperado_sha = sha256_file(declaradas[0])
+    else:
+        esperado_sha = sha256_file(parquet)
     origen = next((valor for valor in origenes if valor is not None), None)
     with sqlite3.connect(db) as conn:
         assert conn.execute(
