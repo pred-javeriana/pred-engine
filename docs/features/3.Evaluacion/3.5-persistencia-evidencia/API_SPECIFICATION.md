@@ -14,7 +14,7 @@ esquema_m3() -> str
 ```
 
 `abrir_base_plataforma` usa modo `rw`, nunca crea un archivo ausente y aplica
-solo las migraciones M3 pendientes. La versión vigente es 9, con las migraciones 0005 a 0009. Se exige una base
+solo las migraciones M3 pendientes. La versión vigente es 10, con las migraciones 0005 a 0010. Se exige una base
 de plataforma de versión 4 o posterior conocida. Base ausente, transacción
 ajena o versión desconocida producen `BasePlataformaError` sin crear otra base.
 La migración y el cambio de versión son atómicos; una repetición no los duplica.
@@ -71,7 +71,9 @@ Punto de entrada: `pred_engine.forecasting.persistencia_evidencia.recuperacion`.
 ```python
 fijar_protocolo(
     conn, run_id, *, protocolo, manifiesto, procedencia,
-    reserva_abierta_en, n_unidades_previstas, ejecucion_id=None,
+    reserva_abierta_en, n_unidades_previstas,
+    t_star: pd.Timestamp, lanzamientos_tardios: Sequence[SkuExclusion],
+    ejecucion_id=None,
 ) -> None
 guardar_unidades_generadas(conn, run_id, unidades: Sequence[UnidadPronostico]) -> int
 cargar_unidades(conn, run_id, candidato) -> tuple[UnidadPronostico, ...]
@@ -79,6 +81,12 @@ cargar_serie(conn, run_id, sku, candidato_id, familia, modelo) -> SerieCandidato
 candidatos_con_fallos(conn, run_id, sku) -> frozenset[str]
 protocolo_guardado(conn, run_id) -> dict | None
 ```
+
+`fijar_protocolo` fija también, en la misma transacción, `m3_cortes` y
+`m3_lanzamientos_tardios` con el t* y las exclusiones de M1 que usó L2. Solo
+admite la causa `lanzado despues del corte`. Al reanudar compara el corte
+guardado y rechaza otro. Una corrida EN_CURSO o EVALUADA sin corte (anterior a
+la versión 10) lo recibe; una SELECCIONADA o PUBLICADA queda sin él.
 
 `guardar_unidades_generadas` confirma varias ventanas, con sus marcadores, en
 una sola transacción y devuelve cuántas eran nuevas. El protocolo, el handoff
@@ -91,7 +99,10 @@ mediante `comparacion_incompleta`.
 ## Evaluación y publicación
 
 ```python
-guardar_evaluacion(conn, run_id, evaluaciones, resultado) -> None
+guardar_evaluacion(
+    conn, run_id, evaluaciones, resultado,
+    *, observaciones: Mapping[str, pd.Series],
+) -> None
 publicar(conn, run_id, directorio: str | Path) -> dict[str, Path]
 estado_corrida(conn, run_id) -> EstadoCorrida | None
 consultar(conn, run_id, *, sku: str | None = None) -> dict[str, pd.DataFrame]
@@ -101,13 +112,17 @@ consultar(conn, run_id, *, sku: str | None = None) -> dict[str, pd.DataFrame]
 | --- | --- | --- |
 | `guardar_unidades` | EN_CURSO | Unidades y pronósticos nuevos |
 | `marcar_evaluada` | EN_CURSO, EVALUADA | EVALUADA |
-| `guardar_evaluacion` | EVALUADA, SELECCIONADA | Métricas, selección, veredictos y cartera; SELECCIONADA |
+| `guardar_evaluacion` | EVALUADA, SELECCIONADA | Métricas, selección, veredictos, cartera y demanda observada; SELECCIONADA |
 | `publicar` | SELECCIONADA, PUBLICADA | Exportaciones completas y PUBLICADA |
 
 `guardar_evaluacion` comprueba versiones, origen de datos y ventanas durables
 antes de escribir. Publica MAE, RMSE, MASE, ME y razón por candidato, ventana
 y agregadas. `m3_cartera` contiene media, mediana, percentiles 25 y 75 y
 conteos de SKU, instancias y valores no calculables por clase/familia/métrica.
+`observaciones` es la reserva real de cada SKU del manifiesto, indexada por
+fecha; un valor no finito se guarda como NULL. Se rechaza sin escribir si falta
+un SKU, si no hay corte fijado, si una fecha no es posterior a t* o si una
+fecha pronosticada no tiene su fila.
 
 `publicar` devuelve las rutas Parquet por tabla. Cada ruta tiene su CSV
 hermano con extensión `.csv`. Ambos se derivan de SQLite dentro de la

@@ -10,6 +10,7 @@ from datetime import date
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from pydantic import TypeAdapter
 
 from pred_engine.comun.modelos.manifiesto_candidatos import Candidato, ContextoParticion
@@ -165,8 +166,23 @@ def corrida_evaluada(
         for serie_candidato in series:
             guardar_unidades(conn, run_id, entrada.sku, serie_candidato)
     marcar_evaluada(conn, run_id)
+    # El corte lo fija el protocolo; aqui se siembra para probar solo 3.4 y 3.5.
+    conn.execute(
+        "INSERT INTO m3_cortes (run_id, t_star) VALUES (?, ?)",
+        (run_id, corte().t_star.strftime("%Y-%m-%d")),
+    )
+    conn.commit()
     evaluaciones = [evaluar_sku(e, corte()) for e in entradas()]
     return run_id, evaluaciones, emitir_veredictos(evaluaciones, datos_sinteticos=False)
+
+
+def observaciones(conn: sqlite3.Connection, run_id: str) -> dict[str, pd.Series]:
+    """La reserva real de `entradas()` para cada SKU del manifiesto de la corrida."""
+    skus = [
+        s
+        for (s,) in conn.execute("SELECT sku FROM m3_skus WHERE run_id = ?", (run_id,))
+    ]
+    return {sku: reserva([10.0] * 4) for sku in skus}
 
 
 def filas(conn: sqlite3.Connection, tabla: str) -> int:

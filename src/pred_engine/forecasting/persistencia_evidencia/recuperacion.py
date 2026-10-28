@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from pydantic import TypeAdapter
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos.manifiesto_candidatos import (
     VERSION_ESQUEMA_MANIFIESTO,
@@ -29,6 +30,7 @@ from pred_engine.forecasting.generador_pronosticos import (
 )
 from pred_engine.forecasting.persistencia_evidencia.repositorio import (
     _exigir_estado,
+    _fijar_corte,
     _inconsistente,
     _insertar_unidades,
     _transaccion,
@@ -46,14 +48,20 @@ def fijar_protocolo(
     procedencia: dict[str, Any],
     reserva_abierta_en: datetime,
     n_unidades_previstas: int,
+    t_star: pd.Timestamp,
+    lanzamientos_tardios: Sequence[SkuExclusion],
     ejecucion_id: int | None = None,
 ) -> None:
-    """Fija protocolo y handoff antes del primer pronostico; nunca los reemplaza."""
+    """Fija protocolo y handoff antes del primer pronostico; nunca los reemplaza.
+
+    En la misma transaccion fija el corte ``t_star`` y los lanzamientos tardios
+    de M1 que uso L2, que M3 publica para M4 (``m3_cortes``).
+    """
     canonico = json.dumps(protocolo, sort_keys=True, separators=(",", ":"))
     # La emision del handoff se conserva. Reanudar no es volver a emitirlo.
     sobre = json.dumps(json.loads(manifiesto), sort_keys=True, separators=(",", ":"))
     with _transaccion(conn):
-        _exigir_estado(
+        estado = _exigir_estado(
             conn,
             run_id,
             ("EN_CURSO", "EVALUADA", "SELECCIONADA", "PUBLICADA"),
@@ -69,21 +77,23 @@ def fijar_protocolo(
                 raise _inconsistente(
                     "protocolo o manifiesto incompatible con la corrida previa"
                 )
-            return
-        conn.execute(
-            "INSERT INTO m3_protocolos "
-            "(run_id, ejecucion_id, protocolo, manifiesto, procedencia, "
-            "reserva_abierta_en, n_unidades_previstas) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                run_id,
-                ejecucion_id,
-                canonico,
-                sobre,
-                json.dumps(procedencia, sort_keys=True),
-                reserva_abierta_en.isoformat(),
-                n_unidades_previstas,
-            ),
-        )
+        else:
+            conn.execute(
+                "INSERT INTO m3_protocolos "
+                "(run_id, ejecucion_id, protocolo, manifiesto, procedencia, "
+                "reserva_abierta_en, n_unidades_previstas) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    ejecucion_id,
+                    canonico,
+                    sobre,
+                    json.dumps(procedencia, sort_keys=True),
+                    reserva_abierta_en.isoformat(),
+                    n_unidades_previstas,
+                ),
+            )
+        _fijar_corte(conn, run_id, estado, t_star, lanzamientos_tardios)
 
 
 def restaurar_handoff(

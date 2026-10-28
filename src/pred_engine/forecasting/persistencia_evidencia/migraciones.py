@@ -13,13 +13,14 @@ from pred_engine.comun.logger import get_logger
 _logger = get_logger(__name__)
 
 # Las versiones 1 a 4 pertenecen a la plataforma. Estos textos son la fuente
-# unica de sus migraciones 0005 a 0009; tambien los aplica el CLI del motor.
+# unica de sus migraciones 0005 a 0010; tambien los aplica el CLI del motor.
 MIGRACIONES_M3 = (
     (5, "esquema_m3.sql"),
     (6, "esquema_m3_0002.sql"),
     (7, "esquema_m3_0003.sql"),
     (8, "esquema_m3_0004.sql"),
     (9, "esquema_m3_0005.sql"),
+    (10, "esquema_m3_0006.sql"),
 )
 VERSION_ESQUEMA_M3 = MIGRACIONES_M3[-1][0]
 
@@ -97,6 +98,22 @@ def abrir_base_plataforma(ruta: str | Path) -> Iterator[sqlite3.Connection]:
         ) from exc
     try:
         aplicar_migraciones_m3(conn)
+        yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def abrir_base_lectura(ruta: str | Path) -> Iterator[sqlite3.Connection]:
+    """Abre una base existente en modo ro: no aplica migraciones ni escribe."""
+    path = Path(ruta).expanduser().resolve()
+    try:
+        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=30)
+    except sqlite3.OperationalError as exc:
+        raise BasePlataformaError(
+            f"no existe o no se puede abrir la base de la plataforma: {path}"
+        ) from exc
+    try:
         yield conn
     finally:
         conn.close()

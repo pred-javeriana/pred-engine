@@ -18,6 +18,7 @@ from pred_engine.forecasting.persistencia_evidencia.errores import (
 from pred_engine.forecasting.persistencia_evidencia.migraciones import (
     VERSION_ESQUEMA_M3,
     BasePlataformaError,
+    abrir_base_lectura,
     abrir_base_plataforma,
     aplicar_migraciones_m3,
     textos_migraciones_m3,
@@ -42,6 +43,7 @@ from pred_engine.forecasting.persistencia_evidencia.repositorio import (
 __all__ = [
     "VERSION_ESQUEMA_M3",
     "BasePlataformaError",
+    "abrir_base_lectura",
     "abrir_base_plataforma",
     "aplicar_migraciones_m3",
     "textos_migraciones_m3",
