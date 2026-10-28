@@ -129,6 +129,11 @@ class TopologyInfo(_Modelo):
     metrics: list[TopologyMetrics]
 
 
+class ExclusionInfo(_Modelo):
+    sku_id: str
+    cause: str
+
+
 class IngestReportFile(_Modelo):
     """Contenido de ``ingestas/<sha256>.json``."""
 
@@ -145,6 +150,8 @@ class IngestReportFile(_Modelo):
     error: ErrorDetail | None = None
     reserve: ReserveInfo | None = None
     topology: TopologyInfo | None = None
+    excluded_count: int = 0
+    exclusions: list[ExclusionInfo] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +196,11 @@ def _deposito_info(deposito: DepositResult, raiz: Path) -> DepositInfo:
 
 
 def _topologia(artefacto: TopologyArtifact) -> tuple[ReserveInfo, TopologyInfo]:
-    corte = ReserveCut.of(artefacto.frame)
+    corte = (
+        artefacto.reserve
+        if artefacto.reserve is not None
+        else ReserveCut.of(artefacto.frame)
+    )
     reserva = ReserveInfo(
         t_star=corte.t_star.date().isoformat(),
         first_reserved=corte.first_reserved.date().isoformat(),
@@ -229,6 +240,9 @@ def _informe_aceptado(
         cabecera = None
         validadas = resultado.validated_rows
     n_skus = len(topologia.metrics)
+    exclusiones = [
+        ExclusionInfo(sku_id=e.sku_id, cause=e.cause) for e in topologia.exclusions
+    ]
     return IngestReportFile(
         written_at=_ahora(),
         ingest_id=fuente.sha256,
@@ -250,6 +264,8 @@ def _informe_aceptado(
         ),
         reserve=reserva,
         topology=info,
+        excluded_count=len(exclusiones),
+        exclusions=exclusiones,
     )
 
 

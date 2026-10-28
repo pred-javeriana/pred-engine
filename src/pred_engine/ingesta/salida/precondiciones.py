@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pandas as pd
 
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos import CANONICAL_FIELDS
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.salida.errores import HandoffPreconditionError
-from pred_engine.ingesta.salida.validador import contar_skus
 
 _logger = get_logger(__name__)
 
 
-def require_positive_demand(panel: pd.DataFrame) -> None:
-    """Exige al menos una demanda estrictamente positiva por SKU hasta t*.
+def evaluar_precondiciones_y_exclusiones(
+    panel: pd.DataFrame,
+) -> tuple[pd.DataFrame, ReserveCut, tuple[SkuExclusion, ...]]:
+    """Evalua precondiciones de ingesta y excluye SKU tardios con causa.
 
-    No muta el panel. No calcula ADI ni CV²: solo cuenta d>0 en la historia
-    que usa el clasificador (sin los dias reservados, ADR-019) para no iniciar
-    la clasificacion sobre series matematicamente indefinidas.
+    Un producto es de lanzamiento tardio si no registra demanda estrictamente positiva
+    en o antes de t*. Si todos los productos son tardios, rechaza el panel con
+    HandoffPreconditionError.
     """
     if panel.empty:
         _logger.error("Handoff 1.4: panel diario vacio")
@@ -36,15 +36,19 @@ def require_positive_demand(panel: pd.DataFrame) -> None:
         corte = ReserveCut.of(panel)
     except ValueError as exc:
         raise HandoffPreconditionError(str(exc)) from exc
+
     dias = pd.to_datetime(panel["timestamp"]).dt.normalize()
     admisible = panel.loc[dias <= corte.t_star]
-    positivos = admisible.loc[admisible["demand_qty"] > 0.0, "sku_id"].astype("string")
-    todos = panel["sku_id"].astype("string")
-    sin_demanda = sorted(
-        set(todos.dropna().unique()) - set(positivos.dropna().unique())
+    positivos = set(
+        admisible.loc[admisible["demand_qty"] > 0.0, "sku_id"]
+        .astype("string")
+        .dropna()
+        .unique()
     )
-    if sin_demanda:
-        # Solo identificadores de SKU, nunca magnitudes de demanda.
+    todos = set(panel["sku_id"].astype("string").dropna().unique())
+    sin_demanda = sorted(todos - positivos)
+
+    if sin_demanda and len(sin_demanda) == len(todos):
         _logger.error(
             "Handoff 1.4: %s SKU sin demanda estrictamente positiva",
             len(sin_demanda),
@@ -53,8 +57,22 @@ def require_positive_demand(panel: pd.DataFrame) -> None:
             f"SKU sin demanda estrictamente positiva hasta t*={corte.t_star.date()}: "
             + ", ".join(sin_demanda)
         )
-    _logger.info(
-        "Precondicion de demanda positiva superada (skus=%s filas=%s)",
-        contar_skus(cast(pd.Series, todos)),
-        int(len(panel)),
+
+    exclusiones = tuple(
+        SkuExclusion(sku_id=str(sku), cause="lanzado despues del corte")
+        for sku in sin_demanda
     )
+    admitido = panel.loc[~panel["sku_id"].astype("string").isin(sin_demanda)]
+    _logger.info(
+        "Precondiciones superadas: admitidos=%s excluidos=%s filas=%s t*=%s",
+        len(todos) - len(sin_demanda),
+        len(sin_demanda),
+        len(admitido),
+        corte.t_star.date(),
+    )
+    return admitido, corte, exclusiones
+
+
+def require_positive_demand(panel: pd.DataFrame) -> None:
+    """Exige al menos un producto con demanda positiva hasta t* en el panel."""
+    evaluar_precondiciones_y_exclusiones(panel)

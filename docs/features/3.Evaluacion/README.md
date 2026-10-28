@@ -57,7 +57,9 @@ usa la única fuente aceptada; si quedan varias fuentes, usa la huella Parquet.
 Dos declaraciones nulas conservan el origen desconocido, nunca declaran datos
 reales. M3 registra la huella de los bytes que L1 leyó, no la del archivo al llegar a
 L4; un `IngestionArtifact` construido a mano sin `parquet_sha256` se rechaza
-(use `Pipeline.ingest` o `run_verify_parquet_with_sha256`). El protocolo congelado guarda la configuración M2 efectiva, incluida la
+(use `Pipeline.ingest` o `ingestion_artifact_from_publication` sobre
+`read_classified_publication`, que toman filas, huella, corte y exclusiones
+de una sola lectura). El protocolo congelado guarda la configuración M2 efectiva, incluida la
 versión de código del validador (`code`); una
 `configuracion_m2` del llamador que la contradiga se rechaza antes de
 registrar la ejecución.
