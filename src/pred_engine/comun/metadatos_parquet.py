@@ -19,7 +19,7 @@ import pyarrow.parquet as pq
 
 from pred_engine.comun.errores_handoff import MissingCutoffMetadataError
 from pred_engine.comun.exclusiones import SkuExclusion
-from pred_engine.comun.reserva import RESERVE_FRACTION, ReserveCut
+from pred_engine.comun.reserva import RESERVE_FRACTION, ReserveCut, validar_fraccion
 
 METADATA_KEY: Final = b"pred_engine"
 ERROR_MENSAJE_REIMPORTAR: Final = (
@@ -99,7 +99,7 @@ def deserializar_metadatos(datos_bytes: bytes) -> ParquetMetadata:
             first_reserved=first_reserved.normalize(),
             last_observed=last_observed.normalize(),
             reserved_days=int(payload["reserved_days"]),
-            fraction=float(fraction),
+            fraction=validar_fraccion(float(fraction)),
             exclusions=tuple(
                 SkuExclusion(sku_id=item["sku_id"], cause=item["cause"])
                 for item in exclusions

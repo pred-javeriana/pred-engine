@@ -20,6 +20,13 @@ import pandas as pd
 RESERVE_FRACTION = 0.2
 
 
+def validar_fraccion(fraction: float) -> float:
+    """Devuelve ``fraction`` si esta en (0, 1); rechaza NaN y valores fuera."""
+    if not 0 < fraction < 1:
+        raise ValueError("la fraccion reservada debe estar en (0, 1)")
+    return fraction
+
+
 @dataclass(frozen=True, slots=True)
 class ReserveCut:
     """Corte cronologico unificado (ADR-03-003, 3.1): ni M1 ni M2 leen despues de t*.
@@ -36,8 +43,7 @@ class ReserveCut:
 
     @classmethod
     def of(cls, panel: pd.DataFrame, fraction: float = RESERVE_FRACTION) -> ReserveCut:
-        if not 0 < fraction < 1:
-            raise ValueError("la fraccion reservada debe estar en (0, 1)")
+        validar_fraccion(fraction)
         stamps = pd.to_datetime(panel["timestamp"]).dt.normalize()
         first, last = stamps.min(), stamps.max()
         total_days = (last - first).days + 1

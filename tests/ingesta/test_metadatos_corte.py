@@ -811,6 +811,52 @@ def test_s1_fit_rechaza_artefacto_sin_corte_y_no_relee_la_ruta(tmp_path: Path) -
         assert candidato.series.tolist() == _demanda(filas_a, sku_id, meta_a.t_star)
 
 
+@pytest.mark.parametrize("fraccion", [float("nan"), float("inf"), 7.5, -1.0, 0.0, 1.0])
+def test_verify_rechaza_fraccion_fuera_de_rango(
+    tmp_path: Path, fraccion: float
+) -> None:
+    """``verify --parquet`` rechaza una fraccion que ``ReserveCut.of`` no admite."""
+    payload = {
+        "t_star": "2024-01-08",
+        "first_reserved": "2024-01-09",
+        "last_observed": "2024-01-10",
+        "reserved_days": 2,
+        "fraction": fraccion,
+        "exclusions": [],
+    }
+    tabla = pa.Table.from_pandas(
+        pd.DataFrame(
+            {
+                "sku_id": ["SKU-1"] * 10,
+                "timestamp": pd.date_range("2024-01-01", periods=10),
+                "demand_qty": [10.0] * 10,
+                "lead_time_days": [2] * 10,
+                "sku_class": ["smooth"] * 10,
+            }
+        )
+    )
+    ruta_parquet = tmp_path / "fraccion_invalida.parquet"
+    pq.write_table(
+        tabla.replace_schema_metadata(
+            {b"pred_engine": json.dumps(payload).encode("utf-8")}
+        ),
+        ruta_parquet,
+    )
+    ejecutable = shutil.which("pred-engine", path=str(Path(sys.executable).parent))
+    assert ejecutable is not None
+
+    proceso = subprocess.run(
+        [ejecutable, "verify", "--parquet", str(ruta_parquet)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proceso.returncode == 6
+    assert "re-import from the CSV" in proceso.stderr
+    assert "contrato_1_4: accepted" not in proceso.stdout
+
+
 def _corrida(raiz: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     (corrida,) = (raiz / "runs").glob("*/corrida.json")
     topologia = corrida.parent / "topologia.json"
