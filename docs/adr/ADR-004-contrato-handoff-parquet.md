@@ -18,6 +18,12 @@ pipeline, pero la publicacion no era una frontera de contrato propia.
 3. `publish_classified_panel` reutiliza `export_parquet` (guarda `raw/`)
    y no importa el motor SBC.
 
+El handoff lleva además los metadatos obligatorios `pred_engine` en el esquema
+Parquet: t*, reserva y exclusiones. La importación los calcula sobre el
+calendario completo del CSV, antes de excluir productos. Las cinco columnas
+no cambian. Un archivo sin esos metadatos se rechaza pidiendo reimportar desde
+el CSV; los consumidores no reconstruyen el corte del panel restante.
+
 ## Rationale
 
 Parquet columnar + schema estable desacopla ingesta de forecasting.

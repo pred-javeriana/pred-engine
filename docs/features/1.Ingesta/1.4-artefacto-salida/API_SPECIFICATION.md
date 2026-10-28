@@ -31,7 +31,7 @@ y anade `sku_class: SkuClass`. Una fila del artefacto final.
 
 ## `pred_engine.ingesta.salida`
 
-### `evaluar_precondiciones_y_exclusiones(panel, corte=None) -> tuple[DataFrame, ReserveCut, list[SkuExclusion]]`
+### `evaluar_precondiciones_y_exclusiones(panel) -> tuple[DataFrame, ReserveCut, tuple[SkuExclusion, ...]]`
 
 Fail-closed. Calcula el corte t* del calendario completo (ADR-019). Excluye
 cada producto sin demanda positiva en la historia admisible (t <= t*) con la
@@ -58,18 +58,20 @@ panel completo (`OutputContractError`).
 
 Copia con `PANEL_FIELDS` y `PANEL_DTYPES`. El origen queda intacto.
 
-### `publish_classified_panel(classified, destination, *, data_root, daily_panel, reserve=None, exclusions=()) -> Path`
+### `publish_classified_panel(classified, destination, *, data_root, daily_panel, reserve, exclusions=()) -> Path`
 
 Preserva → valida → normaliza → empaqueta metadatos (`reserve` y `exclusions`
 en schema metadata de pyarrow bajo `pred_engine`) → `export_parquet` en `processed/`.
 Destino `.csv` o ruta bajo `raw/` se rechaza. No importa el paquete
-`categorizacion`.
+`categorizacion`. `reserve` es obligatoria: debe venir de la importacion o de
+los metadatos del archivo. No se calcula de nuevo a partir de `daily_panel`.
 
 ### `read_classified_parquet(path) -> DataFrame`
 
 Lee con pyarrow y vuelve a imponer `validate_output_contract`. Exige los
-metadatos `pred_engine` del mismo archivo; sin ellos lanza
-`MissingCutoffMetadataError` pidiendo reimportar desde el CSV. No escribe.
+metadatos `pred_engine` del mismo archivo; sin ellos, o con una `fraction`
+fuera de (0, 1), lanza `MissingCutoffMetadataError` pidiendo reimportar desde
+el CSV. No escribe.
 
 ### Excepciones
 
@@ -78,10 +80,12 @@ metadatos `pred_engine` del mismo archivo; sin ellos lanza
 
 ## `pred_engine.ingesta.categorizacion`
 
-### `classify_daily_panel(frame) -> TopologyArtifact`
+### `classify_daily_panel(frame, corte: ReserveCut) -> TopologyArtifact`
 
 Alias de `classify_panel` (implementacion real de 1.3, no stub).
 1.4 no reimplementa ADI, CV² ni el enrutador Syntetos-Boylan.
+El llamador debe pasar la reserva de la importacion o del Parquet; omitirla o
+pasar `None` se rechaza. El informe de ingesta tambien rechaza un artefacto sin reserva.
 
 ## `pred_engine.ingesta.pipeline`
 

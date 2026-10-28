@@ -346,6 +346,20 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     if result.validation is not None:
         summary["m3"] = dict(result.validation.audit_bundle)
     ingestion = result.ingestion
+    # El corte ya es conocido desde L1: una corrida que falla en L2 lo conserva.
+    reserve = (
+        fitting.reserve
+        if fitting is not None
+        else (ingestion.reserve if ingestion is not None else None)
+    )
+    if reserve is not None:
+        summary["reserve"] = {
+            "fraction": reserve.fraction,
+            "t_star": reserve.t_star.date().isoformat(),
+            "first_reserved": reserve.first_reserved.date().isoformat(),
+            "last_observed": reserve.last_observed.date().isoformat(),
+            "reserved_days": reserve.reserved_days,
+        }
     if fitting is None:
         if ingestion is not None and ingestion.exclusions:
             summary["excluded_count"] = len(ingestion.exclusions)
@@ -357,15 +371,7 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
             summary["excluded_count"] = 0
             summary["exclusions"] = []
         return summary
-    reserve = fitting.reserve
     evaluation = result.evaluation
-    summary["reserve"] = {
-        "fraction": reserve.fraction,
-        "t_star": reserve.t_star.date().isoformat(),
-        "first_reserved": reserve.first_reserved.date().isoformat(),
-        "last_observed": reserve.last_observed.date().isoformat(),
-        "reserved_days": reserve.reserved_days,
-    }
     summary["units"] = {"L2": _unit_counts(fitting.units)}
     if evaluation is not None:
         summary["units"]["L3"] = _unit_counts(evaluation.units)
