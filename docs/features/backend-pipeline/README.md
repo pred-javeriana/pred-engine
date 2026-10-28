@@ -8,13 +8,21 @@ principal stage.
 ## Stages
 
 - **L1:** canonical or semantic CSV ingestion, daily resampling, topology
-  classification and the five-column immutable Parquet contract. A classified
-  Parquet can enter directly without republishing raw data.
-- **L2:** topology routing, per-family HPO, fitting on history <= t* and the
-  forecast from t*. Each SKU/family is an isolated unit. The families are
-  SARIMA, LightGBM, NumPy MLP and Chronos-2. Chronos-2 runs by default
-  (`--no-foundation` drops it), is CPU-only and requires the `foundation`
-  extra and fixed local weights.
+  classification, cutoff t* computed once from the full CSV calendar, per-product
+  late-launch exclusion and the five-column immutable Parquet contract. The cutoff
+  t* and exclusions are stored in schema key-value metadata (`pred_engine`). A
+  classified Parquet without this metadata is refused with an error to re-import
+  from the CSV. In `Pipeline.ingest`, `classify --parquet` and
+  `ingestion_artifact_from_publication`, one read of the published file supplies
+  its rows, SHA-256, t*, exclusions and topology, so a file replaced at the same
+  path does not mix two publications. `Pipeline.fit` refuses an ingestion
+  artifact without its cut instead of reading t* again from the path.
+- **L2:** topology routing, per-family HPO, fitting on history <= t* (read directly
+  from file metadata) and the forecast from t*. Excluded products from L1 are
+  recorded as 'sin historia admisible: lanzado despues del corte'. Each SKU/family
+  is an isolated unit. The families are SARIMA, LightGBM, NumPy MLP and Chronos-2.
+  Chronos-2 runs by default (`--no-foundation` drops it), is CPU-only and requires
+  the `foundation` extra and fixed local weights.
 - **L3:** causal walk-forward evaluation on the same admissible history used
   by HPO. Each window has a new fit. `selection_scope="same_history"` makes
   the limitation explicit. These diagnostic metrics are not a holdout verdict.

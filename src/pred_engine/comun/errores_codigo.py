@@ -87,6 +87,11 @@ _TABLA: Final[tuple[tuple[str, str, str], ...]] = (
         "HandoffPreconditionError",
         "handoff.precondition",
     ),
+    (
+        "pred_engine.ingesta.salida.errores",
+        "MissingCutoffMetadataError",
+        "handoff.missing_metadata",
+    ),
     ("pred_engine.comun.llm.errores", "LlmError", "ingest.llm_provider"),
     # L2: seleccion y reanudacion
     (

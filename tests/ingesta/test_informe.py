@@ -201,12 +201,34 @@ def test_fila_invalida_deja_una_ingesta_fallida_con_su_fila(tmp_path: Path) -> N
     assert datos["published"] is None
 
 
-def test_sku_sin_demanda_positiva_es_una_falla_de_precondicion(tmp_path: Path) -> None:
+def test_sku_sin_demanda_positiva_se_excluye_sin_detener_la_ingesta(
+    tmp_path: Path,
+) -> None:
     ceros = [f"FIL-0009,{date(2026, 1, 1) + timedelta(days=i)},0,7" for i in range(60)]
     origen = _csv(tmp_path / "e" / "v.csv", filas_extra=ceros)
 
     salida = ingest_csv_with_report(origen, data_root=tmp_path / "d")
 
+    assert salida.error is None
+    datos = _json(salida.path)
+    assert datos["status"] == "accepted"
+    assert datos["excluded_count"] == 1
+    assert datos["exclusions"] == [
+        {"sku_id": "FIL-0009", "cause": "lanzado despues del corte"}
+    ]
+
+
+def test_todos_los_skus_sin_demanda_positiva_falla_precondicion(
+    tmp_path: Path,
+) -> None:
+    csv = tmp_path / "ceros.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,0,17\n"
+        "105,2024-10-02,0,17\n",
+        encoding="utf-8",
+    )
+    salida = ingest_csv_with_report(csv, data_root=tmp_path / "d")
     assert isinstance(salida.error, HandoffPreconditionError)
     datos = _json(salida.path)
     assert datos["status"] == "failed"
