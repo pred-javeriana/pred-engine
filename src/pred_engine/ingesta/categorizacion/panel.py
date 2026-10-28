@@ -42,20 +42,15 @@ class TopologyArtifact:
     exclusions: tuple[SkuExclusion, ...] = ()
 
 
-def classify_panel(
-    frame: pd.DataFrame, corte: ReserveCut | None = None
-) -> TopologyArtifact:
+def classify_panel(frame: pd.DataFrame, corte: ReserveCut) -> TopologyArtifact:
     """Clasifica cada SKU con su historia hasta t* y rellena sku_class por broadcast."""
     if frame.empty:
         raise TopologyContractError("no hay filas para clasificar")
     faltan = [c for c in CANONICAL_FIELDS if c not in frame.columns]
     if faltan:
         raise TopologyContractError(f"faltan columnas {faltan}")
-    if corte is None:
-        try:
-            corte = ReserveCut.of(frame)
-        except ValueError as exc:
-            raise TopologyContractError(str(exc)) from exc
+    if not isinstance(corte, ReserveCut):
+        raise TopologyContractError("se requiere la reserva de la importacion")
     dias = pd.to_datetime(frame["timestamp"]).dt.normalize()
     admisible = frame.loc[dias <= corte.t_star]
     _logger.info(
@@ -125,8 +120,6 @@ def classify_panel(
     )
 
 
-def classify_daily_panel(
-    frame: pd.DataFrame, corte: ReserveCut | None = None
-) -> TopologyArtifact:
+def classify_daily_panel(frame: pd.DataFrame, corte: ReserveCut) -> TopologyArtifact:
     """Alias del contrato Notion 1.4: delega al clasificador real de 1.3."""
     return classify_panel(frame, corte=corte)

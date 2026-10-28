@@ -20,8 +20,11 @@ decisión pendiente.
 ## Decision
 
 1. El corte de ADR-03-003 (`ReserveCut`, `RESERVE_FRACTION`) vive en
-   `comun.reserva`. M1 y M2 lo derivan del calendario del panel con la misma
-   función, así que coinciden sin intercambiar estado.
+   `comun.reserva`. **Reemplazada la derivación independiente en M1 y M2:**
+   la importación calcula t* una sola vez sobre el calendario completo del CSV,
+   antes de excluir productos. El Parquet guarda ese corte, la reserva y las
+   exclusiones en sus metadatos `pred_engine`. M1 y M2 consumen el mismo corte
+   almacenado, sin calcularlo de nuevo. La regla matemática del 20 % no cambia.
 2. `classify_panel` calcula ADI y CV² de cada SKU solo con las filas hasta
    t*. El panel publicado conserva todas las filas: M3 necesita la reserva.
 3. La compuerta de demanda positiva previa a la clasificación revisa la misma
@@ -49,8 +52,10 @@ fuga.
 
 - **Reclasificar solo en M2:** rechazado. El artefacto 1.4 seguiría llevando
   una clase calculada con la reserva, y esa clase llega a M3.
-- **Pasar t* a M1 como parámetro:** rechazado. t* ya queda definido por el
-  calendario del panel y la fracción fija de ADR-03-003.
+- **Pasar t* a M1 como parámetro:** rechazo original reemplazado por el
+  contrato de metadatos del Parquet. El clasificador ahora exige el corte
+  producido por la importación o leído de esa publicación. No lo deriva del
+  calendario restante tras las exclusiones.
 
 ## Related
 
