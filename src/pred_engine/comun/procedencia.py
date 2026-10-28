@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 
+class OrigenIncompatibleError(ValueError):
+    """Una declaracion contradice el origen registrado: provenance.origin_conflict."""
+
+
 def resolver_origen(conocida: bool | None, declarada: bool | None) -> bool | None:
     """Conserva una declaración previa y rechaza su sustitución."""
     if any(
@@ -10,5 +14,7 @@ def resolver_origen(conocida: bool | None, declarada: bool | None) -> bool | Non
     ):
         raise ValueError("el origen debe ser booleano o nulo")
     if conocida is not None and declarada is not None and conocida != declarada:
-        raise ValueError("el origen real o sintetico de una ingesta no puede cambiar")
+        raise OrigenIncompatibleError(
+            "el origen real o sintetico de una ingesta no puede cambiar"
+        )
     return conocida if declarada is None else declarada

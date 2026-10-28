@@ -48,8 +48,14 @@ reutiliza con los mismos ajustes que cambian resultados (familias, ensayos,
 de código cuando ambas partes la registran); `workers` puede cambiar.
 El origen declarado se asocia también a la huella de los bytes Parquet: otra
 ingesta que publica los mismos bytes no puede declarar el origen contrario, y
-una ruta registrada sin ninguna huella conocida no aporta procedencia. M3
-registra la huella de los bytes que L1 leyó, no la del archivo al llegar a
+una ruta registrada sin ninguna huella conocida no aporta procedencia.
+Varios informes M1 aceptados de los mismos bytes no bloquean `run --parquet`:
+el motor combina sus declaraciones y solo rechaza orígenes contrarios
+(`provenance.origin_conflict`). Para identificar la fuente, prefiere el único
+informe cuya ruta publicada coincide con la entrada. Si no hay coincidencia,
+usa la única fuente aceptada; si quedan varias fuentes, usa la huella Parquet.
+Dos declaraciones nulas conservan el origen desconocido, nunca declaran datos
+reales. M3 registra la huella de los bytes que L1 leyó, no la del archivo al llegar a
 L4; un `IngestionArtifact` construido a mano sin `parquet_sha256` se rechaza
 (use `Pipeline.ingest` o `run_verify_parquet_with_sha256`). El protocolo congelado guarda la configuración M2 efectiva, incluida la
 versión de código del validador (`code`); una

@@ -186,6 +186,11 @@ _TABLA: Final[tuple[tuple[str, str, str], ...]] = (
         CODIGO_EVALUACION_FALLIDA,
     ),
     # Pipeline
+    (
+        "pred_engine.comun.procedencia",
+        "OrigenIncompatibleError",
+        "provenance.origin_conflict",
+    ),
     ("pred_engine.pipeline", "StageUnavailableError", "pipeline.stage_unavailable"),
     # L0: Fase 0
     (

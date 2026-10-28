@@ -12,6 +12,7 @@ from pred_engine.comun.procedencia import resolver_origen
 from pred_engine.forecasting.persistencia_evidencia.repositorio import _transaccion
 
 if TYPE_CHECKING:
+    from pred_engine.ingesta.informe import IngestReportFile
     from pred_engine.pipeline import IngestionArtifact
 
 # Ajustes que cambian resultados y que toda ejecucion declara, en la plataforma
@@ -74,14 +75,41 @@ def buscar_ingesta(
     ingestas compartan la huella o ninguna se identifique por su ruta.
     """
     por_bytes = origen_huella(conn, ingesta_ref_m1)
-    previa = _buscar_ingesta(conn, parquet, data_root, ingesta_ref_m1)
+    informes = _informes_publicados(data_root, ingesta_ref_m1)
+    for informe in informes:
+        por_bytes = resolver_origen(por_bytes, informe.source_file.datos_sinteticos)
+    previa = _buscar_ingesta(conn, parquet, data_root, ingesta_ref_m1, informes)
     if previa is None:
         return None if por_bytes is None else (ingesta_ref_m1, por_bytes)
     return previa[0], resolver_origen(previa[1], por_bytes)
 
 
+def _informes_publicados(
+    data_root: Path, ingesta_ref_m1: str
+) -> list[IngestReportFile]:
+    """Informes aceptados de los mismos bytes; la ruta no determina su origen."""
+    from pred_engine.ingesta.informe import IngestReportFile
+
+    informes = []
+    for path in (data_root / "ingestas").glob("[0-9a-f]" * 64 + ".json"):
+        report = IngestReportFile.model_validate_json(path.read_text())
+        if (
+            report.status == "accepted"
+            and report.published is not None
+            and report.published.sha256 == ingesta_ref_m1
+        ):
+            if report.ingest_id != path.stem or report.source_file.sha256 != path.stem:
+                raise ValueError("la procedencia M1 tiene identidades incompatibles")
+            informes.append(report)
+    return informes
+
+
 def _buscar_ingesta(
-    conn: sqlite3.Connection, parquet: Path, data_root: Path, ingesta_ref_m1: str
+    conn: sqlite3.Connection,
+    parquet: Path,
+    data_root: Path,
+    ingesta_ref_m1: str,
+    informes: list[IngestReportFile],
 ) -> tuple[str, bool | None] | None:
     exactas = conn.execute(
         "SELECT ingesta_sha256, datos_sinteticos, origen_declarado FROM m3_ingestas "
@@ -115,30 +143,25 @@ def _buscar_ingesta(
     conocida = origen_registrado(conn, sha) if sha is not None else None
     if sha is not None and conocida is not None:
         return sha, conocida
-    from pred_engine.ingesta.informe import IngestReportFile
+    if sha is not None:
+        from pred_engine.ingesta.informe import origen_informe
 
-    declaradas = set()
-    # Un archivo ajeno no es un informe M1. Si ya se conoce la fuente, solo
-    # su informe canonico puede aportar procedencia y se valida estrictamente.
-    patron = f"{sha}.json" if sha is not None else "[0-9a-f]" * 64 + ".json"
-    for path in (data_root / "ingestas").glob(patron):
-        report = IngestReportFile.model_validate_json(path.read_text())
-        if (
-            report.status == "accepted"
-            and report.published is not None
-            and report.published.sha256 == ingesta_ref_m1
-        ):
-            if report.ingest_id != report.source_file.sha256:
-                raise ValueError("la procedencia M1 tiene identidades incompatibles")
-            declaradas.add((report.ingest_id, report.source_file.datos_sinteticos))
-    if len(declaradas) > 1:
-        raise ValueError("el Parquet tiene varias procedencias M1 declaradas")
-    if declaradas:
-        declarada = declaradas.pop()
-        if sha is not None and sha != declarada[0]:
-            raise ValueError("la referencia de plataforma difiere de la procedencia M1")
-        return declarada
-    return (sha, None) if sha is not None else None
+        return sha, origen_informe(data_root, sha)
+    por_ruta = set()
+    for report in informes:
+        assert report.published is not None
+        path = Path(report.published.parquet_path).expanduser()
+        if not path.is_absolute():
+            path = data_root / path
+        if path.resolve() == destino:
+            por_ruta.add(report.ingest_id)
+    fuentes = por_ruta or {report.ingest_id for report in informes}
+    if not fuentes:
+        return None
+    # La identidad de un CSV requiere una fuente unica. La huella Parquet sigue
+    # identificando los bytes aunque varias fuentes hayan publicado lo mismo.
+    fuente = next(iter(fuentes)) if len(fuentes) == 1 else ingesta_ref_m1
+    return fuente, None
 
 
 def origen_conocido(
