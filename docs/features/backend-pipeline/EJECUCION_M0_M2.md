@@ -36,16 +36,20 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
    `data/logs/`. Repetir el comando reutiliza el artefacto si la configuración
    no cambió; con otra configuración falla por WORM y hay que usar otro
    `--m0-nombre` u otro `--data-root`.
-2. **M1 (L1).** Valida el contrato, clasifica cada SKU (Syntetos-Boylan) con
-   su historia hasta t*, sin los días reservados (ADR-019), y publica
-   `data/processed/panel_sintetico_fase0.parquet` (contrato 1.4).
-3. **M2 (L2-L3).** Calcula el corte t* (los últimos `ceil(0.2 × días)` días
-   quedan reservados para M3), excluye con causa los SKU no elegibles y corre
-   cada SKU × familia como unidad: HPO (TPE + ASHA sobre walk-forward), ajuste
-   final en la historia admisible y pronóstico de los días reservados. El HPO
-   solo elige configuraciones que ajustan en todas las ventanas, y un
-   pronóstico final degenerado (regla #3) hace fallar su unidad (ADR-020). L3
-   vuelve a evaluar cada candidato con walk-forward causal.
+2. **M1 (L1).** Valida el contrato, calcula el corte t* una sola vez desde
+   el calendario completo (los últimos `ceil(0.2 × días)` días quedan reservados
+   para M3, ADR-019), excluye con causa ("lanzado despues del corte") los productos
+   sin demanda positiva hasta t*, clasifica cada SKU admitido (Syntetos-Boylan) y
+   publica `data/processed/panel_sintetico_fase0.parquet` (contrato 1.4) guardando
+   t* y las exclusiones en los metadatos de esquema `pred_engine`.
+3. **M2 (L2-L3).** Consume t* y las exclusiones directamente de los metadatos
+   del archivo Parquet (sin recalcular t*), registra los excluidos de L1 como
+   'sin historia admisible: lanzado despues del corte' y corre cada SKU × familia
+   admitido como unidad: HPO (TPE + ASHA sobre walk-forward), ajuste final en la
+   historia admisible y pronóstico de los días reservados. El HPO solo elige
+   configuraciones que ajustan en todas las ventanas, y un pronóstico final
+   degenerado (regla #3) hace fallar su unidad (ADR-020). L3 vuelve a evaluar cada
+   candidato con walk-forward causal.
 
 ## Opciones de M2
 
@@ -71,7 +75,7 @@ Todo queda en `data/runs/{run_id}/`:
 
 | Archivo | Contenido |
 | --- | --- |
-| `corrida.json` | Entradas (semilla, artefacto M0, Parquet M1, hashes y filas), opciones, resumen de etapas, inicio y fin de cada etapa (`stage_times`), corte t*, exclusiones, fallas, evidencia de paralelismo, tiempo de pared, resumen del muestreo de recursos (`telemetry`), versiones de librerías y la procedencia de cada candidato (perfil, política, referencia al estudio HPO y su evidencia). |
+| `corrida.json` | Entradas (semilla, artefacto M0, Parquet M1, hashes y filas), opciones, evaluacion (`evaluation`: agregacion y recorte), resumen de etapas, inicio y fin de cada etapa (`stage_times`), corte t*, exclusiones, fallas, evidencia de paralelismo, tiempo de pared, resumen del muestreo de recursos (`telemetry`), versiones de librerías y la procedencia de cada candidato (perfil, política, referencia al estudio HPO y su evidencia). |
 | `candidatos.json` | Manifiesto de candidatos para M3 (ADR-03-004), el que valida `forecasting.adaptador_candidatos`: contexto de partición (huella del Parquet de M1, t* y fracción reservada), y configuración completa, semilla e identidad de cada candidato. |
 | `pronosticos.parquet` | Pronóstico diario de cada candidato para los días reservados (`sku_id`, `sku_class`, `familia`, `modelo`, `timestamp`, `pronostico`). |
 | `evaluacion.parquet` | Métrica agregada walk-forward y medias de MAE, RMSE, sMAPE y MASE por candidato. |

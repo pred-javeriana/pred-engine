@@ -26,7 +26,11 @@ from pred_engine.comun.modelos import (
     HeaderDiagnostic,
     TopologyMetrics,
 )
-from pred_engine.comun.reserva import ReserveCut
+from pred_engine.comun.procedencia import (
+    OrigenIncompatibleError,
+    origen_ingesta,
+    resolver_origen,
+)
 from pred_engine.ingesta.categorizacion import (
     TopologyArtifact,
 )
@@ -129,6 +133,11 @@ class TopologyInfo(_Modelo):
     metrics: list[TopologyMetrics]
 
 
+class ExclusionInfo(_Modelo):
+    sku_id: str
+    cause: str
+
+
 class IngestReportFile(_Modelo):
     """Contenido de ``ingestas/<sha256>.json``."""
 
@@ -145,6 +154,8 @@ class IngestReportFile(_Modelo):
     error: ErrorDetail | None = None
     reserve: ReserveInfo | None = None
     topology: TopologyInfo | None = None
+    excluded_count: int = 0
+    exclusions: list[ExclusionInfo] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +200,9 @@ def _deposito_info(deposito: DepositResult, raiz: Path) -> DepositInfo:
 
 
 def _topologia(artefacto: TopologyArtifact) -> tuple[ReserveInfo, TopologyInfo]:
-    corte = ReserveCut.of(artefacto.frame)
+    corte = artefacto.reserve
+    if corte is None:
+        raise ValueError("el artefacto no declara la reserva de la importacion")
     reserva = ReserveInfo(
         t_star=corte.t_star.date().isoformat(),
         first_reserved=corte.first_reserved.date().isoformat(),
@@ -229,6 +242,9 @@ def _informe_aceptado(
         cabecera = None
         validadas = resultado.validated_rows
     n_skus = len(topologia.metrics)
+    exclusiones = [
+        ExclusionInfo(sku_id=e.sku_id, cause=e.cause) for e in topologia.exclusions
+    ]
     return IngestReportFile(
         written_at=_ahora(),
         ingest_id=fuente.sha256,
@@ -250,6 +266,8 @@ def _informe_aceptado(
         ),
         reserve=reserva,
         topology=info,
+        excluded_count=len(exclusiones),
+        exclusions=exclusiones,
     )
 
 
@@ -273,6 +291,8 @@ def _informe_fallido(
     cabecera: HeaderInfo | None = None
     registro: list[QualityEntryInfo] = []
     estado: IngestStatus = "failed"
+    if isinstance(exc, OrigenIncompatibleError):
+        estado = "rejected"
     if isinstance(exc, SemanticAlignmentError):
         estado = "rejected"
         cabecera = _cabecera(exc.diagnostic) or HeaderInfo(status="rejected")
@@ -334,8 +354,6 @@ def origen_informe(
     data_root: str | Path | None, sha256: str, declarada: bool | None = None
 ) -> bool | None:
     """Lee solo el informe canonico de esa fuente, sin deducir un origen ausente."""
-    from pred_engine.comun.procedencia import resolver_origen
-
     path = report_path(data_root, sha256)
     conocida = None
     if path.exists():
@@ -416,6 +434,19 @@ def ingest_csv_with_report(
 
     if error is None and resultado is not None and deposito is not None:
         informe = _informe_aceptado(fuente, deposito, resultado, layout.root)
+        assert informe.published is not None
+        try:
+            # Los mismos bytes publicados por otra ingesta no cambian de origen.
+            origen_ingesta(
+                None,
+                data_root=layout.root,
+                ingesta_sha256=sha256,
+                declarada=fuente.datos_sinteticos,
+                ingesta_ref_m1=informe.published.sha256,
+            )
+        except OrigenIncompatibleError as exc:
+            error = exc
+            informe = _informe_fallido(fuente, deposito, exc, layout.root)
     elif isinstance(error, RawConflictError):
         informe = _informe_conflicto(fuente, error, layout.root)
     else:

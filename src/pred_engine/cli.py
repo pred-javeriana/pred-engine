@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -332,6 +333,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     m0 = run.add_argument_group("Fase 0 (solo con --seed-csv)")
     agregar_opciones_fase0(m0, prefijo="m0-")
+
+    origen_cmd = sub.add_parser(
+        "origen",
+        help="Origen real o sintetico de una ingesta, sin escribir nada",
+        description=(
+            "Une toda declaracion conocida del origen de la ingesta (base de "
+            "plataforma e informes M1, tambien de los mismos bytes publicados) y "
+            "la opcional de la llamada. Imprime una linea JSON. Codigos: 0 = "
+            "origen resuelto, 3 = provenance.origin_conflict, 1 = otro error."
+        ),
+    )
+    origen_cmd.add_argument("--ingest-id", required=True, help="SHA-256 del CSV")
+    declaracion = origen_cmd.add_mutually_exclusive_group()
+    declaracion.add_argument(
+        "--datos-sinteticos",
+        dest="datos_sinteticos",
+        action="store_const",
+        const=True,
+        default=None,
+    )
+    declaracion.add_argument(
+        "--datos-reales", dest="datos_sinteticos", action="store_const", const=False
+    )
+    origen_cmd.add_argument(
+        "--data-root", type=Path, default=Path(os.environ.get("PRED_DATA_ROOT", "data"))
+    )
+    origen_cmd.add_argument(
+        "--db-path",
+        type=Path,
+        default=None,
+        help="Base de plataforma existente (PRED_DB_PATH o {data-root}/pred.db)",
+    )
 
     telemetry = sub.add_parser(
         "telemetry",
@@ -688,11 +721,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    ruta = (
-        args.db_path
-        or os.environ.get("PRED_DB_PATH", "").strip()
-        or args.data_root / "pred.db"
-    )
+    ruta = _ruta_base(args)
     try:
         from pred_engine.forecasting.evaluaciones.veredictos import POLITICA_INICIAL
 
@@ -706,6 +735,48 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
 
 
+def _ruta_base(args: argparse.Namespace) -> Path:
+    return Path(
+        args.db_path
+        or os.environ.get("PRED_DB_PATH", "").strip()
+        or args.data_root / "pred.db"
+    )
+
+
+def _cmd_origen(args: argparse.Namespace) -> int:
+    """Veredicto de solo lectura que la plataforma pide antes de encolar."""
+    from pred_engine.comun.procedencia import OrigenIncompatibleError, origen_ingesta
+    from pred_engine.forecasting.persistencia_evidencia import (
+        BasePlataformaError,
+        abrir_base_lectura,
+    )
+
+    if re.fullmatch(r"[0-9a-f]{64}", args.ingest_id) is None:
+        print("error: --ingest-id debe ser un SHA-256 en minusculas", file=sys.stderr)
+        return 1
+    try:
+        with abrir_base_lectura(_ruta_base(args)) as conn:
+            origen = origen_ingesta(
+                conn,
+                data_root=args.data_root,
+                ingesta_sha256=args.ingest_id,
+                declarada=args.datos_sinteticos,
+            )
+    except OrigenIncompatibleError as exc:
+        print(
+            json.dumps(
+                {"code": "provenance.origin_conflict", "detail": str(exc)},
+                ensure_ascii=False,
+            )
+        )
+        return 3
+    except (BasePlataformaError, sqlite3.DatabaseError, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({"ingest_id": args.ingest_id, "datos_sinteticos": origen}))
+    return 0
+
+
 def _cmd_run_con_base(
     args: argparse.Namespace, conn: sqlite3.Connection, politica: PoliticaSeleccion
 ) -> int:
@@ -714,6 +785,7 @@ def _cmd_run_con_base(
         emitir_evento,
         resumen_paralelismo,
     )
+    from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
     from pred_engine.comun.procedencia import resolver_origen
     from pred_engine.comun.reserva import RESERVE_FRACTION
     from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
@@ -761,6 +833,8 @@ def _cmd_run_con_base(
                 "reused": fase0.reutilizada,
             }
         source = Path(csv_path if csv_path is not None else args.parquet)
+        if args.parquet is not None:
+            leer_metadatos_parquet(source)
         inputs["source"] = {
             "path": str(source.resolve()),
             "sha256": sha256_file(source),
@@ -792,14 +866,15 @@ def _cmd_run_con_base(
         fijar_identidad(run_dir, inputs["source"]["sha256"], settings)
         progress_path = run_dir / "progreso.jsonl"
         provider = _build_provider(args)[2] if args.provider is not None else None
+        evaluacion = EvaluationSettings(
+            min_train=args.min_train,
+            horizon=args.horizon,
+            step=args.step,
+            seasonality=args.seasonality,
+            metric=args.metric,
+        )
         pipeline = build_pipeline(
-            EvaluationSettings(
-                min_train=args.min_train,
-                horizon=args.horizon,
-                step=args.step,
-                seasonality=args.seasonality,
-                metric=args.metric,
-            ),
+            evaluacion,
             families=cast(tuple[PredictorFamily, ...], tuple(args.families)),
             n_trials=args.trials,
             seed=args.seed,
@@ -861,6 +936,10 @@ def _cmd_run_con_base(
     metadata = {
         "inputs": inputs,
         "settings": settings | {"workers": args.workers},
+        "evaluation": {
+            "aggregation": evaluacion.aggregation,
+            "trim": evaluacion.trim,
+        },
         "wall_seconds": round(time.time() - started, 3),
         "telemetry": sampler.summary() if sampler is not None else None,
     }
@@ -946,6 +1025,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_verify(args)
     if args.command == "run":
         return _cmd_run(args)
+    if args.command == "origen":
+        return _cmd_origen(args)
     if args.command == "telemetry":
         return _cmd_telemetry(args)
     return 1

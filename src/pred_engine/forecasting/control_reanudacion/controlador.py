@@ -162,8 +162,8 @@ class ControladorEvaluacion:
         if ingesta.parquet_sha256 is None:
             raise ValueError(
                 "la ingestion no declara parquet_sha256: use Pipeline.ingest o "
-                "run_verify_parquet_with_sha256 para conservar la huella de los "
-                "bytes leidos"
+                "ingestion_artifact_from_publication para conservar la huella de "
+                "los bytes leidos"
             )
         ingesta_ref_m1 = ingesta.parquet_sha256
         configuracion = self._configuracion_efectiva(evaluation)
@@ -449,6 +449,8 @@ class ControladorEvaluacion:
             },
             reserva_abierta_en=apertura,
             n_unidades_previstas=n_previstas,
+            t_star=corte.t_star,
+            lanzamientos_tardios=fitting.late_launches,
             ejecucion_id=ejecucion_id,
         )
         # La reserva solo se lee despues del handoff validado y protocolo durable.
@@ -469,8 +471,11 @@ class ControladorEvaluacion:
             for sku in sin_candidatos:
                 fallos_sku[sku] += len(fallos_l2[sku])
             evaluaciones = []
+            observaciones = {}
             for sku in skus:
                 historia, reserva = separar_reserva(series_sku[sku], corte)
+                # El calendario completo de la reserva: un dia sin dato es NULL.
+                observaciones[sku] = reserva.reindex(corte.reserved_dates)
                 entrada = EntradaSku(
                     sku,
                     clases[sku],
@@ -520,7 +525,13 @@ class ControladorEvaluacion:
                     for veredicto in resultado.skus
                 ),
             )
-            guardar_evaluacion(self.conn, run_id, evaluaciones, resultado)
+            guardar_evaluacion(
+                self.conn,
+                run_id,
+                evaluaciones,
+                resultado,
+                observaciones=observaciones,
+            )
         return self._artefacto(
             run_id,
             config,

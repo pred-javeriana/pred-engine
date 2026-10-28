@@ -87,7 +87,18 @@ _TABLA: Final[tuple[tuple[str, str, str], ...]] = (
         "HandoffPreconditionError",
         "handoff.precondition",
     ),
+    (
+        "pred_engine.ingesta.salida.errores",
+        "MissingCutoffMetadataError",
+        "handoff.missing_metadata",
+    ),
     ("pred_engine.comun.llm.errores", "LlmError", "ingest.llm_provider"),
+    # Origen real o sintetico de una ingesta (pred-engine origen sale con 3).
+    (
+        "pred_engine.comun.procedencia",
+        "OrigenIncompatibleError",
+        "provenance.origin_conflict",
+    ),
     # L2: seleccion y reanudacion
     (
         "pred_engine.optimizacion.router.errores",

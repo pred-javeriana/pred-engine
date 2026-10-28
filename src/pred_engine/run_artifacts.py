@@ -29,7 +29,6 @@ from pred_engine.comun.modelos.manifiesto_candidatos import (
     MODELO_POR_FAMILIA,
     ContextoParticion,
 )
-from pred_engine.comun.reserva import ReserveCut
 from pred_engine.optimizacion.control_reanudacion.almacenamiento import (
     escribir_atomico,
 )
@@ -259,16 +258,23 @@ def write_run(
 
     fitting, evaluation = result.fitting, result.evaluation
     ingestion = result.ingestion
+    # Un solo resumen alimenta corrida.json y topologia.json: ambos declaran
+    # el mismo excluded_count.
+    summary = summarize_run(result)
     if ingestion is not None and ingestion.topology:
         # La topologia es de L1: se guarda aunque L2 o L3 hayan fallado.
-        corte = ReserveCut.of(ingestion.panel)
+        # El corte viaja con el artefacto; la ruta nunca se relee.
+        corte = ingestion.reserve
+        if corte is None and fitting is not None:
+            corte = fitting.reserve
         archivos["topologia"] = destino / "topologia.json"
         _escribir_json(
             {
                 "schema": TOPOLOGY_SCHEMA,
                 "source_sha256": ingestion.source_sha256,
-                "t_star": corte.t_star.date().isoformat(),
-                "reserved_days": corte.reserved_days,
+                "t_star": (None if corte is None else corte.t_star.date().isoformat()),
+                "reserved_days": None if corte is None else corte.reserved_days,
+                "excluded_count": summary["excluded_count"],
                 "thresholds": {"adi": ADI_THRESHOLD, "cv2": CV2_THRESHOLD},
                 "metrics": [m.model_dump() for m in ingestion.topology],
             },
@@ -380,7 +386,7 @@ def write_run(
             "run_id": run_id,
             "written_at": datetime.now(UTC).isoformat(),
             **metadata,
-            "summary": summarize_run(result),
+            "summary": summary,
             "stage_times": {
                 stage.definition.id: {
                     "started_at": _instante(stage.started_at),

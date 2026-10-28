@@ -9,9 +9,13 @@
 3. **Preservacion del panel diario:** 1.3 solo puede anadir `sku_class`.
    Altas, bajas, reorden o mutacion transaccional detienen la persistencia.
 4. **Publicador Parquet** hacia `{PRED_DATA_ROOT}/processed/`. Sin CSV.
+   Empaqueta t* y la lista de exclusiones en los metadatos de esquema
+   `pred_engine` de PyArrow, manteniendo intacto el contrato de cinco columnas.
    Reutiliza `export_parquet` (1.1) para la guarda de `raw/`.
-5. **Gate de demanda positiva** antes de clasificar, para no invocar ADI
-   sobre series indefinidas (revisa la historia hasta t*, ADR-019).
+5. **Evaluacion de precondiciones y exclusion de productos tardios**
+   antes de clasificar: calcula t* una sola vez del calendario completo y
+   excluye uno a uno con causa ("lanzado despues del corte") los productos sin
+   demanda positiva hasta t*. Si ningun producto es admisible, rechaza el panel.
 6. **CLI** `pred-engine verify` y cableado de 1.4 en `classify` / `ingest`.
 
 ## Como
@@ -20,11 +24,11 @@ El pipeline queda:
 
 ```
 CSV/Parquet → (sonda opcional) → barrera 1.2 → remuestreo diario
-  → require_positive_demand
-  → classify_daily_panel (1.3 real, no stub)
+  → evaluar_precondiciones_y_exclusiones (corte t* y exclusion de tardios)
+  → classify_daily_panel (1.3 con corte t*)
   → require_panel_preserved
   → validate_output_contract
-  → Parquet en processed/
+  → Parquet en processed/ (con metadatos pred_engine: corte y exclusiones)
 ```
 
 `sku_class` es la unica columna nueva. ADI/CV² no se persisten ni se
@@ -62,9 +66,11 @@ Exit `0` ok, `6` si el contrato/preservacion/precondicion fallan.
 - **Paquete `salida/` en vez de inflar `pipeline.py`.** El validador, la
   preservacion y el publicador son funciones puras reutilizables por
   cualquier vertical; el pipeline solo las compone.
-- **Gate de demanda positiva antes de 1.3.** C1 pide fallar *antes* de
-  clasificar. Depender de `TopologyMathError` (division por cero en ADI)
-  mezclaria un error matematico de 1.3 con la frontera de publicacion.
+- **Gate de precondiciones y exclusion de productos tardios.** Se evaluan
+  las precondiciones sobre todo el panel antes de clasificar. Cada producto
+  lanzado despues de t* es excluido con causa "lanzado despues del corte", y
+  se rechaza el panel completo solo si ningun producto resulta admisible.
+  El corte t* y la lista de exclusiones viajan en los metadatos Parquet.
 - **`pred-engine verify`.** C1 exige releer el Parquet y revalidar tipos.
   Un subcomando de solo lectura evita repetir la clasificacion y sirve
   como auditoria del artefacto ya publicado.

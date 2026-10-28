@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from pred_engine.comun.modelos import PANEL_FIELDS
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import classify_daily_panel
 from pred_engine.ingesta.salida import OutputContractError, validate_output_contract
 
@@ -25,7 +26,8 @@ def _diario_mini() -> pd.DataFrame:
 
 
 def _clasificado_valido() -> pd.DataFrame:
-    return classify_daily_panel(_diario_mini()).frame
+    diario = _diario_mini()
+    return classify_daily_panel(diario, corte=ReserveCut.of(diario)).frame
 
 
 def test_acepta_panel_clasificado_canonico() -> None:
