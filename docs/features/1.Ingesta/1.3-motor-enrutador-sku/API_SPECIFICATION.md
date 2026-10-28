@@ -64,11 +64,12 @@ Matriz 2×2 con los umbrales anteriores.
 
 Copia con exactamente `CANONICAL_FIELDS`. No `rename`. Extras se omiten.
 
-### `classify_panel(frame, corte: ReserveCut | None = None) -> TopologyArtifact`
+### `classify_panel(frame, corte: ReserveCut) -> TopologyArtifact`
 
 Group-by `sku_id`. Clasifica cada SKU con su historia hasta t* (ADR-019) y
 rellena `sku_class` por broadcast a todas las filas. Recibe el corte t* calculado
-en la ingesta desde el calendario completo o lee el corte preexistente.
+en la ingesta desde el calendario completo o leido de los metadatos del Parquet.
+El llamador debe pasar ese corte: no hay calculo por defecto.
 El panel de salida conserva todas las filas admitidas. No muta el marco de entrada.
 
 ### `TopologyArtifact`

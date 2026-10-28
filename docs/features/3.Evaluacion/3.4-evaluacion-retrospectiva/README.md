@@ -26,7 +26,7 @@ metricas `3.4.1`; politica `3.4.3-inicial`.
 ## Como
 
 ```
-3.1  ReserveCut.of(panel) ──► t*, reserva (20 % final del calendario)
+3.1  fitting.reserve (L2) -> t*, reserva leidos de los metadatos del Parquet
 3.2  instanciar(candidato).fit(historia <= t*)
 3.3 ──► PronosticoFechado por origen, para cada candidato
                     │
@@ -173,8 +173,10 @@ Chronos-2.
   todas las ventanas diarias completas de H dias. La coordinacion 3.0 guarda
   sus pronosticos antes de evaluar. Con menos de 30 ventanas validas se
   conserva `EVIDENCIA_INSUFICIENTE`; nunca se acorta H para aumentar el conteo.
-- **3.4 no separa el 20 %.** El corte lo calcula `ReserveCut.of`
-  (`comun/reserva.py`), el mismo que usan M1 y M2. 3.4 solo lee la reserva y
+- **3.4 no separa el 20 %.** M3 recibe el corte de `fitting.reserve` de L2,
+  que procede de los metadatos `pred_engine` de la publicacion Parquet.
+  La importacion lo calcula una sola vez con `ReserveCut.of` sobre el calendario
+  completo del CSV, antes de excluir productos. 3.4 solo lee esa reserva y
   rechaza con `EvaluacionRetrospectivaError` un pronostico con origen antes de
   t\* o con fechas dentro de la historia. `separar_reserva` solo aplica un
   corte ya calculado a una serie del panel.
