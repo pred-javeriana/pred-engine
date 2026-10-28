@@ -37,13 +37,15 @@ def publish_classified_panel(
     *,
     data_root: str | Path | None = None,
     daily_panel: pd.DataFrame,
-    reserve: ReserveCut | None = None,
+    reserve: ReserveCut,
     exclusions: Sequence[SkuExclusion] = (),
 ) -> Path:
     """Valida preservacion + contrato y escribe Parquet en processed/.
 
     No importa ADI/CV² ni el enrutador SBC. No escribe CSV ni toca raw/.
     """
+    if not isinstance(reserve, ReserveCut):
+        raise OutputContractError("se requiere la reserva de la importacion")
     destino = Path(destination)
     if destino.suffix.lower() != ".parquet":
         raise OutputContractError("el artefacto final solo se publica como .parquet")
@@ -51,16 +53,7 @@ def publish_classified_panel(
     require_panel_preserved(daily_panel, classified)
     validate_output_contract(classified)
     normalizado = normalize_output_frame(classified)
-    if reserve is None:
-        try:
-            reserve = ReserveCut.of(daily_panel)
-        except Exception:
-            reserve = None
-    metadata = (
-        empaquetar_metadatos_schema(reserve, exclusions)
-        if reserve is not None
-        else None
-    )
+    metadata = empaquetar_metadatos_schema(reserve, exclusions)
     escrito = export_parquet(
         normalizado, destino, data_root=data_root, metadata=metadata
     )

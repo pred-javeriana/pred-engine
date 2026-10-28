@@ -26,7 +26,6 @@ from pred_engine.comun.modelos import (
     HeaderDiagnostic,
     TopologyMetrics,
 )
-from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import (
     TopologyArtifact,
 )
@@ -196,11 +195,9 @@ def _deposito_info(deposito: DepositResult, raiz: Path) -> DepositInfo:
 
 
 def _topologia(artefacto: TopologyArtifact) -> tuple[ReserveInfo, TopologyInfo]:
-    corte = (
-        artefacto.reserve
-        if artefacto.reserve is not None
-        else ReserveCut.of(artefacto.frame)
-    )
+    corte = artefacto.reserve
+    if corte is None:
+        raise ValueError("el artefacto no declara la reserva de la importacion")
     reserva = ReserveInfo(
         t_star=corte.t_star.date().isoformat(),
         first_reserved=corte.first_reserved.date().isoformat(),
