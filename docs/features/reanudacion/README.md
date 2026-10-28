@@ -42,8 +42,8 @@ buscar una publicación anterior ni cambia su identidad.
 
 Una corrida `PUBLICADA` conserva toda su evidencia aunque un ajuste final falle durante
 el reintento. Una corrida activa continúa con la receta congelada si faltan candidatos
-por fallos técnicos del reintento. Los candidatos reconstruidos con éxito deben coincidir
-con esa receta. Una deriva de candidatos, protocolo o partición rechaza la corrida activa
+por fallos técnicos del intento original o del reintento. Los candidatos reconstruidos
+con éxito deben coincidir con esa receta. Una deriva de candidatos, protocolo o partición rechaza la corrida activa
 con estado `RECHAZADA` y una causa durable, sin crear otro protocolo.
 
 Si una ejecución ya tiene varios protocolos M3, el reintento falla explícitamente con

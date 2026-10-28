@@ -182,7 +182,9 @@ class ControladorEvaluacion:
                 configuracion,
             )
         except Exception as error:
-            finalizar_referencia(self.conn, ejecucion_id, error=error)
+            finalizar_referencia(
+                self.conn, ejecucion_id, error=error, conservar_completada=True
+            )
             raise
         finalizar_referencia(
             self.conn,
@@ -341,14 +343,20 @@ class ControladorEvaluacion:
                 )
             existente = json.loads(contenido)
             esperados = existente.get("candidatos")
+            reconstruidos = json.loads(nuevo)["candidatos"]
             if guardado is not None:
-                # Un fallo de ajuste no cambia la receta ya aceptada. Los ajustes
-                # exitosos si deben seguir coincidiendo con sus candidatos.
+                # Un fallo de ajuste, del intento original o del reintento, no
+                # cambia la receta ya aceptada. Los demas ajustes deben coincidir.
                 fallidos = {(u.sku_id, u.family) for u in fitting.units if u.failed}
-                esperados = [
-                    c for c in esperados if (c["sku"], c["familia"]) not in fallidos
-                ]
-            if esperados != json.loads(nuevo)["candidatos"]:
+                fallidos |= {
+                    (f["sku"], f["familia"])
+                    for f in guardado["procedencia"]["fallos_m2"]
+                }
+                esperados, reconstruidos = (
+                    [c for c in lista if (c["sku"], c["familia"]) not in fallidos]
+                    for lista in (esperados, reconstruidos)
+                )
+            if esperados != reconstruidos:
                 raise LoteRechazadoError(
                     "contexto_incompatible",
                     "el conjunto M2 cambio bajo el mismo run_id",

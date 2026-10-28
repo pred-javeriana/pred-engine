@@ -178,3 +178,69 @@ def test_deriva_activa_sin_manifiesto_rechaza_la_receta_original(
     assert conn.execute("SELECT * FROM m3_protocolos").fetchall() == before
     assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone() == (0,)
     conn.close()
+
+
+@pytest.mark.parametrize("perder_archivos", [False, True])
+def test_fallo_original_resuelto_en_el_reintento_completa_la_receta(
+    tmp_path, monkeypatch, perder_archivos
+):
+    import pred_engine.pipeline as pipeline_module
+
+    root, db = tmp_path / "data", crear_base_plataforma(tmp_path / "central.db")
+    source = fuente(tmp_path)
+    original = pipeline_module._fit_unit
+
+    def fallo_dl(task):
+        fitted = original(task)
+        if fitted.selection.family == "dl":
+            raise RuntimeError("dependencia no disponible durante el ajuste final")
+        return fitted
+
+    def caer_tras_unidad(frame, event, arg):
+        if frame.f_code.co_name == "guardar_unidades_generadas" and event == "return":
+            raise KeyboardInterrupt("caida tras confirmar una unidad M3")
+        return caer_tras_unidad
+
+    previous = sys.gettrace()
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(pipeline_module, "_fit_unit", fallo_dl)
+            sys.settrace(caer_tras_unidad)
+            with pytest.raises(KeyboardInterrupt, match="confirmar una unidad"):
+                ejecutar(source, root, db, "ml", "dl")
+    finally:
+        sys.settrace(previous)
+    manifest = root / "runs/corrida/candidatos.json"
+    frozen = json.loads(manifest.read_text())
+    assert {c["familia"] for c in frozen["candidatos"]} == {"ml"}
+    if perder_archivos:
+        manifest.unlink()
+        for path in (root / "runs/corrida/checkpoints/L2").glob("*.json"):
+            path.unlink()
+    assert ejecutar(source, root, db, "ml", "dl") == 0
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT estado FROM m3_corridas").fetchall() == [
+            ("PUBLICADA",)
+        ]
+        assert conn.execute("SELECT COUNT(*) FROM m3_protocolos").fetchone() == (1,)
+    assert json.loads(manifest.read_text()) == frozen
+
+
+def test_deriva_sobre_publicada_conserva_la_ejecucion_completada(tmp_path, monkeypatch):
+    import pred_engine.run_artifacts as run_artifacts
+
+    root, db = tmp_path / "data", crear_base_plataforma(tmp_path / "central.db")
+    source = fuente(tmp_path)
+    assert ejecutar(source, root, db, "ml", "dl") == 0
+    with sqlite3.connect(db) as conn:
+        before = conn.execute("SELECT * FROM ejecuciones").fetchall()
+    original = run_artifacts.library_versions
+    monkeypatch.setattr(
+        run_artifacts, "library_versions", lambda: {**original(), "numpy": "0.0"}
+    )
+    assert ejecutar(source, root, db, "ml", "dl") == 1
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT estado FROM m3_corridas").fetchall() == [
+            ("PUBLICADA",)
+        ]
+        assert conn.execute("SELECT * FROM ejecuciones").fetchall() == before
