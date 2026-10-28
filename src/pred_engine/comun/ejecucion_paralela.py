@@ -390,14 +390,7 @@ def _iterar[T, R](
             )
         return
 
-    with (
-        blas_de_una_hebra(),
-        ProcessPoolExecutor(
-            max_workers=procesos,
-            mp_context=CONTEXTO_MP,
-            initializer=iniciar_proceso_del_pool,
-        ) as ejecutor,
-    ):
+    with pool_de_unidades(procesos) as ejecutor:
         envio = time.time()
         enviadas: deque[tuple[int, Future[ResultadoUnidad[R]]]] = deque()
         pendientes = enumerate(tareas)
@@ -407,7 +400,7 @@ def _iterar[T, R](
                     enviadas.append(
                         (
                             indice,
-                            _enviar(
+                            enviar_unidad(
                                 ejecutor,
                                 funcion,
                                 tarea,
@@ -423,24 +416,7 @@ def _iterar[T, R](
                 if not enviadas:
                     return
                 indice, futuro = enviadas.popleft()
-                try:
-                    resultado = futuro.result()
-                except Exception as exc:
-                    _logger.error("Unidad %d sin resultado: %s", indice, exc)
-                    registro = RegistroUnidad(
-                        "fallida",
-                        0,
-                        envio,
-                        time.time(),
-                        describir_error(exc),
-                        codigo=codigo_de(exc, etapa=etapa_de(indice)),
-                    )
-                    resultado = ResultadoUnidad(registro)
-                    etiqueta = etiqueta_de(indice)
-                    if etiqueta is not None and ruta is not None:
-                        # El hijo murio sin poder anotar su fin: lo anota el padre.
-                        _evento_fin(ruta, etiqueta, registro)
-                yield resultado
+                yield resultado_de(futuro, etiqueta_de(indice), ruta, envio)
         except BaseException:
             # Una interrupcion no debe dejar corriendo las unidades no iniciadas.
             for _, pendiente in enviadas:
@@ -448,7 +424,46 @@ def _iterar[T, R](
             raise
 
 
-def _enviar[T, R](
+@contextmanager
+def pool_de_unidades(procesos: int) -> Iterator[ProcessPoolExecutor]:
+    """Pool de procesos para unidades aisladas: BLAS de una hebra y fin con el padre."""
+    with (
+        blas_de_una_hebra(),
+        ProcessPoolExecutor(
+            max_workers=procesos,
+            mp_context=CONTEXTO_MP,
+            initializer=iniciar_proceso_del_pool,
+        ) as ejecutor,
+    ):
+        yield ejecutor
+
+
+def resultado_de[R](
+    futuro: Future[ResultadoUnidad[R]],
+    etiqueta: EtiquetaUnidad | None,
+    ruta: str | Path | None,
+    envio: float,
+) -> ResultadoUnidad[R]:
+    """Resultado de una unidad enviada; si su proceso murio, una unidad fallida."""
+    try:
+        return futuro.result()
+    except Exception as exc:
+        _logger.error("Unidad %s sin resultado: %s", etiqueta, exc)
+        registro = RegistroUnidad(
+            "fallida",
+            0,
+            envio,
+            time.time(),
+            describir_error(exc),
+            codigo=codigo_de(exc, etapa=None if etiqueta is None else etiqueta.etapa),
+        )
+        if etiqueta is not None and ruta is not None:
+            # El hijo murio sin poder anotar su fin: lo anota el padre.
+            _evento_fin(ruta, etiqueta, registro)
+        return ResultadoUnidad(registro)
+
+
+def enviar_unidad[T, R](
     ejecutor: ProcessPoolExecutor,
     funcion: Callable[[T], R],
     tarea: T,
