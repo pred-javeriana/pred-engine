@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,31 @@ def test_emitir_evento_agrega_una_linea_json(tmp_path: Path) -> None:
     assert (primero["event"], primero["stage"]) == ("stage_started", "L1")
     assert segundo["state"] == "completed"
     assert primero["t"].endswith("+00:00")
+
+
+def _emitir_muchos(ruta: str, escritor: int, n: int) -> None:
+    for i in range(n):
+        emitir_evento(ruta, "unit_finished", escritor=escritor, i=i, relleno="x" * 512)
+
+
+def test_varios_procesos_no_intercalan_lineas(tmp_path: Path) -> None:
+    """Cada evento queda en una linea JSON entera aunque escriban varios procesos."""
+    ruta = tmp_path / "progreso.jsonl"
+    contexto = multiprocessing.get_context("spawn")
+    procesos = [
+        contexto.Process(target=_emitir_muchos, args=(str(ruta), escritor, 300))
+        for escritor in range(4)
+    ]
+    for proceso in procesos:
+        proceso.start()
+    for proceso in procesos:
+        proceso.join(timeout=120)
+        assert proceso.exitcode == 0
+
+    eventos = _eventos(ruta)
+    assert sorted((e["escritor"], e["i"]) for e in eventos) == [
+        (escritor, i) for escritor in range(4) for i in range(300)
+    ]
 
 
 def test_un_fallo_al_escribir_no_interrumpe(tmp_path: Path) -> None:
