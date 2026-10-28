@@ -79,6 +79,7 @@ from pred_engine.forecasting.persistencia_evidencia.recuperacion import (
     cargar_unidades,
     fijar_protocolo,
     guardar_unidades_generadas,
+    protocolo_de_ejecucion,
     protocolo_guardado,
     restaurar_handoff,
 )
@@ -181,7 +182,9 @@ class ControladorEvaluacion:
                 configuracion,
             )
         except Exception as error:
-            finalizar_referencia(self.conn, ejecucion_id, error=error)
+            finalizar_referencia(
+                self.conn, ejecucion_id, error=error, conservar_completada=True
+            )
             raise
         finalizar_referencia(
             self.conn,
@@ -264,6 +267,11 @@ class ControladorEvaluacion:
             "datos_sinteticos": datos_sinteticos,
             "configuracion_m2": configuracion_m2,
         }
+        # SQLite manda sobre archivos locales y ajustes finales transitorios.
+        previo = protocolo_de_ejecucion(self.conn, ejecucion_id)
+        guardado = None if previo is None else previo[1]
+        if guardado is not None:
+            contenido = guardado["manifiesto"]
         # La identidad de configuracion no incorpora la hora de emision.
         try:
             sobre = json.loads(contenido)
@@ -286,15 +294,26 @@ class ControladorEvaluacion:
             version_metricas=VERSION_METRICAS,
         )
         apertura = datetime.now(UTC)
-        guardado = protocolo_guardado(self.conn, identidad.run_id)
-        if guardado is not None:
-            contenido = guardado["manifiesto"]
-        if faltaba_manifiesto or (
-            guardado is not None
-            and ruta_manifiesto.read_text().strip() != contenido.strip()
-        ):
-            escribir_atomico(ruta_manifiesto, contenido + "\n")
+        identidad_esperada = identidad
+        if previo is None:
+            guardado = protocolo_guardado(self.conn, identidad.run_id)
+            if guardado is not None:
+                contenido = guardado["manifiesto"]
+        else:
+            identidad = previo[0]
         try:
+            if guardado is not None and (
+                identidad != identidad_esperada
+                or guardado["protocolo"] != json.loads(json.dumps(protocolo))
+            ):
+                raise LoteRechazadoError(
+                    "contexto_incompatible", "protocolo durable incompatible"
+                )
+            if faltaba_manifiesto or (
+                guardado is not None
+                and ruta_manifiesto.read_text().strip() != contenido.strip()
+            ):
+                escribir_atomico(ruta_manifiesto, contenido + "\n")
             handoff = restaurar_handoff(
                 self.conn, identidad.run_id, manifiesto_pendiente=contenido
             )
@@ -323,7 +342,21 @@ class ControladorEvaluacion:
                     datos_sinteticos=datos_sinteticos,
                 )
             existente = json.loads(contenido)
-            if existente.get("candidatos") != json.loads(nuevo)["candidatos"]:
+            esperados = existente.get("candidatos")
+            reconstruidos = json.loads(nuevo)["candidatos"]
+            if guardado is not None:
+                # Un fallo de ajuste, del intento original o del reintento, no
+                # cambia la receta ya aceptada. Los demas ajustes deben coincidir.
+                fallidos = {(u.sku_id, u.family) for u in fitting.units if u.failed}
+                fallidos |= {
+                    (f["sku"], f["familia"])
+                    for f in guardado["procedencia"]["fallos_m2"]
+                }
+                esperados, reconstruidos = (
+                    [c for c in lista if (c["sku"], c["familia"]) not in fallidos]
+                    for lista in (esperados, reconstruidos)
+                )
+            if esperados != reconstruidos:
                 raise LoteRechazadoError(
                     "contexto_incompatible",
                     "el conjunto M2 cambio bajo el mismo run_id",
@@ -344,9 +377,13 @@ class ControladorEvaluacion:
             )
             raise
         fallos_l2 = {}
-        for unidad in fitting.units:
-            if unidad.failed:
-                fallos_l2.setdefault(unidad.sku_id, []).append(unidad.record.error)
+        if guardado is not None:
+            for fallo in guardado["procedencia"]["fallos_m2"]:
+                fallos_l2.setdefault(fallo["sku"], []).append(fallo["causa"])
+        else:
+            for unidad in fitting.units:
+                if unidad.failed:
+                    fallos_l2.setdefault(unidad.sku_id, []).append(unidad.record.error)
         run_id = registrar_corrida(
             self.conn,
             identidad,
@@ -458,7 +495,7 @@ class ControladorEvaluacion:
             # Solo los SKU sin ningun ajuste L2 exitoso; un candidato que 3.2
             # rechaza ya cuenta como fallo del handoff.
             sin_candidatos = set(fallos_l2) - {
-                c.selection.sku_id for c in fitting.candidates
+                c["sku"] for c in existente["candidatos"]
             }
             for sku in sin_candidatos:
                 fallos_sku[sku] += len(fallos_l2[sku])
