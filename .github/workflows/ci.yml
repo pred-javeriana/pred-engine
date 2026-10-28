@@ -103,6 +103,7 @@ jobs:
       - name: Checkpoints, interrupcion y reutilizacion con uno y dos procesos
         run: >-
           uv run --no-sync pytest tests/test_unit_checkpoints.py tests/test_run_chart.py
+          tests/comun/test_progreso.py::test_varios_procesos_no_intercalan_lineas
           --no-cov -ra
 
   run:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import threading
 import time
@@ -12,7 +13,6 @@ from typing import Any
 import pytest
 
 from pred_engine.comun.ejecucion_paralela import (
-    CONTEXTO_MP,
     EtiquetaUnidad,
     ejecutar_unidades,
     emitir_evento,
@@ -45,11 +45,6 @@ def _la_primera_espera_la_senal(tarea: tuple[int, str]) -> int:
     return indice
 
 
-def _escribir_eventos(ruta: str, proceso: int, cantidad: int) -> None:
-    for i in range(cantidad):
-        emitir_evento(ruta, "unit_started", proceso=proceso, i=i, relleno="x" * 200)
-
-
 def _eventos(ruta: Path) -> list[dict[str, Any]]:
     return [
         json.loads(linea) for linea in ruta.read_text(encoding="utf-8").splitlines()
@@ -71,31 +66,28 @@ def test_emitir_evento_agrega_una_linea_json(tmp_path: Path) -> None:
     assert primero["t"].endswith("+00:00")
 
 
-def test_muchos_procesos_escribiendo_a_la_vez_no_pierden_ni_rompen_lineas(
-    tmp_path: Path,
-) -> None:
-    ruta = tmp_path / "progreso.jsonl"
-    procesos, cantidad = 4, 200
-    hijos = [
-        CONTEXTO_MP.Process(target=_escribir_eventos, args=(str(ruta), p, cantidad))
-        for p in range(procesos)
-    ]
-    for hijo in hijos:
-        hijo.start()
-    for hijo in hijos:
-        hijo.join()
+def _emitir_muchos(ruta: str, escritor: int, n: int) -> None:
+    for i in range(n):
+        emitir_evento(ruta, "unit_finished", escritor=escritor, i=i, relleno="x" * 512)
 
-    lineas = ruta.read_text(encoding="utf-8", errors="replace").splitlines()
-    validas = []
-    for linea in lineas:
-        try:
-            validas.append(json.loads(linea))
-        except ValueError:
-            pass
-    assert len(validas) == len(lineas)  # ninguna linea rota
-    # Cada evento de cada proceso, una sola vez.
-    assert sorted((e["proceso"], e["i"]) for e in validas) == [
-        (p, i) for p in range(procesos) for i in range(cantidad)
+
+def test_varios_procesos_no_intercalan_lineas(tmp_path: Path) -> None:
+    """Cada evento queda en una linea JSON entera aunque escriban varios procesos."""
+    ruta = tmp_path / "progreso.jsonl"
+    contexto = multiprocessing.get_context("spawn")
+    procesos = [
+        contexto.Process(target=_emitir_muchos, args=(str(ruta), escritor, 300))
+        for escritor in range(4)
+    ]
+    for proceso in procesos:
+        proceso.start()
+    for proceso in procesos:
+        proceso.join(timeout=120)
+        assert proceso.exitcode == 0
+
+    eventos = _eventos(ruta)
+    assert sorted((e["escritor"], e["i"]) for e in eventos) == [
+        (escritor, i) for escritor in range(4) for i in range(300)
     ]
 
 

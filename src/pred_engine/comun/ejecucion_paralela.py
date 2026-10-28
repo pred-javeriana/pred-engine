@@ -31,9 +31,6 @@ from typing import Any, Literal
 from pred_engine.comun.errores_codigo import codigo_de
 from pred_engine.comun.logger import get_logger
 
-if sys.platform == "win32":
-    import msvcrt
-
 _logger = get_logger(__name__)
 
 EstadoUnidad = Literal["completada", "fallida"]
@@ -157,53 +154,46 @@ def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat()
 
 
-if sys.platform == "win32":
-    # En Windows O_APPEND no es atomico entre procesos (busca el final y despues
-    # escribe): cada linea se agrega bajo un candado sobre un byte que nadie lee,
-    # mas alla del final. El CRT ubica ese byte con una posicion de 32 bits.
-    _BYTE_DEL_CANDADO = 2**31 - 2
+# Byte que serializa las escrituras en Windows; ningun lector llega tan lejos.
+_REGION_BLOQUEO = 1 << 40
 
-    def _agregar(descriptor: int, datos: bytes) -> None:
-        # LK_LOCK reintenta cada 1 s; aqui se reintenta cada ~1 ms, hasta 10 s.
-        limite = time.monotonic() + 10
-        while True:
-            os.lseek(descriptor, _BYTE_DEL_CANDADO, os.SEEK_SET)
+
+def _anexar(ruta: str | Path, datos: bytes) -> None:
+    """Agrega ``datos`` al final de ``ruta`` sin intercalarse con otro proceso.
+
+    En POSIX una sola escritura ``O_APPEND`` ya es atomica. En Windows el CRT
+    emula ``O_APPEND`` moviendose al final y luego escribiendo, de modo que dos
+    procesos pueden pisar la linea del otro; ahi las escrituras se serializan con
+    un bloqueo sobre un byte que ningun lector toca.
+    """
+    descriptor = os.open(os.fspath(ruta), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            os.lseek(descriptor, _REGION_BLOQUEO, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
             try:
-                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-                break
-            except OSError:
-                if time.monotonic() >= limite:
-                    raise
-                time.sleep(0.001)
-        try:
+                os.write(descriptor, datos)
+            finally:
+                os.lseek(descriptor, _REGION_BLOQUEO, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:
             os.write(descriptor, datos)
-        finally:
-            os.lseek(descriptor, _BYTE_DEL_CANDADO, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-
-else:
-
-    def _agregar(descriptor: int, datos: bytes) -> None:
-        os.write(descriptor, datos)  # en POSIX una linea corta en O_APPEND no se pisa
+    finally:
+        os.close(descriptor)
 
 
 def emitir_evento(ruta: str | Path, evento: str, /, **datos: Any) -> None:
-    """Agrega una linea JSON a ``ruta`` con una sola escritura ``O_APPEND``.
+    """Agrega una linea JSON completa a ``ruta`` (ver ``_anexar``).
 
-    En Windows la escritura va bajo un candado entre procesos. El progreso es
-    observabilidad: un fallo al escribirlo se registra y nunca interrumpe el
-    trabajo.
+    El progreso es observabilidad: un fallo al escribirlo se registra y nunca
+    interrumpe el trabajo.
     """
     registro = {"event": evento, "t": _iso(time.time()), **datos}
     try:
         linea = json.dumps(registro, ensure_ascii=False, default=str) + "\n"
-        descriptor = os.open(
-            os.fspath(ruta), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644
-        )
-        try:
-            _agregar(descriptor, linea.encode("utf-8"))
-        finally:
-            os.close(descriptor)
+        _anexar(ruta, linea.encode("utf-8"))
     except OSError as exc:
         _logger.warning("No se pudo escribir el evento de progreso %s: %s", evento, exc)
 
