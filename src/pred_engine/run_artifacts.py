@@ -24,7 +24,6 @@ from typing import Any
 import pandas as pd
 
 from pred_engine.comun.ejecucion_paralela import resumen_paralelismo
-from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
 from pred_engine.comun.modelos import ADI_THRESHOLD, CV2_THRESHOLD
 from pred_engine.comun.modelos.manifiesto_candidatos import (
     MODELO_POR_FAMILIA,
@@ -261,12 +260,10 @@ def write_run(
     ingestion = result.ingestion
     if ingestion is not None and ingestion.topology:
         # La topologia es de L1: se guarda aunque L2 o L3 hayan fallado.
+        # El corte viaja con el artefacto; la ruta nunca se relee.
         corte = ingestion.reserve
-        if corte is None:
-            if fitting is not None:
-                corte = fitting.reserve
-            else:
-                corte = leer_metadatos_parquet(ingestion.parquet_path).reserve
+        if corte is None and fitting is not None:
+            corte = fitting.reserve
         excl_count = (
             len(ingestion.exclusions)
             if ingestion.exclusions
@@ -277,8 +274,8 @@ def write_run(
             {
                 "schema": TOPOLOGY_SCHEMA,
                 "source_sha256": ingestion.source_sha256,
-                "t_star": corte.t_star.date().isoformat(),
-                "reserved_days": corte.reserved_days,
+                "t_star": (None if corte is None else corte.t_star.date().isoformat()),
+                "reserved_days": None if corte is None else corte.reserved_days,
                 "excluded_count": excl_count,
                 "thresholds": {"adi": ADI_THRESHOLD, "cv2": CV2_THRESHOLD},
                 "metrics": [m.model_dump() for m in ingestion.topology],

@@ -713,3 +713,49 @@ def test_s2_lectura_unica_no_mezcla_publicaciones(tmp_path: Path, ruta: str) -> 
     for sku_id, serie in entrenamiento.items():
         # Ninguna observacion reservada de la publicacion leida llega al ajuste.
         assert serie == _demanda(filas, sku_id, meta.t_star)
+
+
+def test_s1_fit_rechaza_artefacto_sin_corte_y_no_relee_la_ruta(tmp_path: Path) -> None:
+    """Un artefacto L1 armado a mano sin corte no toma t* de la ruta al ajustar."""
+    from pred_engine.ingesta.salida import read_classified_publication
+    from pred_engine.pipeline import IngestionArtifact
+
+    csv_a = _generar_csv_con_producto_tardio(tmp_path / "panel.csv")
+    assert (
+        cli.main(["classify", "--csv", str(csv_a), "--data-root", str(tmp_path / "a")])
+        == 0
+    )
+    (tmp_path / "fuente_b").mkdir()
+    csv_b = _generar_csv_sin_tardios(tmp_path / "fuente_b" / "panel.csv", 125)
+    assert (
+        cli.main(["classify", "--csv", str(csv_b), "--data-root", str(tmp_path / "b")])
+        == 0
+    )
+    pub_a = tmp_path / "a" / "processed" / "panel.parquet"
+    pub_b = tmp_path / "b" / "processed" / "panel.parquet"
+    vivo = tmp_path / "vivo" / "panel.parquet"
+    vivo.parent.mkdir()
+    shutil.copyfile(pub_a, vivo)
+    filas_a, meta_a = pd.read_parquet(pub_a), leer_metadatos_parquet(pub_a)
+
+    publicacion = read_classified_publication(vivo)
+    a_mano = IngestionArtifact(
+        vivo, publicacion.frame, parquet_sha256=publicacion.sha256
+    )
+    # Otra publicacion valida ocupa la ruta antes de L2.
+    shutil.copyfile(pub_b, vivo)
+
+    pipeline = verification_pipeline()
+    with pytest.raises(ValueError, match="no declara su corte"):
+        pipeline.fit(a_mano)
+
+    # La ruta publica arma el artefacto con la misma lectura de las filas.
+    from pred_engine.pipeline import ingestion_artifact_from_publication
+
+    publica = ingestion_artifact_from_publication(vivo, publicacion)
+    fitted = pipeline.fit(publica)
+    assert fitted.reserve == meta_a.reserve
+    assert [e.sku_id for e in fitted.exclusions] == ["SKU-TARDIO"]
+    for candidato in fitted.candidates:
+        sku_id = candidato.selection.sku_id
+        assert candidato.series.tolist() == _demanda(filas_a, sku_id, meta_a.t_star)

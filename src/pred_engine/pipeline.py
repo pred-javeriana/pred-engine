@@ -39,7 +39,6 @@ from pred_engine.comun.errores_codigo import (
 )
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm import LlmProvider
-from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
 from pred_engine.comun.reserva import ReserveCut
@@ -388,19 +387,23 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     return summary
 
 
-def _ingestion_artifact(
-    path: Path,
+def ingestion_artifact_from_publication(
+    path: str | Path,
     publication: ClassifiedPublication,
     *,
     source_sha256: str | None = None,
     datos_sinteticos: bool | None = None,
 ) -> IngestionArtifact:
     """Artefacto L1 cuyas filas, huella, corte, exclusiones y topologia salen
-    de una sola lectura de la publicacion."""
+    de una sola lectura de la publicacion (``read_classified_publication``).
+
+    Es la ruta de biblioteca para armar la entrada de ``Pipeline.fit`` sin
+    ``Pipeline.ingest``; nunca vuelve a leer ``path``.
+    """
     meta = publication.metadata
     topologia = classify_panel(publication.frame, corte=meta.reserve)
     return IngestionArtifact(
-        path,
+        Path(path),
         publication.frame,
         topology=tuple(topologia.metrics),
         source_sha256=source_sha256,
@@ -651,7 +654,7 @@ class Pipeline:
         """L1: reuse current ingestion and consume its published 1.4 contract."""
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
-            return _ingestion_artifact(
+            return ingestion_artifact_from_publication(
                 path,
                 read_classified_publication(path),
                 datos_sinteticos=request.datos_sinteticos,
@@ -670,7 +673,7 @@ class Pipeline:
         # Se usa la publicacion releida, no el artefacto de la importacion en
         # memoria: otra publicacion pudo sustituir el archivo entre ambos pasos.
         path = salida.result.parquet_path
-        return _ingestion_artifact(
+        return ingestion_artifact_from_publication(
             path,
             read_classified_publication(path),
             source_sha256=salida.report.ingest_id,
@@ -718,13 +721,15 @@ class Pipeline:
         """L2: corte t*, una unidad por SKU x familia y pronostico de la reserva."""
         panel = ingestion.panel
         validate_output_contract(panel)
-        if ingestion.reserve is not None:
-            reserve = ingestion.reserve
-            exclusions_l1 = ingestion.exclusions
-        else:
-            meta = leer_metadatos_parquet(ingestion.parquet_path)
-            reserve = meta.reserve
-            exclusions_l1 = meta.exclusions
+        reserve = ingestion.reserve
+        if reserve is None:
+            # La ruta pudo cambiar de contenido despues de leer las filas: el
+            # corte nunca se relee de ella.
+            raise ValueError(
+                "la ingestion no declara su corte: use Pipeline.ingest o "
+                "ingestion_artifact_from_publication con read_classified_publication"
+            )
+        exclusions_l1 = ingestion.exclusions
         tasks: list[_FitTask] = []
         exclusions: list[SkuExclusion] = [
             SkuExclusion(
