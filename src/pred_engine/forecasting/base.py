@@ -109,12 +109,15 @@ class SeasonalNaiveStub(BaseForecaster):
         self._last_season: np.ndarray | None = None
 
     def fit(self, y: np.ndarray) -> SeasonalNaiveStub:
-        y = np.asarray(y, dtype=float)
-        if y.ndim != 1:
-            raise ValueError("y must be a 1-D array")
-        if len(y) < self.season_length:
+        # Un refit fallido nunca deja utilizable el ciclo de un ajuste anterior.
+        self._fitted = False
+        self._last_season = None
+        serie = self._validar_serie_1d(y)
+        if not np.all(np.isfinite(serie)):
+            raise ValueError("y contiene valores no finitos")
+        if len(serie) < self.season_length:
             raise ValueError(f"y must have at least {self.season_length} observations")
-        self._last_season = y[-self.season_length :]
+        self._last_season = serie[-self.season_length :].copy()
         self._fitted = True
         return self
 

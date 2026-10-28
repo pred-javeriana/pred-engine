@@ -90,8 +90,13 @@ busqueda, (3) el envoltorio que lo conecta al router. Ademas la politica 2.2
   esta estrategia. El warm start (`historico_previo`) queda expuesto pero
   opcional.
 - La restriccion de costo rechaza configuraciones via trial `fallido`
-  (`configuracion_invalida`), que consume presupuesto: en una corrida de
-  prueba, 2 de 32 trials. Es el mismo mecanismo que usa clasicos.
+  (`configuracion_invalida`). Ese sorteo invalido no consume el presupuesto de
+  `n_trials`: el motor vuelve a muestrear y solo cuentan los trials evaluados,
+  con un tope de `n_trials * _MAX_INTENTOS_INVALIDOS_POR_TRIAL` sorteos
+  invalidos seguidos (`optimizacion/optimizadores/HPO/estudio.py`). Por eso el
+  total de trials registrados puede superar `n_trials`. Es el mismo mecanismo
+  que usa clasicos. En la corrida de prueba de 2026-09-21 se registraron 2
+  trials `configuracion_invalida` de 32.
 - Sin calendario real, la estacionalidad depende de `m` (default 7). Series
   con otra periodicidad exigen otro `m` en `EspacioML`.
 - La ganancia de la seleccion sobre el default es pequena en demanda
