@@ -61,6 +61,7 @@ from pred_engine.verify import (
 )
 from tests._dobles import PipelineFalso
 from tests._plataforma import crear_base_plataforma
+from tests._series import serie_ar_estacional
 
 
 def request_at(root: Path) -> PipelineInput:
@@ -364,14 +365,18 @@ def test_invalid_l4_outputs_never_complete_a_run(tmp_path, output):
     assert raised.value.result.stages[3].state == "failed"
 
 
+# Con ruido: una serie determinista deja raices SARIMA en el borde (ADR-020).
+CORE_DEMAND = np.round(serie_ar_estacional(120), 2)
+
+
 def core_request_at(root: Path) -> PipelineInput:
     source = root / "sales.csv"
-    n = 120
+    n = len(CORE_DEMAND)
     pd.DataFrame(
         {
             "sku_id": ["core-sku"] * n,
             "timestamp": pd.date_range("2024-01-01", periods=n),
-            "demand_qty": [20 + 0.35 * i + (i % 5 - 2) for i in range(n)],
+            "demand_qty": CORE_DEMAND,
             "lead_time_days": [3] * n,
         }
     ).to_csv(source, index=False)
@@ -413,7 +418,9 @@ def test_default_composition_fits_and_evaluates_all_four_families(
         assert np.isfinite(candidate.walk_forward.valor_agregado)
         assert candidate.fitted.forecast.shape == (24,)
         assert np.all(np.isfinite(candidate.fitted.forecast))
-        assert candidate.walk_forward.ventanas[0].y_real.tolist() == [32.0, 33.35]
+        np.testing.assert_array_equal(
+            candidate.walk_forward.ventanas[0].y_real, CORE_DEMAND[40:42]
+        )
 
 
 def test_real_cli_core_composition_publishes_m3(tmp_path, capsys):
@@ -452,7 +459,7 @@ def test_real_cli_core_composition_publishes_m3(tmp_path, capsys):
     assert report["m3"]["n_unidades"] == 92
     panel = pd.read_parquet(tmp_path / "data/processed/sales.parquet")
     assert panel.shape == (120, 5)
-    assert panel["demand_qty"].iloc[:3].tolist() == [18.0, 19.35, 20.7]
+    np.testing.assert_array_equal(panel["demand_qty"].to_numpy(), CORE_DEMAND)
 
 
 def test_cli_reports_same_honest_blocker(tmp_path, monkeypatch, capsys):

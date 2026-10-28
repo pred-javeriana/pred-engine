@@ -92,6 +92,18 @@ def test_serie_no_finita_o_no_1d_se_rechaza():
         _modelo().fit(np.ones((10, 2)))
 
 
+@pytest.mark.parametrize(
+    "y", [np.array([]), np.array([1.0, np.nan] * 60), np.ones((60, 2))]
+)
+def test_un_reajuste_fallido_invalida_el_modelo_anterior(y):
+    modelo = _modelo(lags=7, estacionalidad=7).fit(_serie())
+    assert modelo.predict(7).shape == (7,)
+    with pytest.raises(ValueError):
+        modelo.fit(y)
+    with pytest.raises(RuntimeError, match="fit"):
+        modelo.predict(7)
+
+
 @pytest.mark.parametrize("kw", [{"lags": 0}, {"estacionalidad": 0}])
 def test_parametros_invalidos_en_el_constructor(kw):
     with pytest.raises(ValueError):

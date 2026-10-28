@@ -62,6 +62,20 @@ def test_serie_invalida_falla(y):
         _modelo().fit(y)
 
 
+@pytest.mark.parametrize("y", [np.array([]), np.array([1.0, np.nan]), np.ones((2, 3))])
+def test_un_reajuste_fallido_invalida_el_contexto_anterior(y):
+    pipeline = PipelineFalso()
+    modelo = _modelo(pipeline).fit(np.array([1.0, 2.0, 3.0]))
+    np.testing.assert_array_equal(modelo.predict(2), [3.0, 3.0])
+    with pytest.raises(ValueError):
+        modelo.fit(y)
+    with pytest.raises(RuntimeError, match="fit"):
+        modelo.predict(2)
+    # El pipeline preentrenado se conserva: un ajuste valido lo reutiliza.
+    np.testing.assert_array_equal(modelo.fit(np.array([4.0])).predict(1), [4.0])
+    np.testing.assert_array_equal(pipeline.contextos[-1], [4.0])
+
+
 def test_el_pronostico_puntual_es_la_mediana():
     y = _serie()
     pronostico = _modelo().fit(y).predict(5)

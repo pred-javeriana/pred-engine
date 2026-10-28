@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from tests._plataforma import crear_base_plataforma
+from tests._series import serie_ar_estacional
 
 from pred_engine import pipeline as modulo_pipeline
 from pred_engine.cli import main
@@ -15,13 +16,15 @@ from pred_engine.unit_checkpoints import load_result
 pytestmark = pytest.mark.slow
 
 
-def fuente(tmp_path, *, infinito=None):
+def fuente(tmp_path, *, infinito=None, demanda=None):
     path = tmp_path / "source.csv"
+    if demanda is None:
+        demanda = 30 + np.arange(220) * 0.05 + np.sin(np.arange(220))
     frame = pd.DataFrame(
         {
             "sku_id": ["SKU"] * 220,
             "timestamp": pd.date_range("2024-01-01", periods=220),
-            "demand_qty": 30 + np.arange(220) * 0.05 + np.sin(np.arange(220)),
+            "demand_qty": demanda,
             "lead_time_days": 4,
         }
     )
@@ -104,7 +107,9 @@ def test_reintento_publicado_sin_checkpoint_de_ajuste_conserva_ejecucion(
     tmp_path, monkeypatch
 ):
     root, db = tmp_path / "data", crear_base_plataforma(tmp_path / "central.db")
-    source = fuente(tmp_path)
+    # Una serie determinista deja la raiz MA estacional de SARIMA en el borde y
+    # el ajuste se rechaza (ADR-020): la familia clasica necesita ruido.
+    source = fuente(tmp_path, demanda=np.round(serie_ar_estacional(220), 2))
     assert ejecutar(source, root, db, "classical", "ml") == 0
     tablas = ("m3_corridas", "m3_unidades", "m3_pronosticos", "m3_veredictos")
     with sqlite3.connect(db) as conn:

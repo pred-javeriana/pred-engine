@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from tests._series import serie_ar_estacional
 
 from pred_engine.comun.modelos.modelos_clasicos.errores import AjusteModeloError
 from pred_engine.comun.modelos.modelos_clasicos.sarima import SarimaForecaster
@@ -139,7 +140,7 @@ def test_un_ajuste_fallido_invalida_el_modelo_anterior():
 def test_pronosticar_filtra_lo_observado_con_los_parametros_del_ajuste():
     from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-    y = _serie_ar1(n=90)
+    y = serie_ar_estacional(90)
     historia, observadas = y[:70], y[70:]
     modelo = SarimaForecaster(
         order=(1, 0, 0), seasonal_order=(1, 0, 0, 7), tendencia="c"
@@ -163,3 +164,81 @@ def test_pronosticar_filtra_lo_observado_con_los_parametros_del_ajuste():
     )
     np.testing.assert_allclose(pronostico, np.clip(referencia, 0, None))
     np.testing.assert_array_equal(modelo._resultado_ajuste.params, parametros)
+
+
+def _serie_semanal(n: int, ruido: float, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    return 20 + 5 * np.sin(np.arange(n) * 2 * np.pi / 7) + rng.normal(0, ruido, n)
+
+
+def test_una_raiz_ar_estacional_en_el_borde_se_rechaza():
+    # Un patron semanal casi exacto lleva el AR estacional a una raiz de modulo
+    # 1.0002: la regla de ADR-020 cubre tambien los factores estacionales.
+    modelo = SarimaForecaster(
+        order=(0, 0, 0), seasonal_order=(1, 0, 0, 7), tendencia="c", seed=17
+    )
+    with pytest.raises(AjusteModeloError, match="1.01"):
+        modelo.fit(_serie_semanal(56, ruido=0.02, seed=17))
+    with pytest.raises(RuntimeError, match="fit"):
+        modelo.predict(7)
+
+
+def test_una_raiz_ma_estacional_en_el_borde_se_rechaza():
+    # Diferenciar estacionalmente ruido blanco deja el MA estacional en el
+    # circulo unitario.
+    ruido = 50 + np.random.default_rng(0).normal(0, 1, 150)
+    with pytest.raises(AjusteModeloError, match="borde"):
+        SarimaForecaster(order=(0, 0, 0), seasonal_order=(0, 1, 1, 7)).fit(ruido)
+
+
+def test_un_ajuste_estacional_holgado_se_acepta():
+    y = serie_ar_estacional(90)
+    pronostico = (
+        SarimaForecaster(order=(1, 0, 0), seasonal_order=(1, 0, 0, 7), tendencia="c")
+        .fit(y)
+        .predict(7)
+    )
+    assert pronostico.shape == (7,)
+    assert np.all(np.isfinite(pronostico))
+
+
+@pytest.mark.parametrize(
+    "y",
+    [np.array([1.0, np.nan] * 30), np.array([1.0, np.inf] * 30), np.full(56, np.nan)],
+)
+def test_una_serie_no_finita_se_rechaza(y):
+    modelo = SarimaForecaster(
+        order=(1, 0, 0), seasonal_order=(0, 0, 0, 0), tendencia="c"
+    )
+    with pytest.raises(ValueError, match="no finitos"):
+        modelo.fit(y)
+    with pytest.raises(RuntimeError, match="fit"):
+        modelo.predict(3)
+
+
+@pytest.mark.parametrize(
+    "y", [np.array(["invalido"]), np.ones((10, 6)), np.full(60, np.nan)]
+)
+def test_un_reajuste_con_entrada_invalida_invalida_el_modelo_anterior(y):
+    # Cada entrada falla en la conversion o la validacion, antes de SARIMAX.
+    modelo = SarimaForecaster(
+        order=(1, 0, 0), seasonal_order=(0, 0, 0, 0), tendencia="c"
+    ).fit(_serie_ar1())
+    assert np.all(np.isfinite(modelo.predict(3)))
+    with pytest.raises(ValueError):
+        modelo.fit(y)
+    with pytest.raises(RuntimeError, match="fit"):
+        modelo.predict(3)
+
+
+def test_un_reajuste_con_serie_vacia_invalida_el_modelo_anterior():
+    modelo = SarimaForecaster(
+        order=(1, 0, 0), seasonal_order=(0, 0, 0, 0), tendencia="c"
+    ).fit(_serie_ar1())
+    assert np.all(np.isfinite(modelo.predict(3)))
+    # Control: main ya invalidaba aqui, porque SARIMAX rechaza la serie vacia
+    # despues de limpiar el ajuste.
+    with pytest.raises(ValueError):
+        modelo.fit(np.array([]))
+    with pytest.raises(RuntimeError, match="fit"):
+        modelo.predict(3)
