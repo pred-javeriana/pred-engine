@@ -19,6 +19,7 @@ from tests._evidencia import (
     filas,
     handoff,
     identidad,
+    observaciones,
 )
 
 from pred_engine.forecasting.adaptador_candidatos import LoteRechazadoError
@@ -218,13 +219,21 @@ def test_la_evaluacion_exige_la_corrida_evaluada() -> None:
     run_id = corrida(conn)
     _, evaluaciones, resultado = corrida_evaluada(base())
     with pytest.raises(EstadoCorridaError, match="EN_CURSO"):
-        guardar_evaluacion(conn, run_id, evaluaciones, resultado)
+        guardar_evaluacion(
+            conn,
+            run_id,
+            evaluaciones,
+            resultado,
+            observaciones=observaciones(conn, run_id),
+        )
 
 
 def test_guardar_evaluacion_persiste_metricas_seleccion_y_veredictos() -> None:
     conn = base()
     run_id, evaluaciones, resultado = corrida_evaluada(conn)
-    guardar_evaluacion(conn, run_id, evaluaciones, resultado)
+    guardar_evaluacion(
+        conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
+    )
     assert estado_corrida(conn, run_id) == "SELECCIONADA"
 
     metricas = consultar(conn, run_id, sku="S1")["m3_metricas"]
@@ -277,7 +286,9 @@ def test_una_metrica_no_calculable_queda_nula_con_su_causa() -> None:
     evaluaciones[0] = replace(
         s1, linea_base=replace(s1.linea_base, agregadas=sin_escala)
     )
-    guardar_evaluacion(conn, run_id, evaluaciones, resultado)
+    guardar_evaluacion(
+        conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
+    )
     metricas = consultar(conn, run_id, sku="S1")["m3_metricas"]
     mase = metricas[
         (metricas["candidato_id"] == s1.linea_base.candidato_id)
@@ -290,9 +301,13 @@ def test_una_metrica_no_calculable_queda_nula_con_su_causa() -> None:
 def test_guardar_la_evaluacion_dos_veces_no_duplica() -> None:
     conn = base()
     run_id, evaluaciones, resultado = corrida_evaluada(conn)
-    guardar_evaluacion(conn, run_id, evaluaciones, resultado)
+    guardar_evaluacion(
+        conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
+    )
     antes = {t: filas(conn, t) for t in ("m3_metricas", "m3_veredictos")}
-    guardar_evaluacion(conn, run_id, evaluaciones, resultado)
+    guardar_evaluacion(
+        conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
+    )
     assert {t: filas(conn, t) for t in antes} == antes
 
 
@@ -301,7 +316,9 @@ def test_versiones_distintas_a_las_de_la_identidad_se_rechazan_sin_escribir() ->
     run_id, evaluaciones, resultado = corrida_evaluada(conn)
     otra = replace(resultado, version_politica="otra")
     with pytest.raises(EvidenciaInconsistenteError, match="versiones"):
-        guardar_evaluacion(conn, run_id, evaluaciones, otra)
+        guardar_evaluacion(
+            conn, run_id, evaluaciones, otra, observaciones=observaciones(conn, run_id)
+        )
     assert estado_corrida(conn, run_id) == "EVALUADA"
     assert filas(conn, "m3_metricas") == 0
 
@@ -310,7 +327,13 @@ def test_sin_los_pronosticos_de_la_linea_base_no_se_guarda_la_evaluacion() -> No
     conn = base()
     run_id, evaluaciones, resultado = corrida_evaluada(conn, con_linea_base=False)
     with pytest.raises(EvidenciaInconsistenteError, match="seasonal_naive"):
-        guardar_evaluacion(conn, run_id, evaluaciones, resultado)
+        guardar_evaluacion(
+            conn,
+            run_id,
+            evaluaciones,
+            resultado,
+            observaciones=observaciones(conn, run_id),
+        )
     assert estado_corrida(conn, run_id) == "EVALUADA"
 
 
@@ -319,7 +342,13 @@ def test_veredictos_con_otro_origen_de_datos_que_la_corrida_se_rechazan() -> Non
     run_id, evaluaciones, resultado = corrida_evaluada(conn)
     sintetico = replace(resultado, datos_sinteticos=True)
     with pytest.raises(EvidenciaInconsistenteError, match="datos_sinteticos"):
-        guardar_evaluacion(conn, run_id, evaluaciones, sintetico)
+        guardar_evaluacion(
+            conn,
+            run_id,
+            evaluaciones,
+            sintetico,
+            observaciones=observaciones(conn, run_id),
+        )
     assert filas(conn, "m3_veredictos") == 0
 
 
@@ -355,7 +384,70 @@ def test_un_veredicto_fuera_de_las_reglas_viola_el_esquema(
 def test_consultar_por_sku_solo_devuelve_ese_sku() -> None:
     conn = base()
     run_id, evaluaciones, resultado = corrida_evaluada(conn, fallo("S2"))
-    guardar_evaluacion(conn, run_id, evaluaciones, resultado)
+    guardar_evaluacion(
+        conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
+    )
     por_sku = consultar(conn, run_id, sku="S2")
     assert "m3_corridas" not in por_sku
     assert all(set(frame["sku"]) == {"S2"} for frame in por_sku.values())
+
+
+def test_guardar_evaluacion_publica_la_reserva_real_con_nulos() -> None:
+    conn = base()
+    run_id, evaluaciones, resultado = corrida_evaluada(conn)
+    reales = observaciones(conn, run_id)
+    reales["S2"] = reales["S2"].where(reales["S2"].index != reales["S2"].index[1])
+    guardar_evaluacion(conn, run_id, evaluaciones, resultado, observaciones=reales)
+    assert conn.execute(
+        "SELECT fecha, valor FROM m3_observaciones WHERE sku = 'S2' ORDER BY fecha"
+    ).fetchall() == [
+        ("2024-01-15", 10.0),
+        ("2024-01-16", None),
+        ("2024-01-17", 10.0),
+        ("2024-01-18", 10.0),
+    ]
+    assert filas(conn, "m3_observaciones") == 8
+
+
+@pytest.mark.parametrize(
+    ("recortar", "mensaje"),
+    [
+        (lambda o: {"S1": o["S1"]}, "SKU del manifiesto"),
+        (lambda o: o | {"S2": o["S2"].iloc[:-1]}, "sin fila de demanda observada"),
+        (
+            lambda o: o | {"S2": pd.Series([1.0], index=[T_ESTRELLA])},
+            "fuera de la reserva",
+        ),
+    ],
+)
+def test_la_demanda_observada_incompleta_no_guarda_la_evaluacion(
+    recortar, mensaje
+) -> None:
+    conn = base()
+    run_id, evaluaciones, resultado = corrida_evaluada(conn)
+    with pytest.raises(EvidenciaInconsistenteError, match=mensaje):
+        guardar_evaluacion(
+            conn,
+            run_id,
+            evaluaciones,
+            resultado,
+            observaciones=recortar(observaciones(conn, run_id)),
+        )
+    assert estado_corrida(conn, run_id) == "EVALUADA"
+    assert filas(conn, "m3_observaciones") == filas(conn, "m3_veredictos") == 0
+
+
+def test_sin_corte_fijado_no_se_guarda_la_evaluacion() -> None:
+    conn = base()
+    run_id, evaluaciones, resultado = corrida_evaluada(conn)
+    conn.execute("DELETE FROM m3_cortes")
+    conn.commit()
+    with pytest.raises(EvidenciaInconsistenteError, match="sin corte"):
+        guardar_evaluacion(
+            conn,
+            run_id,
+            evaluaciones,
+            resultado,
+            observaciones=observaciones(conn, run_id),
+        )
+    assert estado_corrida(conn, run_id) == "EVALUADA"

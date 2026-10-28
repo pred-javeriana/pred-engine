@@ -26,6 +26,11 @@ from pred_engine.comun.modelos import (
     HeaderDiagnostic,
     TopologyMetrics,
 )
+from pred_engine.comun.procedencia import (
+    OrigenIncompatibleError,
+    origen_ingesta,
+    resolver_origen,
+)
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import (
     TopologyArtifact,
@@ -289,6 +294,8 @@ def _informe_fallido(
     cabecera: HeaderInfo | None = None
     registro: list[QualityEntryInfo] = []
     estado: IngestStatus = "failed"
+    if isinstance(exc, OrigenIncompatibleError):
+        estado = "rejected"
     if isinstance(exc, SemanticAlignmentError):
         estado = "rejected"
         cabecera = _cabecera(exc.diagnostic) or HeaderInfo(status="rejected")
@@ -350,8 +357,6 @@ def origen_informe(
     data_root: str | Path | None, sha256: str, declarada: bool | None = None
 ) -> bool | None:
     """Lee solo el informe canonico de esa fuente, sin deducir un origen ausente."""
-    from pred_engine.comun.procedencia import resolver_origen
-
     path = report_path(data_root, sha256)
     conocida = None
     if path.exists():
@@ -432,6 +437,19 @@ def ingest_csv_with_report(
 
     if error is None and resultado is not None and deposito is not None:
         informe = _informe_aceptado(fuente, deposito, resultado, layout.root)
+        assert informe.published is not None
+        try:
+            # Los mismos bytes publicados por otra ingesta no cambian de origen.
+            origen_ingesta(
+                None,
+                data_root=layout.root,
+                ingesta_sha256=sha256,
+                declarada=fuente.datos_sinteticos,
+                ingesta_ref_m1=informe.published.sha256,
+            )
+        except OrigenIncompatibleError as exc:
+            error = exc
+            informe = _informe_fallido(fuente, deposito, exc, layout.root)
     elif isinstance(error, RawConflictError):
         informe = _informe_conflicto(fuente, error, layout.root)
     else:

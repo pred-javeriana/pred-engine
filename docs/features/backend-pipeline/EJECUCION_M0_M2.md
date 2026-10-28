@@ -75,7 +75,7 @@ Todo queda en `data/runs/{run_id}/`:
 
 | Archivo | Contenido |
 | --- | --- |
-| `corrida.json` | Entradas (semilla, artefacto M0, Parquet M1, hashes y filas), opciones, resumen de etapas, inicio y fin de cada etapa (`stage_times`), corte t*, exclusiones, fallas, evidencia de paralelismo, tiempo de pared, resumen del muestreo de recursos (`telemetry`), versiones de librerías y la procedencia de cada candidato (perfil, política, referencia al estudio HPO y su evidencia). |
+| `corrida.json` | Entradas (semilla, artefacto M0, Parquet M1, hashes y filas), opciones, evaluacion (`evaluation`: agregacion y recorte), resumen de etapas, inicio y fin de cada etapa (`stage_times`), corte t*, exclusiones, fallas, evidencia de paralelismo, tiempo de pared, resumen del muestreo de recursos (`telemetry`), versiones de librerías y la procedencia de cada candidato (perfil, política, referencia al estudio HPO y su evidencia). |
 | `candidatos.json` | Manifiesto de candidatos para M3 (ADR-03-004), el que valida `forecasting.adaptador_candidatos`: contexto de partición (huella del Parquet de M1, t* y fracción reservada), y configuración completa, semilla e identidad de cada candidato. |
 | `pronosticos.parquet` | Pronóstico diario de cada candidato para los días reservados (`sku_id`, `sku_class`, `familia`, `modelo`, `timestamp`, `pronostico`). |
 | `evaluacion.parquet` | Métrica agregada walk-forward y medias de MAE, RMSE, sMAPE y MASE por candidato. |

@@ -613,3 +613,78 @@ def test_horizonte_mayor_que_reserva_es_insuficiente_sin_truncarlo(tmp_path):
     assert resultado.audit_bundle["n_unidades"] == 0
     assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 0
     conn.close()
+
+
+def _datos_m4(conn):
+    return {
+        tabla: conn.execute(f"SELECT * FROM {tabla} ORDER BY rowid").fetchall()
+        for tabla in ("m3_cortes", "m3_lanzamientos_tardios", "m3_observaciones")
+    }
+
+
+@pytest.mark.parametrize("fase", ["EN_CURSO", "EVALUADA", "SELECCIONADA"])
+@pytest.mark.parametrize("anterior_a_m4", [False, True])
+def test_reanudar_conserva_el_corte_y_la_demanda_observada_sin_duplicar(
+    tmp_path, fase, anterior_a_m4
+):
+    """Caida tras fijar el protocolo o tras una fase durable, y reanudacion.
+
+    ``anterior_a_m4`` simula una corrida que llego a esa fase con un motor sin
+    la migracion 10: al reanudar recibe su corte si todavia no se evaluo; si
+    ya paso de EVALUADA, queda sin corte ni demanda observada (metadata_missing).
+    """
+
+    class ConexionConCaida(sqlite3.Connection):
+        armada = False
+
+        def commit(self):
+            if not self.armada:
+                return super().commit()
+            estado = self.execute("SELECT estado FROM m3_corridas").fetchone()
+            fijado = self.execute("SELECT COUNT(*) FROM m3_protocolos").fetchone()[0]
+            super().commit()
+            if estado == (fase,) and fijado:
+                self.armada = False
+                raise KeyboardInterrupt("caida despues de fase durable")
+
+    conn = _conexion(tmp_path, factory=ConexionConCaida)
+    pipeline, request = _caso(tmp_path, conn)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    conn.armada = True
+    with pytest.raises(KeyboardInterrupt, match="fase durable"):
+        pipeline.validate(evaluation)
+    assert conn.execute("SELECT estado FROM m3_corridas").fetchone()[0] == fase
+    # El corte va en la misma transaccion que el protocolo.
+    t_star = evaluation.fitting.reserve.t_star.strftime("%Y-%m-%d")
+    assert conn.execute("SELECT t_star FROM m3_cortes").fetchall() == [(t_star,)]
+    if anterior_a_m4:
+        for tabla in ("m3_observaciones", "m3_lanzamientos_tardios", "m3_cortes"):
+            conn.execute(f"DELETE FROM {tabla}")
+        conn.commit()
+
+    resultado = pipeline.validate(evaluation)
+
+    assert resultado.audit_bundle["estado"] == "PUBLICADA"
+    datos = _datos_m4(conn)
+    if anterior_a_m4 and fase == "SELECCIONADA":
+        assert datos == {
+            "m3_cortes": [],
+            "m3_lanzamientos_tardios": [],
+            "m3_observaciones": [],
+        }
+    else:
+        assert [f[1] for f in datos["m3_cortes"]] == [t_star]
+        reservados = evaluation.fitting.reserve.reserved_days
+        assert len(datos["m3_observaciones"]) == reservados
+        assert (
+            conn.execute(
+                "SELECT sku, fecha FROM m3_pronosticos EXCEPT "
+                "SELECT sku, fecha FROM m3_observaciones"
+            ).fetchall()
+            == []
+        )
+    # Releer la corrida publicada no cambia nada.
+    pipeline.validate(evaluation)
+    assert _datos_m4(conn) == datos
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
