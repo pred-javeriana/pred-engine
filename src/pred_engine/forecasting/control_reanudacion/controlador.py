@@ -155,8 +155,8 @@ class ControladorEvaluacion:
         if ingesta.parquet_sha256 is None:
             raise ValueError(
                 "la ingestion no declara parquet_sha256: use Pipeline.ingest o "
-                "run_verify_parquet_with_sha256 para conservar la huella de los "
-                "bytes leidos"
+                "ingestion_artifact_from_publication para conservar la huella de "
+                "los bytes leidos"
             )
         ingesta_ref_m1 = ingesta.parquet_sha256
         configuracion = self._configuracion_efectiva(evaluation)

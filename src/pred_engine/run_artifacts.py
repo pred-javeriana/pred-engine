@@ -29,7 +29,6 @@ from pred_engine.comun.modelos.manifiesto_candidatos import (
     MODELO_POR_FAMILIA,
     ContextoParticion,
 )
-from pred_engine.comun.reserva import ReserveCut
 from pred_engine.optimizacion.control_reanudacion.almacenamiento import (
     escribir_atomico,
 )
@@ -261,14 +260,23 @@ def write_run(
     ingestion = result.ingestion
     if ingestion is not None and ingestion.topology:
         # La topologia es de L1: se guarda aunque L2 o L3 hayan fallado.
-        corte = ReserveCut.of(ingestion.panel)
+        # El corte viaja con el artefacto; la ruta nunca se relee.
+        corte = ingestion.reserve
+        if corte is None and fitting is not None:
+            corte = fitting.reserve
+        excl_count = (
+            len(ingestion.exclusions)
+            if ingestion.exclusions
+            else (len(fitting.exclusions) if fitting is not None else 0)
+        )
         archivos["topologia"] = destino / "topologia.json"
         _escribir_json(
             {
                 "schema": TOPOLOGY_SCHEMA,
                 "source_sha256": ingestion.source_sha256,
-                "t_star": corte.t_star.date().isoformat(),
-                "reserved_days": corte.reserved_days,
+                "t_star": (None if corte is None else corte.t_star.date().isoformat()),
+                "reserved_days": None if corte is None else corte.reserved_days,
+                "excluded_count": excl_count,
                 "thresholds": {"adi": ADI_THRESHOLD, "cv2": CV2_THRESHOLD},
                 "metrics": [m.model_dump() for m in ingestion.topology],
             },
