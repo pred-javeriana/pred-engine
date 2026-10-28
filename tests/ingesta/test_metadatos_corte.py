@@ -14,10 +14,11 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -275,11 +276,29 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
     assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz_a)]) == 0
     parquet_a = raiz_a / "processed" / "panel.parquet"
     base_a = crear_base_plataforma(tmp_path / "db_a.sqlite")
+    opciones = [
+        "--families",
+        "ml",
+        "--trials",
+        "1",
+        "--workers",
+        "1",
+        "--min-train",
+        "40",
+        "--horizon",
+        "2",
+        "--step",
+        "7",
+        "--seed",
+        "17",
+        "--telemetry-interval",
+        "0",
+    ]
     assert (
         cli.main(
             [
                 "run",
-                "--no-foundation",
+                *opciones,
                 "--parquet",
                 str(parquet_a),
                 "--db-path",
@@ -298,7 +317,7 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
         cli.main(
             [
                 "run",
-                "--no-foundation",
+                *opciones,
                 "--csv",
                 str(csv),
                 "--db-path",
@@ -332,6 +351,37 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
     )
     assert topologia_a["t_star"] == topologia_b["t_star"]
     assert topologia_a["excluded_count"] == topologia_b["excluded_count"]
+    for topologia in (topologia_a, topologia_b):
+        assert {m["sku_id"]: m["n_periods"] for m in topologia["metrics"]} == {
+            "SKU-ADMITIDO": 80
+        }
+
+    (directorio_a,) = (raiz_a / "runs").iterdir()
+    (directorio_b,) = (raiz_b / "runs").iterdir()
+    for nombre in ("pronosticos.parquet", "walk_forward.parquet"):
+        resultados_a = pd.read_parquet(directorio_a / nombre)
+        resultados_b = pd.read_parquet(directorio_b / nombre)
+        assert not resultados_a.empty
+        pd.testing.assert_frame_equal(resultados_a, resultados_b, check_exact=True)
+
+    with (
+        closing(sqlite3.connect(base_a)) as conn_a,
+        closing(sqlite3.connect(base_b)) as conn_b,
+    ):
+        for tabla in ("m3_pronosticos", "m3_metricas"):
+            filas_a = pd.read_sql_query(f"SELECT * FROM {tabla}", conn_a).drop(
+                columns="run_id"
+            )
+            filas_b = pd.read_sql_query(f"SELECT * FROM {tabla}", conn_b).drop(
+                columns="run_id"
+            )
+            assert not filas_a.empty
+            columnas = list(filas_a.columns)
+            pd.testing.assert_frame_equal(
+                filas_a.sort_values(columnas, ignore_index=True),
+                filas_b.sort_values(columnas, ignore_index=True),
+                check_exact=True,
+            )
 
 
 def test_producto_tardio_con_fechas_finales_no_altera_corte(tmp_path: Path):
