@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from pred_engine.comun.modelos import PANEL_FIELDS
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import classify_daily_panel
 from pred_engine.ingesta.data import RawWritePermissionError, ensure_data_layout
 from pred_engine.ingesta.salida import (
@@ -33,13 +34,14 @@ def _diario_mini() -> pd.DataFrame:
 def test_publica_parquet_con_cinco_columnas(tmp_path: Path) -> None:
     layout = ensure_data_layout(tmp_path / "data")
     diario = _diario_mini()
-    clasificado = classify_daily_panel(diario).frame
+    clasificado = classify_daily_panel(diario, corte=ReserveCut.of(diario)).frame
     destino = layout.processed / "panel.parquet"
     escrito = publish_classified_panel(
         clasificado,
         destino,
         data_root=layout.root,
         daily_panel=diario,
+        reserve=ReserveCut.of(diario),
     )
     leido = pd.read_parquet(escrito, engine="pyarrow")
     assert list(leido.columns) == list(PANEL_FIELDS)
@@ -51,33 +53,35 @@ def test_publica_parquet_con_cinco_columnas(tmp_path: Path) -> None:
 def test_rechaza_csv_como_destino(tmp_path: Path) -> None:
     layout = ensure_data_layout(tmp_path / "data")
     diario = _diario_mini()
-    clasificado = classify_daily_panel(diario).frame
+    clasificado = classify_daily_panel(diario, corte=ReserveCut.of(diario)).frame
     with pytest.raises(OutputContractError, match="parquet"):
         publish_classified_panel(
             clasificado,
             layout.processed / "panel.csv",
             data_root=layout.root,
             daily_panel=diario,
+            reserve=ReserveCut.of(diario),
         )
 
 
 def test_rechaza_escritura_en_raw(tmp_path: Path) -> None:
     layout = ensure_data_layout(tmp_path / "data")
     diario = _diario_mini()
-    clasificado = classify_daily_panel(diario).frame
+    clasificado = classify_daily_panel(diario, corte=ReserveCut.of(diario)).frame
     with pytest.raises(RawWritePermissionError):
         publish_classified_panel(
             clasificado,
             layout.raw / "panel.parquet",
             data_root=layout.root,
             daily_panel=diario,
+            reserve=ReserveCut.of(diario),
         )
 
 
 def test_no_escribe_si_el_contrato_falla(tmp_path: Path) -> None:
     layout = ensure_data_layout(tmp_path / "data")
     diario = _diario_mini()
-    clasificado = classify_daily_panel(diario).frame.copy()
+    clasificado = classify_daily_panel(diario, corte=ReserveCut.of(diario)).frame.copy()
     clasificado["sku_class"] = pd.Series(["nope"] * len(clasificado), dtype="string")
     destino = layout.processed / "panel.parquet"
     with pytest.raises(OutputContractError):
@@ -86,6 +90,7 @@ def test_no_escribe_si_el_contrato_falla(tmp_path: Path) -> None:
             destino,
             data_root=layout.root,
             daily_panel=diario,
+            reserve=ReserveCut.of(diario),
         )
     assert not destino.exists()
 
@@ -93,7 +98,11 @@ def test_no_escribe_si_el_contrato_falla(tmp_path: Path) -> None:
 def test_no_escribe_si_hay_reorden(tmp_path: Path) -> None:
     layout = ensure_data_layout(tmp_path / "data")
     diario = _diario_mini()
-    clasificado = classify_daily_panel(diario).frame.iloc[::-1].reset_index(drop=True)
+    clasificado = (
+        classify_daily_panel(diario, corte=ReserveCut.of(diario))
+        .frame.iloc[::-1]
+        .reset_index(drop=True)
+    )
     destino = layout.processed / "panel.parquet"
     with pytest.raises(PanelPreservationError):
         publish_classified_panel(
@@ -101,6 +110,7 @@ def test_no_escribe_si_hay_reorden(tmp_path: Path) -> None:
             destino,
             data_root=layout.root,
             daily_panel=diario,
+            reserve=ReserveCut.of(diario),
         )
     assert not destino.exists()
 
@@ -108,13 +118,14 @@ def test_no_escribe_si_hay_reorden(tmp_path: Path) -> None:
 def test_roundtrip_parquet_vuelve_a_validar(tmp_path: Path) -> None:
     layout = ensure_data_layout(tmp_path / "data")
     diario = _diario_mini()
-    clasificado = classify_daily_panel(diario).frame
+    clasificado = classify_daily_panel(diario, corte=ReserveCut.of(diario)).frame
     destino = layout.processed / "panel.parquet"
     publish_classified_panel(
         clasificado,
         destino,
         data_root=layout.root,
         daily_panel=diario,
+        reserve=ReserveCut.of(diario),
     )
     leido = read_classified_parquet(destino)
     assert list(leido.columns) == list(PANEL_FIELDS)
@@ -124,7 +135,7 @@ def test_roundtrip_parquet_vuelve_a_validar(tmp_path: Path) -> None:
 def test_rechaza_publicar_y_releer_sku_class_binaria(tmp_path: Path) -> None:
     layout = ensure_data_layout(tmp_path / "data")
     diario = _diario_mini()
-    clasificado = classify_daily_panel(diario).frame
+    clasificado = classify_daily_panel(diario, corte=ReserveCut.of(diario)).frame
     binario = clasificado.copy()
     binario["sku_class"] = pd.Series(
         [str(clase).encode() for clase in clasificado["sku_class"]], dtype=object
@@ -135,6 +146,7 @@ def test_rechaza_publicar_y_releer_sku_class_binaria(tmp_path: Path) -> None:
             layout.processed / "binario.parquet",
             data_root=layout.root,
             daily_panel=diario,
+            reserve=ReserveCut.of(diario),
         )
 
     externo = tmp_path / "externo.parquet"
@@ -147,5 +159,6 @@ def test_rechaza_publicar_y_releer_sku_class_binaria(tmp_path: Path) -> None:
         layout.processed / "texto.parquet",
         data_root=layout.root,
         daily_panel=diario,
+        reserve=ReserveCut.of(diario),
     )
     assert read_classified_parquet(texto)["sku_class"].tolist() == ["intermittent"] * 4

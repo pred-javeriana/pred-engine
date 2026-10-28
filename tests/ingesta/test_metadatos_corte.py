@@ -14,10 +14,11 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -275,11 +276,29 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
     assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz_a)]) == 0
     parquet_a = raiz_a / "processed" / "panel.parquet"
     base_a = crear_base_plataforma(tmp_path / "db_a.sqlite")
+    opciones = [
+        "--families",
+        "ml",
+        "--trials",
+        "1",
+        "--workers",
+        "1",
+        "--min-train",
+        "40",
+        "--horizon",
+        "2",
+        "--step",
+        "7",
+        "--seed",
+        "17",
+        "--telemetry-interval",
+        "0",
+    ]
     assert (
         cli.main(
             [
                 "run",
-                "--no-foundation",
+                *opciones,
                 "--parquet",
                 str(parquet_a),
                 "--db-path",
@@ -298,7 +317,7 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
         cli.main(
             [
                 "run",
-                "--no-foundation",
+                *opciones,
                 "--csv",
                 str(csv),
                 "--db-path",
@@ -332,6 +351,37 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
     )
     assert topologia_a["t_star"] == topologia_b["t_star"]
     assert topologia_a["excluded_count"] == topologia_b["excluded_count"]
+    for topologia in (topologia_a, topologia_b):
+        assert {m["sku_id"]: m["n_periods"] for m in topologia["metrics"]} == {
+            "SKU-ADMITIDO": 80
+        }
+
+    (directorio_a,) = (raiz_a / "runs").iterdir()
+    (directorio_b,) = (raiz_b / "runs").iterdir()
+    for nombre in ("pronosticos.parquet", "walk_forward.parquet"):
+        resultados_a = pd.read_parquet(directorio_a / nombre)
+        resultados_b = pd.read_parquet(directorio_b / nombre)
+        assert not resultados_a.empty
+        pd.testing.assert_frame_equal(resultados_a, resultados_b, check_exact=True)
+
+    with (
+        closing(sqlite3.connect(base_a)) as conn_a,
+        closing(sqlite3.connect(base_b)) as conn_b,
+    ):
+        for tabla in ("m3_pronosticos", "m3_metricas"):
+            filas_a = pd.read_sql_query(f"SELECT * FROM {tabla}", conn_a).drop(
+                columns="run_id"
+            )
+            filas_b = pd.read_sql_query(f"SELECT * FROM {tabla}", conn_b).drop(
+                columns="run_id"
+            )
+            assert not filas_a.empty
+            columnas = list(filas_a.columns)
+            pd.testing.assert_frame_equal(
+                filas_a.sort_values(columnas, ignore_index=True),
+                filas_b.sort_values(columnas, ignore_index=True),
+                check_exact=True,
+            )
 
 
 def test_producto_tardio_con_fechas_finales_no_altera_corte(tmp_path: Path):
@@ -761,7 +811,7 @@ def test_s1_fit_rechaza_artefacto_sin_corte_y_no_relee_la_ruta(tmp_path: Path) -
         assert candidato.series.tolist() == _demanda(filas_a, sku_id, meta_a.t_star)
 
 
-@pytest.mark.parametrize("fraccion", [float("nan"), 7.5, -1.0])
+@pytest.mark.parametrize("fraccion", [float("nan"), float("inf"), 7.5, -1.0, 0.0, 1.0])
 def test_verify_rechaza_fraccion_fuera_de_rango(
     tmp_path: Path, fraccion: float
 ) -> None:
@@ -805,3 +855,149 @@ def test_verify_rechaza_fraccion_fuera_de_rango(
     assert proceso.returncode == 6
     assert "re-import from the CSV" in proceso.stderr
     assert "contrato_1_4: accepted" not in proceso.stdout
+
+
+def _corrida(raiz: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    (corrida,) = (raiz / "runs").glob("*/corrida.json")
+    topologia = corrida.parent / "topologia.json"
+    return (
+        json.loads(corrida.read_text("utf-8"))["summary"],
+        json.loads(topologia.read_text("utf-8")),
+    )
+
+
+def _correr(tmp_path: Path, raiz: Path, *fuente: str) -> int:
+    base = crear_base_plataforma(tmp_path / f"{raiz.name}.sqlite")
+    return cli.main(
+        [
+            "run",
+            *fuente,
+            "--db-path",
+            str(base),
+            "--data-root",
+            str(raiz),
+            "--families",
+            "ml",
+            "--trials",
+            "1",
+            "--workers",
+            "1",
+            "--min-train",
+            "40",
+            "--horizon",
+            "2",
+            "--step",
+            "7",
+            "--seed",
+            "17",
+            "--telemetry-interval",
+            "0",
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("tardio", "esperado"), [(True, 2), (False, 1)], ids=["mixto", "control"]
+)
+def test_s3_topologia_cuenta_las_mismas_exclusiones_que_el_resumen(
+    tmp_path: Path, tardio: bool, esperado: int
+) -> None:
+    """topologia.json y corrida.json declaran el mismo excluded_count."""
+    filas = []
+    for i, fecha in enumerate(pd.date_range("2024-01-01", periods=100)):
+        filas.append(
+            {
+                "sku_id": "SKU-ADMITIDO",
+                "timestamp": fecha,
+                "demand_qty": 20.0 + 0.5 * (i % 20),
+                "lead_time_days": 3,
+            }
+        )
+        if tardio:
+            filas.append(
+                {
+                    "sku_id": "SKU-TARDIO",
+                    "timestamp": fecha,
+                    "demand_qty": 0.0 if i < 80 else 15.0,
+                    "lead_time_days": 3,
+                }
+            )
+        if i < 30:
+            # Termina antes de t*: L1 lo conserva y L2 lo excluye.
+            filas.append(
+                {
+                    "sku_id": "SKU-CORTO",
+                    "timestamp": fecha,
+                    "demand_qty": 9.0,
+                    "lead_time_days": 3,
+                }
+            )
+    csv = tmp_path / "mixto.csv"
+    pd.DataFrame(filas).to_csv(csv, index=False)
+
+    raiz = tmp_path / "data"
+    assert _correr(tmp_path, raiz, "--csv", str(csv)) == 0
+    resumen, topologia = _corrida(raiz)
+
+    assert resumen["excluded_count"] == esperado
+    assert topologia["excluded_count"] == resumen["excluded_count"]
+    assert topologia["t_star"] == resumen["reserve"]["t_star"] == "2024-03-20"
+
+
+@pytest.mark.parametrize("fuente", ["csv", "parquet"])
+def test_s4_resumen_de_l2_fallida_conserva_su_reserva(
+    tmp_path: Path, fuente: str
+) -> None:
+    """Una corrida que falla en L2 guarda el corte que L1 ya conocia."""
+    filas = []
+    for i, fecha in enumerate(pd.date_range("2024-01-01", periods=35)):
+        filas.append(
+            {
+                "sku_id": "SKU-CORTO",
+                "timestamp": fecha,
+                "demand_qty": 10.0 + i % 4,
+                "lead_time_days": 3,
+            }
+        )
+        filas.append(
+            {
+                "sku_id": "SKU-TARDIO",
+                "timestamp": fecha,
+                "demand_qty": 0.0 if i < 28 else 6.0,
+                "lead_time_days": 3,
+            }
+        )
+    csv = tmp_path / "corto.csv"
+    pd.DataFrame(filas).to_csv(csv, index=False)
+    raiz = tmp_path / "data"
+    if fuente == "parquet":
+        assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+        entrada = ["--parquet", str(raiz / "processed" / "corto.parquet")]
+    else:
+        entrada = ["--csv", str(csv)]
+
+    assert _correr(tmp_path, raiz, *entrada) == 1
+    resumen, topologia = _corrida(raiz)
+
+    assert resumen["complete"] is False
+    assert [e["state"] for e in resumen["stages"]] == [
+        "completed",
+        "failed",
+        "pending",
+        "pending",
+    ]
+    assert resumen["reserve"] == {
+        "fraction": 0.2,
+        "t_star": "2024-01-28",
+        "first_reserved": "2024-01-29",
+        "last_observed": "2024-02-04",
+        "reserved_days": 7,
+    }
+    assert resumen["exclusions"] == [
+        {
+            "sku_id": "SKU-TARDIO",
+            "cause": "lanzado despues del corte",
+            "code": None,
+        }
+    ]
+    assert topologia["t_star"] == resumen["reserve"]["t_star"]

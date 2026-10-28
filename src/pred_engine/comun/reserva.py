@@ -1,9 +1,10 @@
 """Corte cronologico de la reserva para M3 (ADR-03-003, 3.1).
 
-M1 clasifica cada SKU solo con la historia anterior al corte (ADR-019) y M2
-optimiza y ajusta con esa misma historia; los dias reservados quedan para la
-evaluacion de M3. Ambos modulos derivan el corte del calendario del panel con
-esta misma funcion, asi que coinciden sin intercambiar estado.
+La importacion calcula t* una sola vez con esta funcion sobre el calendario
+completo del CSV y guarda el corte, la reserva y las exclusiones en los
+metadatos pred_engine del Parquet. M1 clasifica hasta ese corte (ADR-019),
+M2 lo consume para optimizar y ajustar, y M3 evalua la reserva. Los consumidores
+no vuelven a derivar t* del panel publicado, que puede haber perdido productos.
 """
 
 from __future__ import annotations

@@ -81,15 +81,28 @@ def deserializar_metadatos(datos_bytes: bytes) -> ParquetMetadata:
             and isinstance(last_observed, pd.Timestamp)
         ):
             raise ValueError("fechas invalidas en metadatos")
+        fraction = payload["fraction"]
+        if isinstance(fraction, bool) or not isinstance(fraction, int | float):
+            raise ValueError("fraction debe ser numerica")
+        exclusions = payload["exclusions"]
+        if not isinstance(exclusions, list):
+            raise ValueError("exclusions debe ser una lista")
+        for item in exclusions:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item["sku_id"], str)
+                or not isinstance(item["cause"], str)
+            ):
+                raise ValueError("exclusion invalida")
         return ParquetMetadata(
             t_star=t_star.normalize(),
             first_reserved=first_reserved.normalize(),
             last_observed=last_observed.normalize(),
             reserved_days=int(payload["reserved_days"]),
-            fraction=validar_fraccion(float(payload.get("fraction", RESERVE_FRACTION))),
+            fraction=validar_fraccion(float(fraction)),
             exclusions=tuple(
-                SkuExclusion(sku_id=str(item["sku_id"]), cause=str(item["cause"]))
-                for item in payload.get("exclusions", [])
+                SkuExclusion(sku_id=item["sku_id"], cause=item["cause"])
+                for item in exclusions
             ),
         )
     except Exception as exc:

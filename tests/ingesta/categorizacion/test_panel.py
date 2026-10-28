@@ -8,12 +8,15 @@ import pandas as pd
 import pytest
 
 from pred_engine.comun.modelos import PANEL_FIELDS
+from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import (
     TopologyContractError,
     TopologyMathError,
     classify_daily_panel,
     classify_panel,
 )
+from pred_engine.ingesta.salida import evaluar_precondiciones_y_exclusiones
+from pred_engine.ingesta.salida.errores import HandoffPreconditionError
 
 
 def _panel_cuatro_clases() -> pd.DataFrame:
@@ -59,7 +62,7 @@ def _panel_cuatro_clases() -> pd.DataFrame:
 def test_cuatro_cuadrantes_y_etiqueta_constante() -> None:
     origen = _panel_cuatro_clases()
     copia = origen.copy()
-    artefacto = classify_panel(origen)
+    artefacto = classify_panel(origen, corte=ReserveCut.of(origen))
     assert origen.equals(copia)
     assert list(artefacto.frame.columns) == list(PANEL_FIELDS)
     por_sku = artefacto.frame.groupby("sku_id")["sku_class"].nunique().to_dict()
@@ -85,13 +88,13 @@ def test_cuatro_cuadrantes_y_etiqueta_constante() -> None:
 
 def test_panel_vacio_lanza() -> None:
     with pytest.raises(TopologyContractError):
-        classify_panel(pd.DataFrame())
+        classify_panel(pd.DataFrame(), corte=ReserveCut.of(_panel_cuatro_clases()))
 
 
 def test_classify_daily_panel_es_el_clasificador_real() -> None:
     origen = _panel_cuatro_clases()
-    a = classify_panel(origen)
-    b = classify_daily_panel(origen)
+    a = classify_panel(origen, corte=ReserveCut.of(origen))
+    b = classify_daily_panel(origen, corte=ReserveCut.of(origen))
     assert a.frame.equals(b.frame)
     assert [m.sku_class for m in a.metrics] == [m.sku_class for m in b.metrics]
 
@@ -113,7 +116,7 @@ def test_la_clase_se_calcula_sin_los_dias_reservados() -> None:
     # 10 dias: los 2 ultimos son la reserva. Antes de t* el SKU es intermitente
     # (ADI=4, CV2=0); con la reserva el CV2 lo volveria lumpy.
     panel = _sku("R", [5.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 500.0, 1.0])
-    artefacto = classify_panel(panel)
+    artefacto = classify_panel(panel, corte=ReserveCut.of(panel))
 
     assert set(artefacto.frame["sku_class"]) == {"intermittent"}
     (metrica,) = artefacto.metrics
@@ -122,12 +125,15 @@ def test_la_clase_se_calcula_sin_los_dias_reservados() -> None:
 
     otra_reserva = panel.copy()
     otra_reserva.loc[8:, "demand_qty"] *= 50
-    assert classify_panel(otra_reserva).metrics == artefacto.metrics
+    assert (
+        classify_panel(otra_reserva, corte=artefacto.reserve).metrics
+        == artefacto.metrics
+    )
 
 
 def test_un_panel_sin_historia_admisible_se_rechaza() -> None:
-    with pytest.raises(TopologyContractError, match="historia admisible"):
-        classify_panel(_sku("U", [5.0]))
+    with pytest.raises(HandoffPreconditionError, match="historia admisible"):
+        evaluar_precondiciones_y_exclusiones(_sku("U", [5.0]))
 
 
 def test_un_sku_sin_demanda_antes_de_t_estrella_se_rechaza() -> None:
@@ -136,11 +142,14 @@ def test_un_sku_sin_demanda_antes_de_t_estrella_se_rechaza() -> None:
         ignore_index=True,
     )
     with pytest.raises(TopologyMathError, match="SKU B"):
-        classify_panel(panel)
+        classify_panel(panel, corte=ReserveCut.of(panel))
 
 
 def test_filas_de_skus_intercaladas_dan_las_mismas_metricas() -> None:
     ordenado = _panel_cuatro_clases()
     intercalado = ordenado.sort_values(["timestamp", "sku_id"], ignore_index=True)
 
-    assert classify_panel(intercalado).metrics == classify_panel(ordenado).metrics
+    assert (
+        classify_panel(intercalado, corte=ReserveCut.of(ordenado)).metrics
+        == classify_panel(ordenado, corte=ReserveCut.of(ordenado)).metrics
+    )
