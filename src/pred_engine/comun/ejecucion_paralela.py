@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import sys
 import threading
 import time
 from collections import deque
@@ -153,8 +154,38 @@ def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat()
 
 
+# Byte que serializa las escrituras en Windows; ningun lector llega tan lejos.
+_REGION_BLOQUEO = 1 << 40
+
+
+def _anexar(ruta: str | Path, datos: bytes) -> None:
+    """Agrega ``datos`` al final de ``ruta`` sin intercalarse con otro proceso.
+
+    En POSIX una sola escritura ``O_APPEND`` ya es atomica. En Windows el CRT
+    emula ``O_APPEND`` moviendose al final y luego escribiendo, de modo que dos
+    procesos pueden pisar la linea del otro; ahi las escrituras se serializan con
+    un bloqueo sobre un byte que ningun lector toca.
+    """
+    descriptor = os.open(os.fspath(ruta), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            os.lseek(descriptor, _REGION_BLOQUEO, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+            try:
+                os.write(descriptor, datos)
+            finally:
+                os.lseek(descriptor, _REGION_BLOQUEO, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:
+            os.write(descriptor, datos)
+    finally:
+        os.close(descriptor)
+
+
 def emitir_evento(ruta: str | Path, evento: str, /, **datos: Any) -> None:
-    """Agrega una linea JSON a ``ruta`` con una sola escritura ``O_APPEND``.
+    """Agrega una linea JSON completa a ``ruta`` (ver ``_anexar``).
 
     El progreso es observabilidad: un fallo al escribirlo se registra y nunca
     interrumpe el trabajo.
@@ -162,13 +193,7 @@ def emitir_evento(ruta: str | Path, evento: str, /, **datos: Any) -> None:
     registro = {"event": evento, "t": _iso(time.time()), **datos}
     try:
         linea = json.dumps(registro, ensure_ascii=False, default=str) + "\n"
-        descriptor = os.open(
-            os.fspath(ruta), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644
-        )
-        try:
-            os.write(descriptor, linea.encode("utf-8"))
-        finally:
-            os.close(descriptor)
+        _anexar(ruta, linea.encode("utf-8"))
     except OSError as exc:
         _logger.warning("No se pudo escribir el evento de progreso %s: %s", evento, exc)
 
