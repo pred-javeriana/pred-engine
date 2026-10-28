@@ -118,6 +118,10 @@ class LightGBMForecaster(BaseForecaster):
         }
 
     def fit(self, y: np.ndarray) -> LightGBMForecaster:
+        # Un refit fallido nunca deja utilizable el modelo de un prefijo anterior.
+        self._fitted = False
+        self._modelo = None
+        self._historia = None
         serie = self._validar_serie_1d(y)
         if not np.all(np.isfinite(serie)):
             raise ValueError("y contiene valores no finitos")

@@ -1,4 +1,4 @@
-"""Configuracion congelada del modelo fundacional .
+"""Configuracion congelada del modelo fundacional.
 
 La familia fundacional NO se optimiza: no hay espacio de busqueda, HPO ni
 fine-tuning. Esta es su unica configuracion, identica para todo SKU y todo

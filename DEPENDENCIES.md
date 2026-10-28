@@ -27,7 +27,7 @@ necesita `--no-foundation`. CI no lo instala y su corrida de humo pasa
 
 | Package | Version constraint | Purpose |
 |---------|-------------------|---------|
-| chronos-forecasting | ==2.3.2 | `Chronos2Pipeline` zero-shot (`comun.modelos.modelos_fundacionales`) — ver ADR-015. Debe coincidir con `CHRONOS2_ZERO_SHOT.version_libreria` |
+| chronos-forecasting | ==2.3.2 | `Chronos2Pipeline` zero-shot (`comun.modelos.modelos_fundacionales`) — contrato en `docs/features/3.Evaluacion/3.2-adaptador-candidatos/README.md`, configuracion en `modelos_fundacionales/configuracion.py`. Debe coincidir con `CHRONOS2_ZERO_SHOT.version_libreria` |
 | torch | >=2.2,<3 | Backend de inferencia de Chronos-2 (CPU, fp32, algoritmos deterministas) |
 
 Pesos: `amazon/chronos-2` (Apache-2.0) en la revision fijada por
