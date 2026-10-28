@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import replace
 
 import pandas as pd
 import pyarrow as pa
@@ -16,12 +17,12 @@ from tests.forecasting.test_tercera_revision_m3 import fuente
 from pred_engine.cli import main
 from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
 from pred_engine.forecasting.persistencia_evidencia import abrir_base_plataforma
-from pred_engine.ingesta.pipeline import run_verify_parquet
+from pred_engine.ingesta.salida import read_classified_publication
 from pred_engine.pipeline import (
     EvaluationSettings,
-    IngestionArtifact,
     PipelineExecutionError,
     PipelineInput,
+    ingestion_artifact_from_publication,
 )
 from pred_engine.pipeline_setup import build_pipeline
 
@@ -72,7 +73,12 @@ def test_artefacto_sin_huella_no_hereda_la_huella_del_archivo_restaurado(tmp_pat
     panel["demand_qty"] = panel["demand_qty"] * 2 + 1
     pq.write_table(pa.Table.from_pandas(panel).replace_schema_metadata(meta), parquet)
     # Construccion manual del artefacto: no lleva la huella de los bytes leidos.
-    ingestion = IngestionArtifact(parquet, run_verify_parquet(parquet))
+    ingestion = replace(
+        ingestion_artifact_from_publication(
+            parquet, read_classified_publication(parquet)
+        ),
+        parquet_sha256=None,
+    )
     parquet.write_bytes(original)
     with biblioteca(root, db, "manual", "prueba") as p:
         evaluation = p.evaluate(p.fit(ingestion))
