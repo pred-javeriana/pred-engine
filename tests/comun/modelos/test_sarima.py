@@ -216,13 +216,29 @@ def test_una_serie_no_finita_se_rechaza(y):
         modelo.predict(3)
 
 
-@pytest.mark.parametrize("y", [np.array([]), np.ones((10, 6)), np.full(60, np.nan)])
+@pytest.mark.parametrize(
+    "y", [np.array(["invalido"]), np.ones((10, 6)), np.full(60, np.nan)]
+)
 def test_un_reajuste_con_entrada_invalida_invalida_el_modelo_anterior(y):
+    # Cada entrada falla en la conversion o la validacion, antes de SARIMAX.
     modelo = SarimaForecaster(
         order=(1, 0, 0), seasonal_order=(0, 0, 0, 0), tendencia="c"
     ).fit(_serie_ar1())
     assert np.all(np.isfinite(modelo.predict(3)))
-    with pytest.raises((ValueError, AjusteModeloError)):
+    with pytest.raises(ValueError):
         modelo.fit(y)
+    with pytest.raises(RuntimeError, match="fit"):
+        modelo.predict(3)
+
+
+def test_un_reajuste_con_serie_vacia_invalida_el_modelo_anterior():
+    modelo = SarimaForecaster(
+        order=(1, 0, 0), seasonal_order=(0, 0, 0, 0), tendencia="c"
+    ).fit(_serie_ar1())
+    assert np.all(np.isfinite(modelo.predict(3)))
+    # Control: main ya invalidaba aqui, porque SARIMAX rechaza la serie vacia
+    # despues de limpiar el ajuste.
+    with pytest.raises(ValueError):
+        modelo.fit(np.array([]))
     with pytest.raises(RuntimeError, match="fit"):
         modelo.predict(3)
