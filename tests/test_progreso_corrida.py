@@ -7,11 +7,13 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from pred_engine.cli import main
 from tests._plataforma import crear_base_plataforma
+from tests._series import serie_ar_estacional
 
 _ARGS = [
     "--trials", "1", "--min-train", "40", "--horizon", "2", "--step", "14",
@@ -22,6 +24,7 @@ _ARGS = [
 def _csv(raiz: Path, *, corto: bool = False) -> Path:
     """Dos SKU; con ``corto``, sku-b tiene 30 dias, termina antes de t* y se excluye."""
     n = 120
+    demanda = np.round(serie_ar_estacional(n), 2)
     filas = []
     for sku, largo in (("sku-a", n), ("sku-b", 30 if corto else n)):
         for i in range(largo):
@@ -29,7 +32,7 @@ def _csv(raiz: Path, *, corto: bool = False) -> Path:
                 {
                     "sku_id": sku,
                     "timestamp": pd.Timestamp("2024-01-01") + pd.Timedelta(days=i),
-                    "demand_qty": 20 + 0.35 * i + (i % 5 - 2),
+                    "demand_qty": demanda[i],
                     "lead_time_days": 3,
                 }
             )

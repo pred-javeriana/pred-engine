@@ -1,9 +1,10 @@
 """Chronos-2 real en CPU: determinismo y pesos congelados.
 
-Requiere el extra `foundation` y los pesos (se descargan una vez a la cache de
-Hugging Face). Reproducible con:
+Requiere el extra `foundation` y los pesos en la cache de Hugging Face. Las
+pruebas corren sin red (`tests/conftest.py`): sin los pesos fallan, no los
+descargan. Prepare los pesos como indica el README ("Running tests") y corra:
 
-    uv sync --extra dev --extra foundation
+    uv sync --frozen --extra dev --extra foundation
     uv run pytest tests/comun/modelos/test_chronos2_real.py -m slow -q
 """
 

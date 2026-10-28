@@ -18,8 +18,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Familia fundacional (Chronos-2, ADR-015). Opcional: arrastra torch y CI no
-# la instala; la version de chronos-forecasting coincide con CHRONOS2_ZERO_SHOT.
+# Familia fundacional (Chronos-2 zero-shot, configuracion congelada en
+# CHRONOS2_ZERO_SHOT, comun/modelos/modelos_fundacionales/configuracion.py).
+# Opcional: arrastra torch y CI no la instala; la version de
+# chronos-forecasting coincide con CHRONOS2_ZERO_SHOT.
 foundation = [
     "chronos-forecasting==2.3.2",
     "torch>=2.2,<3",
@@ -54,7 +56,6 @@ markers = [
 [tool.coverage.run]
 source = ["src/pred_engine"]
 omit = [
-    "src/pred_engine/analisis/*",
     "src/pred_engine/optimizacion/optimizadores/*",
     "src/pred_engine/config/*",
     "src/pred_engine/ingesta/validador_tipo_archivo/*",

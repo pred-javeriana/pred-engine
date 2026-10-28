@@ -265,6 +265,7 @@ def test_politica_invalida_no_migra_ni_genera_m0(tmp_path, capsys):
                 str(db),
                 "--dm-min-origins",
                 "1",
+                "--no-foundation",
             ]
         )
         == 1

@@ -132,7 +132,7 @@ jobs:
           code=0
           uv run --no-sync pred-engine run \
             --seed-csv tests/fixtures/semilla_inventario.csv \
-            --data-root data --db-path data/pred.db --run-id ci --workers 2 \
+            --data-root data --db-path data/pred.db --run-id ci --workers 2 --no-foundation \
             --m0-metodo mbb-directo --m0-n-series 1 --m0-minimo-filas 0 \
             --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
             --m0-columna demand_qty=Avg_Usage_Per_Day \

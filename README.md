@@ -22,8 +22,16 @@ MIT licence to allow institutional publication.
 
 ```bash
 # Requires uv — https://docs.astral.sh/uv/
-uv sync --frozen --extra dev
+uv sync --frozen --extra dev --extra foundation
 ```
+
+`pred-engine run` corre las cuatro familias, incluida `foundation`
+(Chronos-2), así que la instalación incluye el extra `foundation` (torch y
+chronos-forecasting). La primera corrida descarga los pesos de Chronos-2 en la
+revisión fijada a la caché de Hugging Face (`~/.cache/huggingface`, o
+`HF_HOME`). Las corridas siguientes leen los pesos de esa caché, también sin
+red con `HF_HUB_OFFLINE=1`. En un equipo sin espacio o memoria para Chronos-2,
+instale sin `--extra foundation` y pase `--no-foundation` a `pred-engine run`.
 
 ## Running tests
 
@@ -31,6 +39,15 @@ uv sync --frozen --extra dev
 uv run pytest                  # runs the suite with an 80% coverage gate
 uv run pytest -m "not slow"    # fast suite with coverage gate (CI mode)
 uv run pytest -m slow --no-cov # slow tests (benchmarks / model fitting)
+```
+
+Las pruebas nunca descargan pesos: `tests/conftest.py` fija `HF_HUB_OFFLINE=1`.
+Con el extra `foundation`, las pruebas lentas de Chronos-2 leen los pesos de la
+caché de Hugging Face y fallan con `no se pudo cargar amazon/chronos-2@...` si
+no están. Prepárelos una vez antes de correrlas:
+
+```bash
+uv run python -c "from pred_engine.comun.modelos.modelos_fundacionales import CHRONOS2_ZERO_SHOT, cargar_pipeline; cargar_pipeline(CHRONOS2_ZERO_SHOT)"
 ```
 
 ### Equipos con pocos núcleos (4 núcleos, 8 GB)
@@ -48,25 +65,24 @@ unos 2 núcleos y `pytest -m slow` unos 2. Para no saturar el equipo:
    uv run pytest -m "not slow" --no-cov tests/optimizacion/HPO
    ```
 
-3. Antes de abrir el PR, corra la corrida de humo de CI (8 SKU, unos 35 s y
-   menos de 3 núcleos). Necesita una copia de `pred-platform` para crear la
-   base central:
+3. Antes de pedir revisión, corra la verificación local del motor y publique
+   su recibo en el PR. Elige la muestra según las rutas que cambió la rama
+   (de nada para docs hasta 22 productos reales, unos 33 min) y usa
+   `--workers 2`. Necesita una copia de `pred-platform` en `../pred-platform`:
 
    ```bash
-   PYTHONPATH=../pred-platform/src uv run --no-sync python -m pred_platform.dal.migrate \
-     --db local_data/humo/pred.db
-   uv run pred-engine run --seed-csv tests/fixtures/semilla_inventario.csv \
-     --data-root local_data/humo --db-path local_data/humo/pred.db --run-id "humo-$(date +%Y%m%d-%H%M%S)" --workers 2 \
-     --m0-metodo mbb-directo --m0-n-series 1 --m0-minimo-filas 0 \
-     --m0-columna sku_id=Item_ID --m0-columna timestamp=Date \
-     --m0-columna demand_qty=Avg_Usage_Per_Day --m0-columna lead_time_days=Restock_Lead_Time
+   make motor-local ARGS=--publicar
    ```
 
-   El código de salida esperado es `0` u `8`. Use un `--run-id` nuevo en cada corrida: el motor rechaza un `run_id` ya usado si el código o la configuración cambiaron, y termina con código 1 sin ajustar modelos. Pase siempre `--workers 2` en un
-   equipo pequeño: el valor por defecto (núcleos - 1) ocupa todos los núcleos.
+   Ver [verificación local del motor](docs/features/motor-local/README.md).
+   Si corre `pred-engine run` a mano, use un `--run-id` nuevo en cada corrida:
+   el motor rechaza un `run_id` ya usado si el código o la configuración
+   cambiaron, y termina con código 1 sin ajustar modelos. Pase siempre
+   `--workers 2` en un equipo pequeño: el valor por defecto (núcleos - 1)
+   ocupa todos los núcleos.
 
-CI corre las suites completas en cada PR, así que no hace falta repetirlas
-localmente.
+CI corre las suites completas y la corrida de humo en cada PR, así que no
+hace falta repetirlas localmente.
 
 ## Linting, formatting and type checking
 
@@ -88,8 +104,9 @@ uv run pre-commit run --all-files  # run manually
 
 `pred_engine.pipeline.Pipeline` owns the four-stage transition path. Existing
 stage APIs remain independently callable. The default composition routes the
-core classical, ML and DL families using the existing topology matrix;
-foundation is opt-in and requires the `foundation` extra.
+classical, ML, DL and foundation families using the existing topology matrix;
+foundation requires the `foundation` extra and the Chronos-2 weights. Pass
+`families` without `"foundation"` to compose only the other three.
 
 ```python
 from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion

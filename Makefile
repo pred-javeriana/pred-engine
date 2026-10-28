@@ -1,4 +1,4 @@
-.PHONY: test test-cov lint format pyright
+.PHONY: test test-cov lint format pyright motor-local
 
 test:
 	uv run pytest -q
@@ -16,3 +16,8 @@ format:
 
 pyright:
 	uv run pyright
+
+# Verificacion local del motor antes de pedir revision; ver docs/features/motor-local/README.md.
+# Ejemplo: make motor-local ARGS="--publicar"
+motor-local:
+	uv run python .github/scripts/motor_local.py $(ARGS)

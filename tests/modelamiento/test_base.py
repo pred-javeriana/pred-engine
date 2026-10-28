@@ -29,13 +29,43 @@ class TestSeasonalNaiveStubFit:
 
     def test_rejects_2d_array(self):
         m = SeasonalNaiveStub(season_length=7)
-        with pytest.raises(ValueError, match="1-D"):
+        with pytest.raises(ValueError, match="1D"):
             m.fit(np.ones((3, 3)))
 
     def test_rejects_too_short_series(self):
         m = SeasonalNaiveStub(season_length=7)
         with pytest.raises(ValueError, match="at least"):
             m.fit(np.ones(3))
+
+    @pytest.mark.parametrize(
+        "y",
+        [
+            np.array([1.0, np.nan] * 7),
+            np.array([1.0, np.inf] * 7),
+            np.full(56, np.nan),
+        ],
+    )
+    def test_rejects_non_finite_series(self, y):
+        m = SeasonalNaiveStub(season_length=7)
+        with pytest.raises(ValueError, match="no finitos"):
+            m.fit(y)
+        with pytest.raises(RuntimeError, match="fit"):
+            m.predict(7)
+
+    @pytest.mark.parametrize("y", [np.array([]), np.ones((3, 7)), np.full(14, np.nan)])
+    def test_failed_refit_invalidates_previous_fit(self, y):
+        m = SeasonalNaiveStub(season_length=7).fit(np.arange(1.0, 15.0))
+        np.testing.assert_array_equal(m.predict(7), np.arange(8.0, 15.0))
+        with pytest.raises(ValueError):
+            m.fit(y)
+        with pytest.raises(RuntimeError, match="fit"):
+            m.predict(7)
+
+    def test_later_changes_to_input_do_not_alter_fit(self):
+        y = np.arange(1.0, 15.0)
+        m = SeasonalNaiveStub(season_length=7).fit(y)
+        y[:] = 0.0
+        np.testing.assert_array_equal(m.predict(7), np.arange(8.0, 15.0))
 
     def test_invalid_season_length(self):
         with pytest.raises(ValueError, match="season_length"):

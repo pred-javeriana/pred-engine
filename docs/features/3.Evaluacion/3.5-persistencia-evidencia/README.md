@@ -80,8 +80,10 @@ antes del commit deja una exportación completa no publicada que puede
 reconstruirse desde SQLite al reanudar.
 
 M4 consume solo la vista `evidencia_publicada` y tablas de sus corridas
-PUBLICADA. La plataforma ofrece `read_m3_evidence` para esa lectura y
-`m3_run_status` para progreso y rechazos sin exponer métricas parciales.
+PUBLICADA. En pred-platform, `DataRepository` ofrece esa lectura como
+documentos del contrato de lectura M3 v2 (`get_m3_evidence` y las demás
+lecturas por tabla) y `get_m3_run_status` para progreso y rechazos sin exponer
+métricas parciales.
 CSV es el primer exportable tabular y Parquet conserva los tipos declarados,
 incluso en columnas completamente NULL. Las consultas y exportaciones no
 vuelven a ejecutar modelos ni a seleccionar campeones.
