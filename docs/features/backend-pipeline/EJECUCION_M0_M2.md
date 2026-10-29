@@ -172,34 +172,27 @@ unidades.
 | 1 | Error de entrada, base, identidad, Chronos-2 que no carga o etapa sin resultados. |
 | 7 | Solo para un pipeline de biblioteca sin validador configurado; el CLI requiere base central. |
 
-## Referencia histórica en la máquina de la tesis
+## Corrida de referencia
 
-Las mediciones siguientes corresponden al cierre M0-M2 anterior a la
-integración de M3. No son mediciones de la evaluación reservada actual.
-
-24 núcleos, 30 GB de RAM y `--workers 22`. Semilla Kaggle con `mbb-directo` y
-presupuesto por defecto:
+La corrida de referencia usa la semilla Kaggle con `mbb-directo`, el
+presupuesto por defecto, las cuatro familias por defecto y `--workers` igual
+al número de núcleos menos uno.
 
 - M0: 53 482 filas, 110 SKU (10 de la semilla y 100 sintéticos), ~90 % de días
   sin demanda, igual que la semilla.
 - M1: con la historia hasta t*, 98 SKU `intermittent` y 12 `lumpy`;
   t* = 2025-11-04 y 100 días reservados.
-- M2: 208 unidades de L2 (110 clásicas y 98 ML), 203 completas y 5 clásicas
-  fallidas de forma aislada: 3 sin ningún trial que ajuste en todas las
-  ventanas y 2 con pronóstico final nulo (regla #3). Las 203 unidades de L3
-  completas. Tiempo de pared de 2 min 23 s, concurrencia máxima 22 y
-  aceleración de 20,1 (L2) y 18,2 (L3). Código de salida 8.
-- Ninguna ventana walk-forward supera 1,12 veces el máximo histórico de su
-  SKU hasta t*, ningún pronóstico final lo supera (máximo 0,56 veces) y
-  ninguno es nulo.
-- El adaptador de M3 acepta los 203 candidatos de `candidatos.json` (105
-  SARIMA, 80 de ellos con constante, y 98 LightGBM). Cada candidato
-  reconstruido desde el manifiesto y ajustado con la historia admisible
-  reproduce exactamente el pronóstico de M2.
-- Repetir el comando reconstruye los estudios terminados en menos de 2 s de
-  L2, no reabre los 3 estudios fallidos, no modifica ningún archivo de `hpo/`
-  y escribe los mismos candidatos y el mismo contexto en `candidatos.json`;
-  solo cambia `emitido_en`.
+- M2: cada SKU admitido corre como unidad en las familias que la política de
+  enrutamiento le asigna. Las unidades que fallan lo hacen de forma aislada:
+  quedan en `unidades.jsonl` y en `failures`, y la corrida termina con código
+  de salida 8.
+- El adaptador de M3 acepta los candidatos de `candidatos.json`. Cada
+  candidato reconstruido desde el manifiesto y ajustado con la historia
+  admisible reproduce exactamente el pronóstico de M2.
+- Repetir el comando reconstruye los estudios terminados sin reentrenar, no
+  reabre los estudios fallidos, no modifica ningún archivo de `hpo/` y escribe
+  los mismos candidatos y el mismo contexto en `candidatos.json`; solo cambia
+  `emitido_en`.
 
 ## Límites conocidos
 
@@ -210,9 +203,6 @@ presupuesto por defecto:
   unidad falla, el SKU queda sin candidato: 2 de 110 con la semilla Kaggle
   (`100::syn009` y `105::syn005`). Elegir el siguiente trial elegible cuando
   el ganador falla en L2 es una decisión pendiente (ADR-020).
-- Las corridas de referencia de esta guía se midieron sin la familia
-  `foundation`, antes de que fuera parte de las familias por defecto. Con las
-  cuatro familias cambian los conteos de candidatos y unidades.
 - La corrida actual ejecuta L4/M3 con ventanas reservadas, recuperación y
   publicación en la base central. La interfaz visual M4 no forma parte de
-  esta ruta. Los resultados históricos anteriores no sustituyen esa prueba.
+  esta ruta.
