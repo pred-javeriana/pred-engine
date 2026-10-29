@@ -401,7 +401,7 @@ def test_default_composition_fits_and_evaluates_all_four_families(
     pipeline = build_pipeline(
         EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae"),
         n_trials=1,
-        seed=17,
+        seed=15,
     )
     result = pipeline.run(core_request_at(tmp_path))
     assert [c.selection.family for c in result.fitting.candidates] == [
@@ -452,7 +452,7 @@ def test_real_cli_core_composition_publishes_m3(tmp_path, capsys):
             "--metric",
             "mae",
             "--seed",
-            "17",
+            "15",
             "--workers",
             "2",
             "--no-foundation",

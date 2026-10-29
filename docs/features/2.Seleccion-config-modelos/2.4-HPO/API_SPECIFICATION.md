@@ -1,7 +1,8 @@
 # API — Seleccion 2.4 (HPO: TPE Sampler + ASHA Resource Allocator)
 
-Identificadores en espanol; comentarios y mensajes en espanol. Solo
-`adaptador_optuna.py` importa Optuna (ver docstring del archivo).
+Identificadores en espanol; comentarios y mensajes en espanol. `estudio.py`,
+`asha.py` y `contratos.py` no importan Optuna. Los modulos de integracion son
+`adaptador_optuna.py`, `muestreadores.py` y `benchmarks/comparador_convergencia.py`.
 
 ## Espacio de busqueda (`espacio.py`)
 
@@ -82,8 +83,8 @@ las configuraciones").
 | `EstudioHPO` | `ask()`, `tell(...)`, `trials_finalizados()`, `agregar_trials_historicos(historico, espacio)` |
 | `ProveedorMotivoPoda` | `motivo_de(trial_number) -> str \| None` |
 
-`EstudioHPO.agregar_trials_historicos` es nuevo en esta sesion (warm start,
-ver mas abajo); implementado por `_EstudioOptuna` en `adaptador_optuna.py`.
+`EstudioHPO.agregar_trials_historicos` (warm start, ver mas abajo) lo
+implementa `_EstudioOptuna` en `adaptador_optuna.py`.
 
 ## Warm start (`adaptador_optuna.py`)
 
@@ -99,36 +100,46 @@ Uso end-to-end: `ejecutar_estudio(..., historico_previo=historico)` inyecta
 antes del primer trial (solo si `indice_trial == 0`, es decir, corrida
 nueva o sin controlador -- no se reinyecta al reanudar).
 
-## `ejecutar_estudio` (`estudio.py`) — cambios de esta sesion
+## `ejecutar_estudio` (`estudio.py`)
 
-| Parametro nuevo | Tipo | Default | Efecto |
+| Parametro | Tipo | Default | Efecto |
 | --- | --- | --- | --- |
 | `historico_previo` | `Sequence[InfoTrial] \| None` | `None` | Warm start (ver arriba) |
 
-Cada trial ahora registra `trial.set_user_attr("timestamp", ...)` (ISO-8601
+Cada trial registra `trial.set_user_attr("timestamp", ...)` (ISO-8601
 UTC) ademas de `trial_id`/`familia`/`sku_id`. Se propaga a
 `Trial.timestamp` (`comun/dataclasses/hpo.py`) via `registro.py`.
 
-## `Trial` (`comun/dataclasses/hpo.py`) — campo nuevo
+### Semilla del muestreador
 
-| Campo nuevo | Tipo | Default |
+Si no se pasa `muestreador`, `ejecutar_estudio` construye el TPE con
+`derivar_semilla(seed, f"{familia}/{sku_id or 'panel'}", 0)`. La semilla
+depende de la semilla global de la corrida, de la familia y del SKU (o
+`panel`), para que los estudios no reinicien el mismo flujo de propuestas. Dos
+estudios pueden proponer la misma configuracion por coincidencia. El
+resultado es reproducible. `seed` sigue registrandose sin cambios en la solicitud de la
+corrida.
+
+## `Trial` (`comun/dataclasses/hpo.py`)
+
+| Campo | Tipo | Default |
 | --- | --- | --- |
 | `timestamp` | `str \| None` | `None` |
 
 ## Reanudacion con `TPESampler` — limitacion conocida (ADR-012)
 
 `adaptador_optuna._sincronizar_sampler_aleatorio` solo resincroniza el RNG
-de `RandomSampler` (ver 2.9). Con `TPESampler`, ahora emite
-`_logger.warning(...)` en vez de fallar silenciosamente: las primeras
+de `RandomSampler` (ver 2.9). Con `TPESampler`, emite
+`_logger.warning(...)`: las primeras
 propuestas de una corrida reanudada pueden repetir configuraciones ya
 evaluadas antes de la interrupcion. Los trials previos a la interrupcion
 se preservan intactos; lo que no se garantiza es que los trials *nuevos*
 coincidan con los de una corrida continua (ver
 `test_reanudacion_con_tpe_preserva_los_trials_ya_evaluados`).
 
-## `classical_selection.py` — cableo de reanudacion
+## `classical_selection.py`
 
-| Parametro nuevo | Tipo | Default |
+| Parametro | Tipo | Default |
 | --- | --- | --- |
 | `raiz_corrida` (en `seleccionar_configuracion_clasica`) | `str \| Path \| None` | `None` |
 | `run_id` (en `seleccionar_configuracion_clasica`) | `str \| None` | `None` |
@@ -152,5 +163,5 @@ propiedad `tpe_converge_mejor`.
 ## Logging
 
 `pred_engine.comun.logger.get_logger(__name__)` en `adaptador_optuna.py` y
-`estudio.py`. Eventos nuevos: warm start inyectado (`INFO`), reanudacion con
+`estudio.py`. Eventos: warm start inyectado (`INFO`), reanudacion con
 `TPESampler` (`WARNING`, no bloqueante).

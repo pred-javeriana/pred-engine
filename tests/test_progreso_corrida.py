@@ -17,7 +17,7 @@ from tests._series import serie_ar_estacional
 
 _ARGS = [
     "--trials", "1", "--min-train", "40", "--horizon", "2", "--step", "14",
-    "--metric", "mae", "--seed", "17", "--families", "classical", "--workers", "2",
+    "--metric", "mae", "--seed", "15", "--families", "classical", "--workers", "2",
 ]  # fmt: skip
 
 

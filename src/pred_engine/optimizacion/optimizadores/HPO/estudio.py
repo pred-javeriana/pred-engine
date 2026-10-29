@@ -22,6 +22,7 @@ from pred_engine.comun.dataclasses.hpo import ResultadoEstudio
 from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.walkforward.protocolos import FabricaPronosticador
+from pred_engine.comun.walkforward.semillas import derivar_semilla
 from pred_engine.comun.walkforward.ventanas import generar_ventanas
 from pred_engine.comun.walkforward.walk_forward_greedy import EjecutorGreedy
 from pred_engine.optimizacion.control_reanudacion import (
@@ -137,7 +138,9 @@ def ejecutar_estudio(
     )
     reglas_efectivas = reglas or ReglasPoda()
     decisor = DecisorASHA(reglas_efectivas, n_ventanas_totales=len(ventanas))
-    muestreador_efectivo = muestreador or construir_muestreador_tpe(seed=seed)
+    muestreador_efectivo = muestreador or construir_muestreador_tpe(
+        seed=derivar_semilla(seed, f"{familia}/{sku_id or 'panel'}", 0)
+    )
 
     controlador_efectivo = controlador
     if controlador_efectivo is None and raiz_corrida is not None:

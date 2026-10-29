@@ -16,6 +16,7 @@ from tests._dobles import (
 )
 
 from pred_engine.comun.ensayos_hpo import leer_ensayos
+from pred_engine.comun.walkforward.semillas import derivar_semilla
 from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
     crear_estudio_optuna,
 )
@@ -97,7 +98,9 @@ def test_asha_solo_poda_si_quedan_ventanas_por_evaluar(
 def test_etiqueta_del_motor_preserva_el_muestreo_tpe_y_ambos_lectores(tmp_path):
     reglas = ReglasPoda(min_ventanas=4)
     referencia, _ = crear_estudio_optuna(
-        muestreador=construir_muestreador_tpe(seed=0),
+        muestreador=construir_muestreador_tpe(
+            seed=derivar_semilla(0, "desconocida/panel", 0)
+        ),
         decisor_asha=DecisorASHA(reglas, n_ventanas_totales=4),
     )
     # Recorrido anterior: incluso en la cuarta ventana se conserva PRUNED
@@ -187,6 +190,31 @@ def test_determinismo_extremo_a_extremo():
     assert r1.mejor is not None and r2.mejor is not None
     assert r1.mejor.configuracion == r2.mejor.configuracion
     assert r1.mejor.valor == r2.mejor.valor
+
+
+def test_cada_estudio_siembra_su_tpe_con_su_familia_y_su_sku():
+    y = _serie_objetivo()
+
+    def primera_configuracion(familia: str, sku_id: str | None, seed: int = 0):
+        resultado = ejecutar_estudio(
+            y,
+            _espacio(),
+            fabrica_nivel_constante,
+            n_trials=3,
+            min_train=20,
+            estacionalidad=1,
+            seed=seed,
+            familia=familia,
+            sku_id=sku_id,
+        )
+        return resultado.trials[0].configuracion
+
+    a = primera_configuracion("ets", "sku-1")
+    assert a == primera_configuracion("ets", "sku-1")
+    assert a != primera_configuracion("ets", "sku-2")
+    assert a != primera_configuracion("arima", "sku-1")
+    assert a != primera_configuracion("ets", None)
+    assert a != primera_configuracion("ets", "sku-1", seed=1)
 
 
 def test_mejor_es_none_cuando_todo_falla():
