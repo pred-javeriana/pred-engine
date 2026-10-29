@@ -75,9 +75,9 @@ HPO.
   falla de forma aislada cuando ningún trial ajusta en todas las ventanas o
   cuando el pronóstico final del ganador es degenerado (código de salida 8).
   La guía de ejecución registra cuántas fallan en la corrida de referencia.
-- La política 2.2 enruta los SKU `lumpy` solo a la familia clásica; si esa
-  unidad falla, el SKU queda sin candidato para M3. La política M3
-  `3.4.3-inicial` resuelve el caso distinto de un SKU con candidatos pero sin
+- La política 2.2 enruta los SKU `lumpy` a las familias clásica y fundacional;
+  si la unidad clásica falla, el SKU queda con una sola familia evaluable. La
+  política M3 `3.4.3-inicial` resuelve el caso distinto de un SKU con candidatos pero sin
   instancia de la familia campeona de su clase: usa la siguiente familia
   disponible en el orden de mediana r de la clase, nunca la mejor del SKU.
   Solo considera familias presentes en ese ranking. En medianas idénticas
