@@ -24,6 +24,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
@@ -77,6 +79,7 @@ _METRICAS = ("n_pares", "mae", "rmse", "me", "mase", "razon_sn")
 _CONTEOS = ("n_ventanas_totales", "n_ventanas_validas", "n_pronosticos_validos")
 # Tipo declarado en el DDL -> dtype: una columna toda NULL conserva su tipo.
 _DTYPES = {"INTEGER": "Int64", "REAL": "Float64", "TEXT": "string"}
+_FILAS_POR_BLOQUE_EXPORTACION = 10_000
 
 
 def esquema_m3() -> str:
@@ -566,8 +569,9 @@ def publicar(
     Exige veredicto para todo SKU del manifiesto. Las unidades sin marcador no
     pueden existir: cada pronostico referencia la suya. El estado cambia antes
     de exportar, dentro de la transaccion, para que el Parquet de m3_corridas
-    diga PUBLICADA; si la exportacion falla, se revierte. Repetir reexporta
-    (`.tmp` y `os.replace`) y publica; una corrida PUBLICADA no se reescribe.
+    diga PUBLICADA; si la exportacion falla, se revierte. Repetir reexporta en
+    un directorio temporal, lo renombra con `os.replace` y publica; una corrida
+    PUBLICADA no se reescribe.
     """
     destino = Path(directorio) / run_id
     rutas = {tabla: destino / f"{tabla}.parquet" for tabla in TABLAS}
@@ -591,17 +595,17 @@ def publicar(
             )
         _cambiar_estado(conn, run_id, "PUBLICADA")
         destino.parent.mkdir(parents=True, exist_ok=True)
-        evidencia = consultar(conn, run_id)
+        # Una caida abrupta deja el temporal de un intento anterior; con el
+        # bloqueo de escritura tomado ningun otro intento de esta corrida corre.
+        for abandonado in destino.parent.glob(f".{run_id}-*"):
+            shutil.rmtree(abandonado)
         # Ningun archivo final aparece hasta que termina la exportacion completa.
         with tempfile.TemporaryDirectory(
             prefix=f".{run_id}-", dir=destino.parent
         ) as temporal:
             preparado = Path(temporal)
             for tabla, ruta in rutas.items():
-                _escribir_parquet(evidencia[tabla], preparado / ruta.name)
-                evidencia[tabla].to_csv(
-                    preparado / ruta.with_suffix(".csv").name, index=False
-                )
+                _exportar_tabla(conn, run_id, tabla, preparado / ruta.name)
             if destino.exists():
                 # Puede quedar una exportacion completa de una caida anterior al
                 # commit. Solo se reemplaza el directorio propio de esta corrida.
@@ -911,14 +915,37 @@ def _leer(
         params=parametros,
         dtype_backend="numpy_nullable",
     )
-    tipos = {
+    return frame.astype(_tipos_sqlite(conn, tabla))
+
+
+def _tipos_sqlite(conn: sqlite3.Connection, tabla: str) -> dict[str, str]:
+    return {
         columna: _DTYPES[declarado]
         for _, columna, declarado, *_ in conn.execute(f"PRAGMA table_info({tabla})")
     }
-    return frame.astype(tipos)
 
 
-def _escribir_parquet(frame: pd.DataFrame, ruta: Path) -> None:
-    temporal = ruta.with_name(ruta.name + ".tmp")
-    frame.to_parquet(temporal, index=False)
-    os.replace(temporal, ruta)
+def _exportar_tabla(
+    conn: sqlite3.Connection, run_id: str, tabla: str, ruta: Path
+) -> None:
+    tipos = _tipos_sqlite(conn, tabla)
+    # El esquema no depende del primer bloque: puede estar vacio o todo NULL.
+    vacio = pd.DataFrame({columna: pd.Series(dtype=t) for columna, t in tipos.items()})
+    esquema = pa.Table.from_pandas(vacio, preserve_index=False).schema
+    bloques = pd.read_sql_query(
+        f"SELECT * FROM {tabla} WHERE run_id = ? ORDER BY rowid",
+        conn,
+        params=[run_id],
+        dtype_backend="numpy_nullable",
+        chunksize=_FILAS_POR_BLOQUE_EXPORTACION,
+    )
+    with (
+        pq.ParquetWriter(ruta, esquema, compression="snappy") as escritor,
+        ruta.with_suffix(".csv").open("w", encoding="utf-8", newline="") as csv,
+    ):
+        primero = True
+        for bloque in bloques:
+            frame = bloque.astype(tipos)
+            escritor.write_table(pa.Table.from_pandas(frame, preserve_index=False))
+            frame.to_csv(csv, index=False, header=primero)
+            primero = False

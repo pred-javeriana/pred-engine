@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from pred_engine.forecasting.persistencia_evidencia import (
     guardar_evaluacion,
     guardar_unidades,
     publicar,
+    repositorio,
 )
 
 
@@ -63,9 +65,17 @@ def test_publicar_rechaza_si_un_sku_del_manifiesto_no_tiene_veredicto(
     assert not any(tmp_path.iterdir())
 
 
-def test_publicar_deriva_el_parquet_de_sqlite_y_abre_la_vista(tmp_path: Path) -> None:
+@pytest.mark.parametrize("filas_por_bloque", [1, 4, 10_000])
+def test_publicar_deriva_el_parquet_de_sqlite_y_abre_la_vista(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filas_por_bloque: int
+) -> None:
+    monkeypatch.setattr(repositorio, "_FILAS_POR_BLOQUE_EXPORTACION", filas_por_bloque)
     conn = base()
-    run_id = _seleccionada(conn, fallo())
+    run_id = _seleccionada(
+        conn, replace(fallo(), mensaje='Fallo, "señal"\nsegunda línea')
+    )
+    conn.execute("UPDATE m3_unidades SET semilla = ? WHERE rowid = 3", (2**53 + 1,))
+    conn.commit()
     assert filas(conn, "evidencia_publicada") == 0
 
     rutas = publicar(conn, run_id, tmp_path)
@@ -76,7 +86,10 @@ def test_publicar_deriva_el_parquet_de_sqlite_y_abre_la_vista(tmp_path: Path) ->
     for tabla, ruta in rutas.items():
         assert ruta.parent == tmp_path / run_id
         pd.testing.assert_frame_equal(pd.read_parquet(ruta), evidencia[tabla])
-    assert not list((tmp_path / run_id).glob("*.tmp"))
+        assert ruta.with_suffix(".csv").read_bytes() == evidencia[tabla].to_csv(
+            index=False
+        ).encode("utf-8")
+    assert [p.name for p in tmp_path.iterdir()] == [run_id]
     # El Parquet de la corrida ya dice PUBLICADA y trae el origen de los datos.
     corrida_parquet = pd.read_parquet(rutas["m3_corridas"])
     assert corrida_parquet["estado"].tolist() == ["PUBLICADA"]
@@ -128,7 +141,7 @@ def test_si_la_exportacion_falla_la_corrida_no_queda_publicada(
         raise OSError("disco lleno")
 
     monkeypatch.setattr(
-        "pred_engine.forecasting.persistencia_evidencia.repositorio._escribir_parquet",
+        "pred_engine.forecasting.persistencia_evidencia.repositorio._exportar_tabla",
         _falla,
     )
     with pytest.raises(OSError, match="disco lleno"):
@@ -140,33 +153,133 @@ def test_si_la_exportacion_falla_la_corrida_no_queda_publicada(
 def test_fallo_tras_un_archivo_preparado_no_expone_un_conjunto_parcial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pred_engine.forecasting.persistencia_evidencia import repositorio
-
     conn = base()
     run_id = _seleccionada(conn)
-    original = repositorio._escribir_parquet
+    original = repositorio._exportar_tabla
     llamadas = 0
 
-    def falla_en_segundo(frame, ruta):
+    def falla_en_segundo(*args):
         nonlocal llamadas
         llamadas += 1
         if llamadas == 2:
             raise OSError("disco lleno despues del primer archivo")
-        original(frame, ruta)
+        original(*args)
 
-    monkeypatch.setattr(repositorio, "_escribir_parquet", falla_en_segundo)
+    monkeypatch.setattr(repositorio, "_exportar_tabla", falla_en_segundo)
     with pytest.raises(OSError, match="primer archivo"):
         publicar(conn, run_id, tmp_path)
     assert estado_corrida(conn, run_id) == "SELECCIONADA"
     assert not (tmp_path / run_id).exists()
     assert filas(conn, "evidencia_publicada") == 0
-    monkeypatch.setattr(repositorio, "_escribir_parquet", original)
+    monkeypatch.setattr(repositorio, "_exportar_tabla", original)
     rutas = publicar(conn, run_id, tmp_path)
     assert estado_corrida(conn, run_id) == "PUBLICADA"
     assert pd.read_csv(rutas["m3_veredictos"].with_suffix(".csv"))["sku"].tolist() == [
         "S2",
         "S1",
     ]
+
+
+def test_fallo_dentro_de_una_tabla_revierte_y_permite_reintentar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = base()
+    run_id = _seleccionada(conn)
+    monkeypatch.setattr(repositorio, "_FILAS_POR_BLOQUE_EXPORTACION", 4)
+    original = pd.DataFrame.to_csv
+
+    def falla_en_bloque(frame, destino, **kwargs):
+        if Path(destino.name).stem == "m3_pronosticos" and not kwargs["header"]:
+            raise OSError("disco lleno dentro de la tabla")
+        return original(frame, destino, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", falla_en_bloque)
+    with pytest.raises(OSError, match="dentro de la tabla"):
+        publicar(conn, run_id, tmp_path)
+    assert estado_corrida(conn, run_id) == "SELECCIONADA"
+    assert filas(conn, "evidencia_publicada") == 0
+    assert not list(tmp_path.iterdir())
+    monkeypatch.setattr(pd.DataFrame, "to_csv", original)
+    rutas = publicar(conn, run_id, tmp_path)
+    pd.testing.assert_frame_equal(
+        pd.read_parquet(rutas["m3_pronosticos"]),
+        consultar(conn, run_id)["m3_pronosticos"],
+    )
+
+
+@pytest.mark.parametrize("interrumpir", [False, True])
+def test_visibilidad_y_recuperacion_tras_renombrar_antes_del_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrumpir: bool
+) -> None:
+    memoria = base()
+    run_id = _seleccionada(memoria)
+    with sqlite3.connect(tmp_path / "evidencia.db") as conn:
+        memoria.backup(conn)
+        with sqlite3.connect(tmp_path / "evidencia.db") as lector:
+            destino = tmp_path / "exportaciones"
+            renombrar = repositorio.os.replace
+            escribir_csv = pd.DataFrame.to_csv
+            monkeypatch.setattr(repositorio, "_FILAS_POR_BLOQUE_EXPORTACION", 4)
+
+            def comprobar_lector():
+                assert estado_corrida(lector, run_id) == "SELECCIONADA"
+                assert filas(lector, "evidencia_publicada") == 0
+
+            def observar_bloque(frame, *args, **kwargs):
+                comprobar_lector()
+                assert not (destino / run_id).exists()
+                return escribir_csv(frame, *args, **kwargs)
+
+            def observar_renombrado(origen, final):
+                renombrar(origen, final)
+                comprobar_lector()
+                assert len(list(Path(final).iterdir())) == 2 * len(TABLAS)
+                if interrumpir:
+                    raise KeyboardInterrupt("caida antes del commit")
+
+            monkeypatch.setattr(pd.DataFrame, "to_csv", observar_bloque)
+            monkeypatch.setattr(repositorio.os, "replace", observar_renombrado)
+            if interrumpir:
+                with pytest.raises(KeyboardInterrupt, match="antes del commit"):
+                    publicar(conn, run_id, destino)
+                comprobar_lector()
+                monkeypatch.setattr(repositorio.os, "replace", renombrar)
+                monkeypatch.setattr(pd.DataFrame, "to_csv", escribir_csv)
+                publicar(conn, run_id, destino)
+            else:
+                publicar(conn, run_id, destino)
+            assert estado_corrida(lector, run_id) == "PUBLICADA"
+            assert filas(lector, "evidencia_publicada") == 2
+            for tabla, frame in consultar(conn, run_id).items():
+                pd.testing.assert_frame_equal(
+                    pd.read_parquet(destino / run_id / f"{tabla}.parquet"), frame
+                )
+
+
+def test_publicar_borra_el_temporal_de_una_caida_abrupta(tmp_path: Path) -> None:
+    conn = base()
+    run_id = _seleccionada(conn)
+    abandonado = tmp_path / f".{run_id}-abc123"
+    abandonado.mkdir()
+    (abandonado / "m3_metricas.parquet").write_bytes(b"parcial")
+
+    publicar(conn, run_id, tmp_path)
+
+    assert [p.name for p in tmp_path.iterdir()] == [run_id]
+
+
+def test_publicar_conserva_los_temporales_de_otras_corridas(tmp_path: Path) -> None:
+    conn = base()
+    run_id = _seleccionada(conn)
+    ajeno = tmp_path / ".m3-otra-corrida-abc123"
+    ajeno.mkdir()
+    parcial = ajeno / "m3_metricas.parquet"
+    parcial.write_bytes(b"parcial de otra corrida")
+
+    publicar(conn, run_id, tmp_path)
+
+    assert parcial.read_bytes() == b"parcial de otra corrida"
+    assert {p.name for p in tmp_path.iterdir()} == {run_id, ajeno.name}
 
 
 def test_una_corrida_publicada_no_se_reescribe(tmp_path: Path) -> None:
