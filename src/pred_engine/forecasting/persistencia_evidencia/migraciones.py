@@ -24,8 +24,8 @@ MIGRACIONES_M3 = (
 )
 VERSION_ESQUEMA_M3 = MIGRACIONES_M3[-1][0]
 # Ultima version de la base unica que el motor conoce. La 10 (publicacion para M4) la
-# aplica por ahora la plataforma con el texto del motor, y la 11 es de la plataforma
-# (estado finalizo_m2 de las tareas): el motor las acepta, pero no las aplica.
+# aplican el motor y la plataforma con el mismo texto; la 11 es solo de la plataforma
+# (estado finalizo_m2 de las tareas): el motor la acepta, pero no la aplica.
 VERSION_PLATAFORMA = 11
 
 
