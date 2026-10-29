@@ -1,38 +1,30 @@
 # Seleccion 2.4 — HPO (TPE Sampler + ASHA Resource Allocator)
 
-## Que se hizo en esta sesion
+## Capacidades
 
-Reconciliacion de las tareas Notion del Modulo 2.4 (`TASK-HPO-4.0-*` y
-`TASK-HPO-5.0-*`, asignadas al Scrum Master del equipo) contra la implementacion
-real del motor de HPO, que ya existia -- construida en sesiones anteriores
-bajo otra numeracion de tareas (`TASK-SEL-2.81-*`, `TASK-SEL-2.9-*`, ya
-mergeadas a `main`). El motor vive en
-`src/pred_engine/optimizacion/optimizadores/HPO/` desde antes de esta
-sesion; este documento y ADR-012/ADR-013 formalizan retroactivamente las
-decisiones de diseño que Notion aun no reflejaba, y esta sesion cierra las
-brechas funcionales que si estaban genuinamente ausentes:
+El motor de HPO vive en `src/pred_engine/optimizacion/optimizadores/HPO/` y
+es comun a las familias de modelos. Sus decisiones de diseño estan en
+ADR-012 y ADR-013.
 
-1. Tipo `Ordinal` en `espacio.py` (codificacion explicita de ordinales como
-   enteros ordenados).
-2. Warm start (`adaptador_optuna.py::semillas_desde_historico` /
+1. `Ordinal` en `espacio.py` codifica ordinales como enteros ordenados.
+2. El warm start (`adaptador_optuna.py::semillas_desde_historico` /
    `inyectar_historico`, expuesto como `EstudioHPO.agregar_trials_historicos`)
-   para inyectar evidencia de una corrida externa (SKUs lumpy).
-3. `timestamp` por trial (`Trial.timestamp`), completando el formato de
+   importa evidencia de una corrida externa (SKUs lumpy).
+3. Cada trial registra su `timestamp` (`Trial.timestamp`), con el formato de
    historial `{config, metric_value, timestamp, status}`.
-4. Benchmark TPE vs random search sobre sphere/Rastrigin/Rosenbrock
-   (`benchmarks/`).
-5. Cuantificacion del ahorro de ASHA (>= 30 %) y verificacion de que toda
-   poda queda auditada con `motivo`.
-6. Advertencia explicita (antes silenciosa) cuando se reanuda con
-   `TPESampler`: su RNG de arranque en frio no se resincroniza (limitacion
-   conocida de Optuna, ver ADR-012).
-7. `raiz_corrida`/`run_id` cableados en `classical_selection.py` (pendiente
-   documentado en `GUIA_CICLO_VIDA_CORRIDA.md`).
+4. `benchmarks/` compara TPE contra random search sobre
+   sphere/Rastrigin/Rosenbrock.
+5. ASHA ahorra al menos 30 % de ventanas evaluadas, y toda poda queda
+   auditada con `motivo`.
+6. Al reanudar con `TPESampler` el motor emite una advertencia, porque el RNG
+   de arranque en frio no se resincroniza (limitacion de Optuna, ver
+   ADR-012).
+7. `classical_selection.py` recibe `raiz_corrida` y `run_id` para la
+   reanudacion (ver `GUIA_CICLO_VIDA_CORRIDA.md`).
 
-**Fuera de alcance de esta version** (decision de arquitectura, no deuda
-pendiente -- ver ADR-013): un registro compartido thread-safe y un
+**Fuera de alcance** (decision de arquitectura -- ver ADR-013): un registro compartido thread-safe y un
 asignador de *workers* concurrentes (`ThreadPoolExecutor`, locks) para
-paralelizar trials de UN estudio. La version actual ejecuta un bucle
+paralelizar trials de UN estudio. El motor ejecuta un bucle
 secuencial de un solo proceso; el paralelismo real del repo ocurre a nivel
 de SKU (`classical_selection.py::seleccionar_por_panel`,
 `ProcessPoolExecutor`).
@@ -67,7 +59,7 @@ ejecutar_estudio()  (bucle secuencial ask/tell)
 | `construir_muestreador_tpe` | TPE (delegado a Optuna, ADR-012) | `muestreadores.py` |
 | `DecisorASHA` / `ReglasPoda` / `es_degenerada` | Decision de poda ASHA, pura (ADR-013) | `asha.py`, `poda.py` |
 | `contratos.py` | Frontera `Protocol` sin `import optuna` | `contratos.py` |
-| `adaptador_optuna.py` | Unico modulo que importa Optuna: persistencia, warm start, poda concreta | `adaptador_optuna.py` |
+| `adaptador_optuna.py` | Adaptacion de Optuna: persistencia, warm start y poda concreta | `adaptador_optuna.py` |
 | `registro.py` | Traduce `InfoTrial` → `Trial`/`ResultadoEstudio` | `registro.py` |
 | `estudio.py` | Punto de entrada unico | `estudio.py` |
 | `benchmarks/` | Sphere/Rastrigin/Rosenbrock, comparacion TPE vs random | `benchmarks/` |
@@ -110,7 +102,8 @@ uv run ruff check src/pred_engine/optimizacion/optimizadores/HPO tests/optimizac
 uv run pyright src/pred_engine/optimizacion/optimizadores/HPO
 ```
 
-## Pendiente conocido (heredado, no cerrado por esta sesion)
+## Recuperacion
 
-Ver `GUIA_CICLO_VIDA_CORRIDA.md`: el stub `forecasting/control_reanudacion/`
-es de otro modulo y no se toca aqui.
+La recuperacion de estudios HPO pertenece a `optimizacion/control_reanudacion`;
+la coordinacion y recuperacion de M3 pertenece a
+`forecasting/control_reanudacion`.

@@ -14,19 +14,18 @@ grupo, y proponer la configuracion que maximiza `l(θ)/g(θ)`, con soporte
 para espacios mixtos (numericos, categoricos, ordinales, jerarquicos) y
 warm start para SKUs con pocas ventanas informativas ("lumpy").
 
-Para cuando este ADR se escribe, `muestreadores.py::construir_muestreador_tpe`
-ya envuelve `optuna.samplers.TPESampler` en vez de implementar la
-separacion/estimacion de densidades desde cero, y `optuna>=4.0` ya es
-dependencia runtime del proyecto (usada tambien por ASHA via
-`adaptador_optuna.py`, ver ADR-013). Este ADR formaliza esa decision
-retroactivamente.
+`muestreadores.py::construir_muestreador_tpe` envuelve
+`optuna.samplers.TPESampler` en vez de implementar la separacion y estimacion
+de densidades desde cero, y `optuna>=4.0` es dependencia runtime del
+proyecto (la usa tambien ASHA via `adaptador_optuna.py`, ver ADR-013).
 
 ## Decision
 
 Se usa `optuna.samplers.TPESampler(seed, multivariate=True, n_startup_trials,
 n_ei_candidates)` como implementacion del algoritmo TPE. El motor de HPO
-(`estudio.py`, `asha.py`, `contratos.py`) no conoce Optuna directamente: solo
-`adaptador_optuna.py` importa la libreria (ver docstring del propio archivo).
+(`estudio.py`, `asha.py`, `contratos.py`) no importa Optuna. Los modulos de
+integracion son `adaptador_optuna.py`, `muestreadores.py` y
+`benchmarks/comparador_convergencia.py`.
 `TPESampler` ya implementa la separacion buena/mala, la estimacion de
 densidades (KDE) y el manejo de espacios mixtos/condicionales que la
 especificacion de Notion pide construir.
@@ -34,10 +33,10 @@ especificacion de Notion pide construir.
 Cada estudio siembra su `TPESampler` con
 `derivar_semilla(seed, f"{familia}/{sku_id or 'panel'}", 0)`
 (`pred_engine.comun.walkforward.semillas`), donde `seed` es la semilla global
-de la corrida. Asi cada estudio (cada par familia y SKU, o el panel) tiene su
-propio flujo de propuestas de arranque en frio, reproducible a partir de
-`seed`, y dos estudios de la misma corrida no comparten las mismas primeras
-configuraciones. Un `muestreador` pasado de forma explicita a
+de la corrida. La semilla se deriva por familia y SKU (o panel) para evitar
+que todos los estudios reinicien el mismo flujo de propuestas. Dos estudios
+pueden proponer la misma configuracion por coincidencia. El resultado es
+reproducible a partir de `seed`. Un `muestreador` pasado de forma explicita a
 `ejecutar_estudio` se usa tal cual, sin derivar la semilla.
 
 Los espacios mixtos se codifican en `espacio.py`:
@@ -52,7 +51,7 @@ Los espacios mixtos se codifican en `espacio.py`:
   mientras que `Categorico` es un universo intercambiable sin esa nocion.
   El nivel semantico se recupera con `nivel_de(parametro, indice)`.
 - Jerarquicos/condicionales → `Condicion` (`padre`, `valores`, `parametro`
-  dependiente), ya soportado antes de este ADR.
+  dependiente).
 
 Warm start (`adaptador_optuna.py::semillas_desde_historico` +
 `inyectar_historico`, expuesto como `EstudioHPO.agregar_trials_historicos`
@@ -80,8 +79,7 @@ checkpoint (`study.add_trial`), sin reevaluarlos.
 - Limitacion heredada de Optuna, ya documentada en ADR-011 y reforzada aqui:
   al reanudar una corrida con `TPESampler` (no con `RandomSampler`), el RNG
   de su fase de arranque en frio no se resincroniza -- `adaptador_optuna.py`
-  ahora emite un `_logger.warning` explicito en ese caso (antes era
-  silencioso) para que la perdida de presupuesto de trials sea visible, en
+  emite un `_logger.warning` explicito en ese caso para que la perdida de presupuesto de trials sea visible, en
   vez de intentar un replay del RNG cuya correccion no se puede garantizar
   (el conteo de muestras de TPE por `ask()` no es necesariamente constante).
 - `Ordinal` es aditivo: no cambia el comportamiento de espacios existentes
@@ -98,7 +96,7 @@ checkpoint (`study.add_trial`), sin reevaluarlos.
   o jerarquias condicionales, justo el caso de PRED (clasicos/ML/DL con
   espacios mixtos).
 - **Reescribir el RNG-replay de `_sincronizar_sampler_aleatorio` para
-  cubrir tambien `TPESampler`:** rechazado por ahora; el mecanismo que
+  cubrir tambien `TPESampler`:** rechazado; el mecanismo que
   funciona para `RandomSampler` (avanzar el RNG con un estudio auxiliar)
   no tiene garantia de correccion equivalente para `TPESampler`, cuyo
   consumo de RNG por `ask()` puede depender del historial de trials. Se
