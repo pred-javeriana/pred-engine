@@ -197,6 +197,7 @@ _TABLA: Final[tuple[tuple[str, str, str], ...]] = (
         CODIGO_EVALUACION_FALLIDA,
     ),
     # Pipeline
+    ("pred_engine.pipeline", "PronosticoDegeneradoError", "model.degenerate_forecast"),
     ("pred_engine.pipeline", "StageUnavailableError", "pipeline.stage_unavailable"),
     # L0: Fase 0
     (

@@ -424,6 +424,10 @@ class StageUnavailableError(RuntimeError):
     pass
 
 
+class PronosticoDegeneradoError(ValueError):
+    """Regla #3 (ADR-020) rechaza el pronostico desde t*."""
+
+
 class PipelineExecutionError(RuntimeError):
     """Retains completed evidence and the failed stage; original error is __cause__."""
 
@@ -460,7 +464,7 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
     # cada ventana del HPO; uno degenerado hace fallar la unidad, no se entrega.
     degenerado, motivo = es_degenerada(forecast, y_train=y)
     if degenerado:
-        raise ValueError(
+        raise PronosticoDegeneradoError(
             f"pronostico degenerado para {selection.sku_id}/{selection.family} "
             f"desde t*: {motivo} (regla #3); "
             f"configuracion={dict(selection.forecast_config)}"
