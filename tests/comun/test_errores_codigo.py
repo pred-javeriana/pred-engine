@@ -31,6 +31,7 @@ from pred_engine.pipeline import (
     Pipeline,
     PipelineExecutionError,
     PipelineResult,
+    PronosticoDegeneradoError,
     StageUnavailableError,
 )
 
@@ -117,6 +118,7 @@ def test_el_pipeline_se_resuelve_por_la_causa_y_la_etapa() -> None:
     otra.__cause__ = NingunTrialCompletoError("x")
     assert codigo_de(otra) == "selection.no_viable_trial"
     assert codigo_de(StageUnavailableError("L4")) == "pipeline.stage_unavailable"
+    assert codigo_de(PronosticoDegeneradoError("x")) == "model.degenerate_forecast"
 
 
 def test_respaldo_por_etapa_para_errores_sin_tipo() -> None:

@@ -50,7 +50,8 @@ media recortada ocultaba. La causa no era ese candidato.
    L3 vuelve a ajustarlas sin tolerar fallos.
 4. L2 aplica al pronóstico desde t* la misma regla #3 que el HPO aplica a cada
    ventana (no finito, negativo o nulo con historia positiva). Un pronóstico
-   degenerado hace fallar su unidad con la causa; no se entrega a M3.
+   degenerado hace fallar su unidad con la causa y con el código
+   `model.degenerate_forecast`; no se entrega a M3.
 
 ## Rationale
 
