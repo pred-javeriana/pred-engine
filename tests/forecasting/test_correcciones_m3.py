@@ -152,7 +152,8 @@ def test_parquet_relativo_reusa_csv_y_ejecucion_importados(tmp_path):
     conn.close()
 
 
-@pytest.mark.parametrize("cola, previstas", [(3, 72), (10, 66)])
+# Unidades previstas: origenes de cada SKU por sus dos candidatos y la linea base.
+@pytest.mark.parametrize("cola, previstas", [(3, 108), (10, 99)])
 def test_cola_sin_observaciones_no_es_fallo_tecnico(tmp_path, cola, previstas):
     conn, p, request = caso(tmp_path)
     frame = pd.DataFrame(

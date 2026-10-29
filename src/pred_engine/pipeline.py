@@ -12,7 +12,7 @@ Sin esa configuracion, la biblioteca conserva L4 bloqueada.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +32,7 @@ from pred_engine.comun.ejecucion_paralela import (
 from pred_engine.comun.errores_codigo import (
     ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
     ELEGIBILIDAD_HUECOS,
+    ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
     ELEGIBILIDAD_NO_FINITA,
     ELEGIBILIDAD_SIN_HISTORIA,
     ELEGIBILIDAD_SIN_RESERVA,
@@ -210,6 +211,22 @@ class FittingArtifact:
     # Exclusiones de M1 (lanzados despues del corte) que L2 leyo con ``reserve``;
     # M3 las publica tal cual, sin recalcularlas.
     late_launches: tuple[SkuExclusion, ...] = ()
+
+    @property
+    def m3_skus(self) -> frozenset[str]:
+        """SKU que M3 debe juzgar con las exclusiones de este intento."""
+        return self.m3_skus_sin(e.sku_id for e in self.exclusions)
+
+    def m3_skus_sin(self, excluidos: Iterable[str]) -> frozenset[str]:
+        """SKU que llegaron a L2 menos `excluidos`, aunque conserven unidades.
+
+        Una reanudacion de M3 usa las exclusiones de su procedencia durable, que
+        pueden no ser las de este intento (ADR-023).
+        """
+        return frozenset(
+            {c.selection.sku_id for c in self.candidates}
+            | {u.sku_id for u in self.units}
+        ) - set(excluidos)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -527,6 +544,51 @@ def _units(
     )
 
 
+def _two_family_rule(
+    units: Sequence[UnitExecution], candidates: Sequence[FittedCandidate]
+) -> tuple[tuple[FittedCandidate, ...], tuple[SkuExclusion, ...]]:
+    """Regla de dos familias al cerrar L2 (ADR-023).
+
+    Si una sola familia del SKU entrega candidato, el SKU sale de la competencia
+    antes de L3 con ``eligibility.fewer_than_two_families``, sea cual sea el
+    numero de familias enrutadas. Sin familias entregadas sigue a M3, que lo juzga
+    ``FALLO_TECNICO``. Solo lee resultados de L2; una unidad fallida se repite al
+    reanudar, asi que M3 honra las exclusiones de su procedencia durable.
+    """
+    routed: dict[str, list[UnitExecution]] = {}
+    for unit in units:
+        routed.setdefault(unit.sku_id, []).append(unit)
+    delivered: dict[str, set[str]] = {}
+    for candidate in candidates:
+        delivered.setdefault(candidate.selection.sku_id, set()).add(
+            candidate.selection.family
+        )
+    exclusions = []
+    for sku_id, sku_units in routed.items():
+        families = delivered.get(sku_id, set())
+        if len(families) != 1:
+            continue
+        (family,) = families
+        failed = ", ".join(
+            f"{u.family} ({u.record.codigo})"
+            for u in sku_units
+            if u.family not in families
+        )
+        exclusions.append(
+            SkuExclusion(
+                sku_id,
+                f"menos de dos familias evaluables tras L2: evaluable {family}; "
+                + (f"fallidas {failed}" if failed else "sin otra familia enrutada"),
+                ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
+            )
+        )
+    excluded = {item.sku_id for item in exclusions}
+    return (
+        tuple(c for c in candidates if c.selection.sku_id not in excluded),
+        tuple(exclusions),
+    )
+
+
 def _no_results_message(
     stage: StageId,
     units: Sequence[UnitExecution],
@@ -812,7 +874,14 @@ class Pipeline:
             [(task.request.sku_id, task.decision.family) for task in tasks],
             results,
         )
-        candidates = tuple(r.valor for r in results if r.valor is not None)
+        candidates, single_family = _two_family_rule(
+            units, tuple(r.valor for r in results if r.valor is not None)
+        )
+        for item in single_family:
+            exclusions.append(item)
+            self._emit("excluded", sku_id=item.sku_id, cause=item.cause, code=item.code)
+        # Con unidades fallidas, M3 nativo decide: FALLO_TECNICO, la receta
+        # durable de una reanudacion o ningun SKU que juzgar.
         if not candidates and not (
             getattr(self.validator, "nativo", False) and any(u.failed for u in units)
         ):
@@ -891,7 +960,8 @@ class Pipeline:
         """L4: native covers handoff SKUs; legacy covers evaluated SKUs.
 
         A reused native publication covers its frozen handoff, not the SKUs a
-        later M2 retry happened to fit.
+        later M2 retry happened to fit. A resumed one leaves out the SKUs that
+        its durable provenance excluded at the end of L2.
         """
         if self.validator is None:
             raise StageUnavailableError(PRINCIPAL_STAGES[3].capability)
@@ -903,9 +973,8 @@ class Pipeline:
         expected = (
             set(actual)
             if nativo and result.audit_bundle.get("publicada_previamente")
-            else (
-                {c.selection.sku_id for c in evaluation.fitting.candidates}
-                | {u.sku_id for u in evaluation.fitting.units if u.failed}
+            else evaluation.fitting.m3_skus_sin(
+                e["sku_id"] for e in result.audit_bundle["exclusiones_m2"]
             )
             if nativo
             else {c.fitted.selection.sku_id for c in evaluation.candidates}

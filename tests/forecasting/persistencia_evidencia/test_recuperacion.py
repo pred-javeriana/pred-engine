@@ -1,5 +1,6 @@
 """Protocolo congelado, fallos por ventana y lectura segura de unidades M3."""
 
+import sqlite3
 from datetime import UTC, datetime
 
 import numpy as np
@@ -8,6 +9,7 @@ import pytest
 from tests._evidencia import base, corrida, handoff, identidad
 from tests._manifiestos import manifiesto
 
+from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.forecasting.base import SeasonalNaiveStub
@@ -27,8 +29,15 @@ from pred_engine.forecasting.persistencia_evidencia.recuperacion import (
     guardar_unidades_generadas,
 )
 
+_CORTE = {
+    "t_star": pd.Timestamp("2024-01-14"),
+    "lanzamientos_tardios": (),
+    "exclusiones": (),
+    "clases": {},
+}
 
-def _preparar():
+
+def _preparar(**fijar):
     conn = base()
     run_id = corrida(conn)
     h = handoff()
@@ -46,8 +55,7 @@ def _preparar():
         procedencia={},
         reserva_abierta_en=datetime.now(UTC),
         n_unidades_previstas=18,
-        t_star=pd.Timestamp("2024-01-14"),
-        lanzamientos_tardios=(),
+        **_CORTE | fijar,
     )
     corte = ReserveCut(
         pd.Timestamp("2024-01-14"),
@@ -150,8 +158,7 @@ def test_protocolo_distinto_no_reemplaza_el_anterior():
             procedencia={},
             reserva_abierta_en=datetime.now(UTC),
             n_unidades_previstas=18,
-            t_star=pd.Timestamp("2024-01-14"),
-            lanzamientos_tardios=(),
+            **_CORTE,
         )
     assert conn.execute("SELECT COUNT(*) FROM m3_protocolos").fetchone()[0] == 1
     assert (
@@ -187,7 +194,7 @@ def _fijar_de_nuevo(conn, rid, protocolo, texto, **corte):
         procedencia={},
         reserva_abierta_en=datetime.now(UTC),
         n_unidades_previstas=18,
-        **{"t_star": pd.Timestamp("2024-01-14"), "lanzamientos_tardios": ()} | corte,
+        **_CORTE | corte,
     )
 
 
@@ -214,3 +221,32 @@ def test_el_corte_fijado_no_cambia_ni_admite_otra_causa():
         0,
     )
     conn.close()
+
+
+def test_las_exclusiones_de_m2_se_fijan_una_vez_con_su_categoria():
+    causa = "menos de dos familias evaluables tras L2: evaluable ml"
+    excluido = SkuExclusion("X", causa, ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS)
+    conn, rid, _, _, _, _, protocolo, texto = _preparar(
+        exclusiones=(excluido,), clases={"X": "lumpy"}
+    )
+    _fijar_de_nuevo(
+        conn, rid, protocolo, texto, exclusiones=(excluido,), clases={"X": "lumpy"}
+    )
+    with pytest.raises(EvidenciaInconsistenteError, match="exclusiones"):
+        _fijar_de_nuevo(conn, rid, protocolo, texto)
+    assert conn.execute("SELECT * FROM m3_exclusiones").fetchall() == [
+        (rid, "X", "lumpy", ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS, causa)
+    ]
+    conn.close()
+
+
+def test_un_sku_evaluado_no_puede_figurar_como_excluido():
+    evaluado = SkuExclusion("S1", "historia corta", "eligibility.insufficient_history")
+    with pytest.raises(sqlite3.IntegrityError, match="excluido"):
+        _preparar(exclusiones=(evaluado,), clases={"S1": "smooth"})
+
+
+def test_una_exclusion_lleva_un_codigo_de_elegibilidad():
+    falla = SkuExclusion("X", "sin ensayos viables", "selection.no_viable_trial")
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        _preparar(exclusiones=(falla,), clases={"X": "lumpy"})

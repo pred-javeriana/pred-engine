@@ -64,5 +64,6 @@ protección de la entrada y reinicios antes y después de confirmar unidades.
 Las pruebas de los adaptadores en `tests/forecasting/adaptador_candidatos/`
 comprueban la implementación concreta de `pronosticar` por familia.
 
-La evaluación de cada candidato sobre la reserva no es una prueba no sesgada
-de desempeño futuro: M3 elige su familia campeona sobre esa misma reserva.
+3.3 pronostica toda la reserva. M3 elige la familia campeona en el bloque de
+selección y puntúa al campeón en el bloque de prueba (ADR-023). Esa evidencia
+sigue siendo retrospectiva sobre un solo corte t*.

@@ -276,9 +276,11 @@ def test_run_csv_identico_a_classify_csv_y_run_parquet(tmp_path: Path):
     assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz_a)]) == 0
     parquet_a = raiz_a / "processed" / "panel.parquet"
     base_a = crear_base_plataforma(tmp_path / "db_a.sqlite")
+    # SKU-ADMITIDO es smooth: ML y DL cumplen la regla de dos familias.
     opciones = [
         "--families",
         "ml",
+        "dl",
         "--trials",
         "1",
         "--workers",
@@ -876,8 +878,10 @@ def _correr(tmp_path: Path, raiz: Path, *fuente: str) -> int:
             str(base),
             "--data-root",
             str(raiz),
+            # SKU-ADMITIDO es smooth: ML y DL cumplen la regla de dos familias.
             "--families",
             "ml",
+            "dl",
             "--trials",
             "1",
             "--workers",

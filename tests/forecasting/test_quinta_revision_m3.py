@@ -48,8 +48,10 @@ def correr(db, root, run_id, *entrada):
             str(db),
             "--run-id",
             run_id,
+            # La serie es smooth: ML y DL cumplen la regla de dos familias.
             "--families",
             "ml",
+            "dl",
             "--trials",
             "1",
             "--min-train",
@@ -98,7 +100,7 @@ def ejecutar_biblioteca(root, db, parquet, run_id, entrada, validador, **m2):
         )
         pipeline = build_pipeline(
             EvaluationSettings(min_train=60, horizon=7, step=28),
-            families=("ml",),
+            families=("ml", "dl"),
             workers=1,
             validator=controller,
             **m2,
@@ -147,7 +149,7 @@ def test_biblioteca_registra_los_ajustes_m2_que_produjeron_los_resultados(tmp_pa
     assert (run_id, semilla) == ("ajustes", 17)
     guardados = json.loads(parametros)
     assert (guardados["families"], guardados["trials"], guardados["seed"]) == (
-        ["ml"],
+        ["ml", "dl"],
         1,
         17,
     )

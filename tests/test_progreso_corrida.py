@@ -15,9 +15,12 @@ from pred_engine.cli import main
 from tests._plataforma import crear_base_plataforma
 from tests._series import serie_ar_estacional
 
+# Dos familias por SKU, por la regla de dos familias (ADR-023). Con la semilla 15
+# el HPO de SARIMA completa su ensayo en los dos SKU.
 _ARGS = [
     "--trials", "1", "--min-train", "40", "--horizon", "2", "--step", "14",
-    "--metric", "mae", "--seed", "15", "--families", "classical", "--workers", "2",
+    "--metric", "mae", "--seed", "15", "--families", "classical", "ml",
+    "--workers", "2",
 ]  # fmt: skip
 
 
@@ -229,4 +232,5 @@ def test_reintento_reparado_conserva_la_publicacion_con_fallo_tecnico(
     assert codigo == 0
     assert nueva["failures"] == []
     assert nueva["m3"]["run_id_m3"] != fallida["m3"]["run_id_m3"]
-    assert leer_exportaciones(nueva) == [48, 2, 16]
+    # Dos SKU por dos familias: 24 dias reservados y 4 ventanas de 2 dias cada uno.
+    assert leer_exportaciones(nueva) == [96, 4, 32]

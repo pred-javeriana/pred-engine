@@ -30,6 +30,8 @@ from pathlib import Path
 
 from recibo_motor import MAPA, Mapa, escribir_recibo, nombres
 
+from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
+
 MOTOR = Path(__file__).resolve().parents[2]
 SEMILLA = MOTOR / "tests" / "fixtures" / "semilla_inventario.csv"
 VERIFICADOR = MOTOR / ".github" / "scripts" / "verificar_corrida.py"
@@ -217,7 +219,11 @@ def humo(contexto: Contexto) -> Resultado:
 
 
 def muestra22(contexto: Contexto) -> Resultado:
-    """Los 22 productos reales de `timing22.csv` con los ajustes por defecto."""
+    """Los 22 productos reales de `timing22.csv` con los ajustes por defecto.
+
+    Cada producto necesita veredicto, salvo los que salen al cerrar L2 con una
+    sola familia evaluable (ADR-023): el recibo los lista en `excluidos_tras_l2`.
+    """
     muestra = f"m22-{_sha256(contexto.muestra22)[:12]}"
     entrada = ["--csv", str(contexto.muestra22), "--datos-reales"]
     corrida = _corrida_m3(contexto, "muestra22", entrada, reales=True)
@@ -226,7 +232,15 @@ def muestra22(contexto: Contexto) -> Resultado:
         with contexto.muestra22.open(newline="", encoding="utf-8") as archivo:
             skus = {fila["sku_id"] for fila in csv.DictReader(archivo)}
         _, con_veredicto = _veredictos(corrida)
-        if faltan := skus - con_veredicto:
+        resumen = json.loads((corrida.run_dir / "corrida.json").read_text())["summary"]
+        una_familia = {
+            e["sku_id"]
+            for e in resumen["exclusions"]
+            if e.get("code") == ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
+        }
+        if una_familia:
+            resultado.detalles["excluidos_tras_l2"] = ",".join(sorted(una_familia))
+        if faltan := skus - con_veredicto - una_familia:
             resultado.ok = False
             resultado.detalles["motivo"] = f"sin veredicto: {' '.join(sorted(faltan))}"
     return resultado

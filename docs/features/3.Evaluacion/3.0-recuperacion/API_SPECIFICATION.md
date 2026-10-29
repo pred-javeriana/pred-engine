@@ -50,14 +50,20 @@ resultado: ValidationArtifact = controlador(evaluation: EvaluationArtifact)
   la autoridad y se consulta antes de restaurar el archivo local.
 - Deriva el contexto del Parquet M1 real y el corte común. Contrasta también
   `sku_class` con M1.
-- Fija H, política completa, origen de datos, código, versiones y referencias
-  M1/M2. Registra antes de abrir la reserva si la métrica HPO no es RMSE.
+- Fija H, política completa, límites de los bloques de la reserva, origen de
+  datos, código, versiones y referencias M1/M2. Registra antes de abrir la
+  reserva si la métrica HPO no es RMSE, las exclusiones de M2 y la selección
+  de robustez.
 - El resultado contiene exactamente un veredicto para cada SKU del handoff.
   Los fallos de adaptación cuentan, aunque el SKU no tenga candidato válido.
+  Un SKU que M2 excluyó no recibe veredicto. Sin ningún SKU que juzgar y sin
+  protocolo durable, `ValueError` («ningun SKU llega a M3») antes de registrar
+  la corrida.
 
 `ValidationArtifact.audit_bundle` incluye `run_id_m3`, estado PUBLICADA,
-origen de datos, H, número de unidades, fallos técnicos, exclusiones de datos
-y rutas de exportación. Las ventanas sin contexto no se registran como fallos
+origen de datos, H, número de unidades, fallos técnicos, exclusiones de M2
+(`exclusiones_m2`, las de la procedencia durable), exclusiones de datos y
+rutas de exportación. Las ventanas sin contexto no se registran como fallos
 del modelo; las ventanas sin objetivos completos no se puntúan ni se rellenan
 con ceros. La ejecución de plataforma solo se declara terminada después de L4;
 un error de esa etapa deja `detenida` y conserva el detalle L4 solo en la

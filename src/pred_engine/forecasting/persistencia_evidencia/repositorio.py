@@ -29,17 +29,24 @@ import pyarrow.parquet as pq
 
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
+from pred_engine.comun.modelos import SkuClass
 from pred_engine.forecasting.adaptador_candidatos import (
     HandoffValidado,
     LoteRechazadoError,
 )
 from pred_engine.forecasting.evaluaciones.calculo_errores import (
+    EvaluacionBloques,
     EvaluacionSku,
     Metricas,
     PronosticoFechado,
     SerieCandidato,
 )
-from pred_engine.forecasting.evaluaciones.veredictos import ResultadoEvaluacion
+from pred_engine.forecasting.evaluaciones.confirmacion import Intervalo
+from pred_engine.forecasting.evaluaciones.diebold_mariano import IntervaloRazon
+from pred_engine.forecasting.evaluaciones.veredictos import (
+    ResultadoEvaluacion,
+    SeleccionCategoria,
+)
 from pred_engine.forecasting.generador_pronosticos import FalloPronostico
 from pred_engine.forecasting.persistencia_evidencia.contratos import (
     EstadoCorrida,
@@ -62,6 +69,7 @@ TABLAS_POR_SKU = (
     "m3_metricas",
     "m3_veredictos",
     "m3_observaciones",
+    "m3_intervalos_r",
 )
 TABLAS = (
     "m3_corridas",
@@ -70,6 +78,11 @@ TABLAS = (
     "m3_cartera",
     "m3_cortes",
     "m3_lanzamientos_tardios",
+    "m3_exclusiones",
+    "m3_significancia",
+    "m3_confirmaciones",
+    "m3_comparaciones",
+    "m3_seleccion_previa",
     *TABLAS_POR_SKU,
 )
 # Unica causa de M1 que M3 publica como lanzamiento tardio (contrato v2, seccion 5).
@@ -410,7 +423,7 @@ def marcar_evaluada(conn: sqlite3.Connection, run_id: str) -> None:
 def guardar_evaluacion(
     conn: sqlite3.Connection,
     run_id: str,
-    evaluaciones: Sequence[EvaluacionSku],
+    evaluaciones: Sequence[EvaluacionBloques],
     resultado: ResultadoEvaluacion,
     *,
     observaciones: Mapping[str, pd.Series],
@@ -420,7 +433,9 @@ def guardar_evaluacion(
     Todo en una transaccion; en una corrida ya SELECCIONADA no escribe nada.
     Las versiones de politica y metricas deben ser las de la identidad, el
     origen de los datos el de la corrida, y cada modelo evaluado con ventanas,
-    incluida la linea base, debe tener sus pronosticos confirmados.
+    incluida la linea base, debe tener sus pronosticos confirmados. Las
+    metricas por ventana cubren toda la reserva; las agregadas, la cartera y la
+    evidencia de significancia y confirmacion son del bloque de prueba (ADR-023).
     ``observaciones`` es la reserva real de cada SKU del manifiesto, la misma
     que puntuo las metricas; M4 la muestra frente a los pronosticos, asi que
     cada fecha pronosticada necesita su fila (``valor`` NULL sin observacion).
@@ -462,7 +477,7 @@ def guardar_evaluacion(
         sin_pronosticos = sorted(
             (e.sku, c.candidato_id)
             for e in evaluaciones
-            for c in (e.linea_base, *e.candidatos)
+            for c in (e.reserva.linea_base, *e.reserva.candidatos)
             if c.n_ventanas_totales and (e.sku, c.candidato_id) not in confirmados
         )
         if sin_pronosticos:
@@ -471,7 +486,7 @@ def guardar_evaluacion(
                 f"pronosticos confirmados, por ejemplo {sin_pronosticos[0]}"
             )
         for e in evaluaciones:
-            for c in (e.linea_base, *e.candidatos):
+            for c in (e.reserva.linea_base, *e.reserva.candidatos):
                 origenes = {
                     pd.Timestamp(f[0])
                     for f in conn.execute(
@@ -501,13 +516,7 @@ def guardar_evaluacion(
                 (
                     run_id,
                     c.sku_class,
-                    c.seleccion.familia_campeona,
-                    c.seleccion.motivo,
-                    c.seleccion.adverso,
-                    _json(dict(c.seleccion.medianas_r)),
-                    _json(list(c.seleccion.skus_comparables)),
-                    _json(dict(c.seleccion.excluidos)),
-                    _json(dict(c.seleccion.familias_excluidas)),
+                    *_seleccion(c.seleccion),
                     _json(dict(c.conteos)),
                     _json(dict(c.porcentajes)),
                     c.mediana_r,
@@ -555,8 +564,9 @@ def guardar_evaluacion(
             "INSERT INTO m3_cartera (run_id, sku_class, familia, metrica, n_skus, "
             "n_instancias, n_calculables, n_no_calculables, media, mediana, p25, p75) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            _filas_cartera(run_id, evaluaciones),
+            _filas_cartera(run_id, [e.prueba for e in evaluaciones]),
         )
+        _insertar_prueba(conn, run_id, resultado)
         _insertar_observaciones(conn, run_id, observaciones)
         _cambiar_estado(conn, run_id, "SELECCIONADA")
 
@@ -735,12 +745,16 @@ def _fijar_corte(
     estado: EstadoCorrida,
     t_star: pd.Timestamp,
     lanzamientos_tardios: Sequence[SkuExclusion],
+    exclusiones: Sequence[SkuExclusion],
+    clases: Mapping[str, SkuClass],
 ) -> None:
-    """Corte y lanzamientos tardios de M1, dentro de la transaccion del llamador.
+    """Corte, lanzamientos tardios de M1 y exclusiones de M2, en la transaccion
+    del llamador.
 
     Se escriben una sola vez y despues solo se comparan. Una corrida que ya paso
     de EVALUADA sin ellos (anterior a la version 10) no los recibe: sus
     observaciones tampoco existen y M4 responde ``metadata_missing``.
+    ``clases`` da la categoria de cada producto excluido.
     """
     tardias = sorted({e.sku_id for e in lanzamientos_tardios})
     otras = sorted({e.cause for e in lanzamientos_tardios} - {CAUSA_LANZAMIENTO_TARDIO})
@@ -748,6 +762,9 @@ def _fijar_corte(
         raise _inconsistente(
             f"corrida {run_id}: lanzamientos tardios duplicados o con otra causa"
         )
+    excluidas = sorted(
+        (e.sku_id, clases[e.sku_id], e.code, e.cause) for e in exclusiones
+    )
     previo = conn.execute(
         "SELECT t_star FROM m3_cortes WHERE run_id = ?", (run_id,)
     ).fetchone()
@@ -762,6 +779,11 @@ def _fijar_corte(
             "INSERT INTO m3_lanzamientos_tardios (run_id, sku, causa) VALUES (?, ?, ?)",
             [(run_id, sku, CAUSA_LANZAMIENTO_TARDIO) for sku in tardias],
         )
+        conn.executemany(
+            "INSERT INTO m3_exclusiones (run_id, sku, sku_class, codigo, causa) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(run_id, *fila) for fila in excluidas],
+        )
         return
     guardadas = [
         sku
@@ -770,10 +792,149 @@ def _fijar_corte(
             (run_id,),
         )
     ]
-    if (previo[0], guardadas) != (_fecha(t_star), tardias):
+    fijadas = conn.execute(
+        "SELECT sku, sku_class, codigo, causa FROM m3_exclusiones WHERE run_id = ? "
+        "ORDER BY sku",
+        (run_id,),
+    ).fetchall()
+    if (previo[0], guardadas, fijadas) != (_fecha(t_star), tardias, excluidas):
         raise _inconsistente(
-            f"corrida {run_id}: corte o lanzamientos tardios distintos de los fijados"
+            f"corrida {run_id}: corte, lanzamientos tardios o exclusiones distintos "
+            "de los fijados"
         )
+
+
+def _insertar_prueba(
+    conn: sqlite3.Connection, run_id: str, resultado: ResultadoEvaluacion
+) -> None:
+    """Significancia, confirmacion, seleccion previa e intervalos de r (0007)."""
+    conn.executemany(
+        "INSERT INTO m3_significancia (run_id, sku_class, n_probados, n_mejores,"
+        " n_peores, n_mejores_by, n_peores_by, nivel_fcr)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                run_id,
+                c.sku_class,
+                c.significancia.n_probados,
+                c.significancia.n_mejores,
+                c.significancia.n_peores,
+                c.significancia.n_mejores_by,
+                c.significancia.n_peores_by,
+                c.significancia.nivel_fcr,
+            )
+            for c in resultado.categorias
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO m3_confirmaciones (run_id, sku_class, familia_campeona, estado,"
+        " causa, p_iut, p_holm, alfa, efecto_n_skus, efecto_mediana_r,"
+        " efecto_ic_inferior, efecto_ic_superior, efecto_causa, contendiente)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                run_id,
+                c.sku_class,
+                c.confirmacion.familia_campeona,
+                c.confirmacion.estado,
+                c.confirmacion.causa,
+                c.confirmacion.p_iut,
+                c.confirmacion.p_holm,
+                c.confirmacion.alfa,
+                *(
+                    (None,) * 5
+                    if (efecto := c.confirmacion.efecto_linea_base) is None
+                    else (
+                        efecto.n_skus,
+                        efecto.mediana_r,
+                        *_limites(efecto.ic_mediana),
+                        efecto.causa,
+                    )
+                ),
+                c.contendiente,
+            )
+            for c in resultado.categorias
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO m3_comparaciones (run_id, sku_class, competidora, n_skus,"
+        " mediana_razon, ic_mediana_inferior, ic_mediana_superior, hodges_lehmann,"
+        " ic_hodges_lehmann_inferior, ic_hodges_lehmann_superior, n_victorias,"
+        " ic_victorias_inferior, ic_victorias_superior, estadistico_wilcoxon,"
+        " p_wilcoxon, p_iut, n_mejores, n_peores, causa)"
+        f" VALUES ({', '.join('?' * 19)})",
+        [
+            (
+                run_id,
+                c.sku_class,
+                f.competidora,
+                f.n_skus,
+                f.mediana_razon,
+                *_limites(f.ic_mediana),
+                f.hodges_lehmann,
+                *_limites(f.ic_hodges_lehmann),
+                f.n_victorias,
+                *_limites(f.ic_victorias),
+                f.estadistico_wilcoxon,
+                f.p_wilcoxon,
+                f.p_iut,
+                f.n_mejores,
+                f.n_peores,
+                f.causa,
+            )
+            for c in resultado.categorias
+            for f in c.confirmacion.comparaciones
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO m3_seleccion_previa (run_id, sku_class, familia_campeona, motivo,"
+        " adverso, medianas_r, skus_comparables, excluidos, familias_excluidas)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (run_id, c.sku_class, *_seleccion(c.seleccion_previa))
+            for c in resultado.categorias
+            if c.seleccion_previa is not None
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO m3_intervalos_r (run_id, sku, nivel, inferior, superior,"
+        " inferior_cola, nivel_fcr, inferior_fcr, superior_fcr, inferior_cola_fcr)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (run_id, v.sku, *_intervalo(v.intervalo_r), *_intervalo(v.intervalo_r_fcr))
+            for v in resultado.skus
+            if v.intervalo_r is not None
+        ],
+    )
+
+
+def _seleccion(seleccion: SeleccionCategoria) -> tuple[Any, ...]:
+    return (
+        seleccion.familia_campeona,
+        seleccion.motivo,
+        seleccion.adverso,
+        _json(dict(seleccion.medianas_r)),
+        _json(list(seleccion.skus_comparables)),
+        _json(dict(seleccion.excluidos)),
+        _json(dict(seleccion.familias_excluidas)),
+    )
+
+
+def _limites(intervalo: Intervalo | None) -> tuple[float | None, float | None]:
+    return (
+        (None, None) if intervalo is None else (intervalo.inferior, intervalo.superior)
+    )
+
+
+def _intervalo(intervalo: IntervaloRazon | None) -> tuple[float | None, ...]:
+    if intervalo is None:
+        return (None, None, None, None)
+    return (
+        intervalo.nivel,
+        intervalo.inferior,
+        intervalo.superior,
+        intervalo.inferior_cola,
+    )
 
 
 def _insertar_observaciones(
@@ -832,16 +993,22 @@ def _inconsistente(mensaje: str) -> EvidenciaInconsistenteError:
 
 
 def _filas_metricas(
-    run_id: str, evaluacion: EvaluacionSku
+    run_id: str, evaluacion: EvaluacionBloques
 ) -> Iterator[tuple[Any, ...]]:
-    for candidato in (evaluacion.linea_base, *evaluacion.candidatos):
+    """Cada ventana de la reserva y la fila 'agregada' del bloque de prueba."""
+    prueba = {
+        c.candidato_id: c
+        for c in (evaluacion.prueba.linea_base, *evaluacion.prueba.candidatos)
+    }
+    for candidato in (evaluacion.reserva.linea_base, *evaluacion.reserva.candidatos):
         clave = (run_id, evaluacion.sku, candidato.candidato_id)
         for ventana in candidato.por_ventana:
             yield from _filas(clave, _fecha(ventana.origen), ventana.metricas)
-        if candidato.agregadas is not None:
-            yield from _filas(clave, VENTANA_AGREGADA, candidato.agregadas)
+        bloque = prueba[candidato.candidato_id]
+        if bloque.agregadas is not None:
+            yield from _filas(clave, VENTANA_AGREGADA, bloque.agregadas)
         for nombre in _CONTEOS:
-            yield (*clave, VENTANA_AGREGADA, nombre, getattr(candidato, nombre), None)
+            yield (*clave, VENTANA_AGREGADA, nombre, getattr(bloque, nombre), None)
 
 
 def _filas(

@@ -5,6 +5,7 @@ import sqlite3
 import sys
 from dataclasses import replace
 
+import pandas as pd
 import pytest
 from tests._plataforma import crear_base_plataforma
 from tests.forecasting.test_correcciones_m3 import caso
@@ -101,6 +102,10 @@ def test_cli_sin_manifiesto_ni_checkpoints_no_duplica_publicacion(
         assert conn.execute(
             "SELECT estado, COUNT(*) FROM m3_unidades GROUP BY estado"
         ).fetchall() == [("confirmada", 114)]
+        # La exclusion que el fallo del reintento provocaria no cambia la receta
+        # durable: SKU conserva sus dos familias y su veredicto.
+        assert conn.execute("SELECT sku FROM m3_veredictos").fetchall() == [("SKU",)]
+        assert conn.execute("SELECT COUNT(*) FROM m3_exclusiones").fetchone() == (0,)
         assert conn.execute(
             "SELECT estado, error_json FROM ejecuciones"
         ).fetchall() == [
@@ -188,11 +193,15 @@ def test_fallo_original_resuelto_en_el_reintento_completa_la_receta(
 
     root, db = tmp_path / "data", crear_base_plataforma(tmp_path / "central.db")
     source = fuente(tmp_path)
+    frame = pd.read_csv(source)
+    pd.concat(
+        [frame, frame.assign(sku_id="OTRO", demand_qty=frame.demand_qty + 100)]
+    ).to_csv(source, index=False)
     original = pipeline_module._fit_unit
 
     def fallo_dl(task):
         fitted = original(task)
-        if fitted.selection.family == "dl":
+        if (fitted.selection.sku_id, fitted.selection.family) == ("SKU", "dl"):
             raise RuntimeError("dependencia no disponible durante el ajuste final")
         return fitted
 
@@ -212,7 +221,11 @@ def test_fallo_original_resuelto_en_el_reintento_completa_la_receta(
         sys.settrace(previous)
     manifest = root / "runs/corrida/candidatos.json"
     frozen = json.loads(manifest.read_text())
-    assert {c["familia"] for c in frozen["candidatos"]} == {"ml"}
+    # SKU sale al cerrar L2 con una sola familia evaluable; OTRO conserva las dos.
+    assert {(c["sku"], c["familia"]) for c in frozen["candidatos"]} == {
+        ("OTRO", "ml"),
+        ("OTRO", "dl"),
+    }
     if perder_archivos:
         manifest.unlink()
         for path in (root / "runs/corrida/checkpoints/L2").glob("*.json"):
@@ -223,6 +236,12 @@ def test_fallo_original_resuelto_en_el_reintento_completa_la_receta(
             ("PUBLICADA",)
         ]
         assert conn.execute("SELECT COUNT(*) FROM m3_protocolos").fetchone() == (1,)
+        # El ajuste resuelto no devuelve SKU a la competencia: manda la exclusion
+        # durable del intento original.
+        assert conn.execute("SELECT sku FROM m3_veredictos").fetchall() == [("OTRO",)]
+        assert conn.execute("SELECT sku, codigo FROM m3_exclusiones").fetchall() == [
+            ("SKU", "eligibility.fewer_than_two_families")
+        ]
     assert json.loads(manifest.read_text()) == frozen
 
 

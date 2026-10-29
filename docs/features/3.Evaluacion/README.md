@@ -1,14 +1,18 @@
 # Módulo 3: evaluación retrospectiva y selección definitiva
 
-M3 recibe el Parquet inmutable de M1 y los candidatos completos de M2. Evalúa
-cada configuración sobre todas las ventanas completas de la reserva final del
-20 %, compara con Seasonal Naive, selecciona por categoría y publica los
+M3 recibe el Parquet inmutable de M1 y los candidatos completos de M2. Pronostica
+todas las ventanas completas de la reserva final del 20 % y la divide en un
+bloque de selección y un bloque de prueba (ADR-023). En el bloque de selección
+elige la familia campeona de cada categoría y la congela. En el bloque de
+prueba emite los veredictos, prueba a cada campeón contra Seasonal Naive y
+confirma al campeón de la categoría frente a las demás familias. Publica los
 resultados de cada SKU entregado en el handoff y de cada SKU cuyos ajustes L2
 fallaron todos. Estos últimos reciben FALLO_TECNICO con la causa registrada
 por L2 y cuentan en los conteos y porcentajes de su clase. Sus unidades de
-línea base se incluyen en el total previsto. Las exclusiones previas de M2
-se consultan por separado en la procedencia. M3 no ejecuta HPO, no retunea y
-no desarrolla la interfaz de M4.
+línea base se incluyen en el total previsto. Los SKU que M2 excluyó, antes de
+L2 o por la regla de dos familias al cerrar L2, no reciben veredicto: la
+publicación los lista en `m3_exclusiones` con su categoría, código y causa.
+M3 no ejecuta HPO, no retunea y no desarrolla la interfaz de M4.
 
 ## Ejecución
 
@@ -138,10 +142,10 @@ el manifiesto autorizado y se consulta antes de restaurar un archivo perdido.
 | 3.1 | Reserva fija, exclusiones y causalidad | `comun/reserva.py`, `generador_pronosticos/particion.py` | `tests/test_pipeline.py`, `test_generacion_reserva.py` |
 | 3.2 | Manifiesto estricto y fábricas compartidas | `forecasting/adaptador_candidatos/` | `tests/forecasting/adaptador_candidatos/` |
 | 3.3 | Ajuste único y ventanas diarias completas | `forecasting/generador_pronosticos/` | `tests/forecasting/test_generacion_reserva.py` |
-| 3.4 | Métricas, selección, cinco veredictos y HLN-DM/BH | `forecasting/evaluaciones/` | `tests/forecasting/evaluaciones/` |
+| 3.4 | Métricas, bloques de la reserva, selección congelada, cinco veredictos, HLN-DM/BH por categoría y confirmación del campeón | `forecasting/evaluaciones/` | `tests/forecasting/evaluaciones/` |
 | 3.5 | SQLite, Parquet/CSV y cartera precalculada | `forecasting/persistencia_evidencia/` | `tests/forecasting/persistencia_evidencia/`, prueba de control |
 | 3.6 | Lectura del Parquet M1 sin cambiarlo | `Pipeline.ingest`, `ReserveCut`, generador | pruebas del pipeline y de control con entrada M1 |
-| 3.7 | Trazabilidad, límites y auditoría | este documento, ADR-021 y documentos de cada capacidad | suite completa y corrida coordinada de integración |
+| 3.7 | Trazabilidad, límites y auditoría | este documento, ADR-021, ADR-023 y documentos de cada capacidad | suite completa y corrida coordinada de integración |
 
 Las rutas de código son relativas a `src/pred_engine/`. La plataforma consume
 la evidencia con las operaciones M3 de su `DataRepository` (contrato de lectura
@@ -168,19 +172,31 @@ identidad. La confirmación de resultado y marcador es atómica.
 ## Evidencia científica
 
 Se publican MAE, RMSE, MASE, ME y la razón de RMSE frente a Seasonal Naive por
-candidato y ventana. La política `3.4.3-inicial` selecciona por mediana de la
-razón dentro de cada categoría, con compuerta de línea base y desempate por
-simplicidad. Los cinco veredictos permanecen visibles por SKU.
+candidato y ventana de toda la reserva. La política `3.4.4-bloques` fija antes
+de abrir la reserva la fracción de selección (0,4) y los límites de los
+bloques. Selecciona por mediana de la razón dentro de cada categoría, con
+compuerta de línea base y desempate por simplicidad, solo en el bloque de
+selección. Los cinco veredictos y las métricas agregadas leen el bloque de
+prueba y permanecen visibles por SKU.
 
-HLN-DM con BH acompaña esas métricas. `--dm-min-origins` fija el mínimo de
-orígenes comunes antes de abrir la reserva; el valor inicial es 30. La prueba
-solo usa datos reales y H coincide con el horizonte de cada ventana. Una
-muestra insuficiente produce una causa sin p-valor. La prueba no cambia el
-veredicto descriptivo y los datos sintéticos nunca se prueban.
+HLN-DM acompaña esas métricas en el bloque de prueba, con Benjamini-Hochberg
+dentro de cada categoría y los conteos de Benjamini-Yekutieli como
+sensibilidad. Cada SKU probado lleva el intervalo de la razón que invierte la
+prueba. `--dm-min-origins` fija el mínimo de orígenes comunes antes de abrir
+la reserva; el valor inicial es 30. La prueba solo usa datos reales y H
+coincide con el horizonte de cada ventana. Una muestra insuficiente produce
+una causa sin p-valor. La prueba no cambia el veredicto descriptivo y los
+datos sintéticos nunca se prueban. Cada categoría lleva además la
+confirmación de su campeón frente a cada familia competidora (Wilcoxon,
+intersección-unión, Holm entre categorías e intervalo bootstrap por bloques de
+días), la mejor familia que no es Chronos-2 y la selección de robustez en los
+pliegues L3.
 
-La selección y el puntaje comparten reserva. Por tanto, los resultados no
-constituyen una prueba no sesgada de desempeño futuro. ADR-021 documenta los
-límites y las contradicciones de los textos anteriores.
+La selección lee solo el bloque de selección y los veredictos solo el bloque
+de prueba, con un embargo de H − 1 orígenes entre ambos. La evidencia sigue
+siendo retrospectiva sobre un solo corte t*. ADR-021 y ADR-023 documentan los
+límites de la evidencia retrospectiva. La significancia del grupo final de
+tres corridas se calcula con la regla de ADR-023, decisión 10.
 
 ## Aceptación del hito
 

@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from pred_engine.comun.ejecucion_paralela import iterar_unidades
+from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos import SkuClass
 from pred_engine.comun.modelos.manifiesto_candidatos import (
@@ -35,17 +36,23 @@ from pred_engine.forecasting.evaluaciones.calculo_errores import (
     FAMILIA_LINEA_BASE,
     MODELO_LINEA_BASE,
     VERSION_METRICAS,
+    BloquesReserva,
     EntradaSku,
+    EvaluacionSku,
     PronosticoFechado,
     SerieCandidato,
-    evaluar_sku,
+    evaluar_bloques,
     pronosticar_linea_base,
     separar_reserva,
 )
 from pred_engine.forecasting.evaluaciones.veredictos import (
     POLITICA_INICIAL,
+    CandidatoPrevio,
     PoliticaSeleccion,
+    SeleccionCategoria,
     emitir_veredictos,
+    evaluacion_previa,
+    seleccionar_previa,
 )
 from pred_engine.forecasting.generador_pronosticos import (
     ConfiguracionPronosticos,
@@ -108,6 +115,11 @@ def politica_serializable(politica: PoliticaSeleccion) -> dict[str, Any]:
         "familias_elegibles": {
             c: list(f) for c, f in politica.familias_elegibles.items()
         },
+        "fraccion_seleccion": politica.fraccion_seleccion,
+        "n_min_confirmacion": politica.n_min_confirmacion,
+        "bloque_bootstrap": politica.bloque_bootstrap,
+        "replicas_bootstrap": politica.replicas_bootstrap,
+        "semilla_bootstrap": politica.semilla_bootstrap,
     }
 
 
@@ -259,11 +271,16 @@ class ControladorEvaluacion:
         config = ConfiguracionPronosticos(
             evaluation.settings.horizon, self.codigo_version
         )
+        # Los bloques quedan fijos con el protocolo, antes de abrir la reserva.
+        bloques = BloquesReserva.de(
+            corte, config.horizonte, self.politica.fraccion_seleccion
+        )
         versiones = library_versions()
         protocolo = {
             "versiones": versiones,
             "pronosticos": asdict(config),
             "politica": politica_serializable(self.politica),
+            "bloques": bloques.limites(),
             "datos_sinteticos": datos_sinteticos,
             "configuracion_m2": configuracion_m2,
         }
@@ -301,6 +318,12 @@ class ControladorEvaluacion:
                 contenido = guardado["manifiesto"]
         else:
             identidad = previo[0]
+        if guardado is None and not fitting.m3_skus:
+            codigos = sorted({e.code for e in fitting.exclusions if e.code})
+            raise ValueError(
+                f"ningun SKU llega a M3: {len(fitting.exclusions)} SKU excluidos "
+                f"antes de M3 ({', '.join(codigos)})"
+            )
         try:
             if guardado is not None and (
                 identidad != identidad_esperada
@@ -336,6 +359,7 @@ class ControladorEvaluacion:
                     identidad.run_id,
                     config,
                     n_previstas=guardado["n_unidades_previstas"],
+                    exclusiones_m2=guardado["procedencia"]["exclusiones_m2"],
                     exclusiones=guardado["procedencia"]["exclusiones_m3"],
                     exclusiones_datos=guardado["procedencia"]["exclusiones_datos"],
                     publicada_previamente=True,
@@ -346,14 +370,23 @@ class ControladorEvaluacion:
             reconstruidos = json.loads(nuevo)["candidatos"]
             if guardado is not None:
                 # Un fallo de ajuste, del intento original o del reintento, no
-                # cambia la receta ya aceptada. Los demas ajustes deben coincidir.
+                # cambia la receta ya aceptada, ni la exclusion al cerrar L2 que
+                # ese fallo provoca (ADR-023). Los demas ajustes deben coincidir.
                 fallidos = {(u.sku_id, u.family) for u in fitting.units if u.failed}
                 fallidos |= {
                     (f["sku"], f["familia"])
                     for f in guardado["procedencia"]["fallos_m2"]
                 }
+                excluidos = {e.sku_id for e in fitting.exclusions} | {
+                    e["sku_id"] for e in guardado["procedencia"]["exclusiones_m2"]
+                }
                 esperados, reconstruidos = (
-                    [c for c in lista if (c["sku"], c["familia"]) not in fallidos]
+                    [
+                        c
+                        for c in lista
+                        if (c["sku"], c["familia"]) not in fallidos
+                        and c["sku"] not in excluidos
+                    ]
                     for lista in (esperados, reconstruidos)
                 )
             if esperados != reconstruidos:
@@ -376,14 +409,21 @@ class ControladorEvaluacion:
                 run_id_m2=self.run_id_m2,
             )
             raise
+        # La procedencia durable manda sobre los fallos y exclusiones del reintento.
         fallos_l2 = {}
         if guardado is not None:
             for fallo in guardado["procedencia"]["fallos_m2"]:
                 fallos_l2.setdefault(fallo["sku"], []).append(fallo["causa"])
+            exclusiones_m2 = guardado["procedencia"]["exclusiones_m2"]
         else:
             for unidad in fitting.units:
                 if unidad.failed:
                     fallos_l2.setdefault(unidad.sku_id, []).append(unidad.record.error)
+            exclusiones_m2 = [asdict(e) for e in fitting.exclusions]
+        # Un SKU que salio al cerrar L2 conserva su unidad fallida en la procedencia,
+        # pero no recibe veredicto: no es un FALLO_TECNICO (ADR-023).
+        for exclusion in exclusiones_m2:
+            fallos_l2.pop(exclusion["sku_id"], None)
         run_id = registrar_corrida(
             self.conn,
             identidad,
@@ -447,6 +487,21 @@ class ControladorEvaluacion:
             (sum(c.sku == sku for c in handoff.candidatos) + 1) * len(planes[sku])
             for sku in skus
         )
+        # La seleccion de robustez solo lee historia hasta t*: queda fija con el
+        # protocolo y una reanudacion la lee de la procedencia durable, aunque
+        # el reintento haya perdido ajustes L2 (ADR-023).
+        seleccion_previa = (
+            guardado["procedencia"]["seleccion_previa"]
+            if guardado is not None
+            else [
+                asdict(s)
+                for s in seleccionar_previa(
+                    _previas(evaluation, handoff, clases, corte),
+                    {clases[sku] for sku in skus},
+                    self.politica,
+                )
+            ]
+        )
         fijar_protocolo(
             self.conn,
             run_id,
@@ -465,6 +520,7 @@ class ControladorEvaluacion:
                 "exclusiones_m2": [asdict(e) for e in fitting.exclusions],
                 "exclusiones_m3": exclusiones,
                 "exclusiones_datos": exclusiones_datos,
+                "seleccion_previa": seleccion_previa,
                 "fallos_m2": [
                     {"sku": u.sku_id, "familia": u.family, "causa": u.record.error}
                     for u in fitting.units
@@ -472,7 +528,7 @@ class ControladorEvaluacion:
                 ],
                 "discrepancia_metrica_hpo": evaluation.settings.metric != "rmse",
                 "limite": (
-                    "seleccion y puntaje sobre la misma reserva; "
+                    "seleccion y puntaje en bloques disjuntos de la misma reserva; "
                     "evidencia retrospectiva"
                 ),
             },
@@ -480,6 +536,13 @@ class ControladorEvaluacion:
             n_unidades_previstas=n_previstas,
             t_star=corte.t_star,
             lanzamientos_tardios=fitting.late_launches,
+            # Los lanzamientos tardios de M1 ya tienen su tabla.
+            exclusiones=[
+                SkuExclusion(**e)
+                for e in exclusiones_m2
+                if e["sku_id"] not in {t.sku_id for t in fitting.late_launches}
+            ],
+            clases=clases,
             ejecucion_id=ejecucion_id,
         )
         # La reserva solo se lee despues del handoff validado y protocolo durable.
@@ -533,11 +596,20 @@ class ControladorEvaluacion:
                     FAMILIA_LINEA_BASE,
                     MODELO_LINEA_BASE,
                 )
-                evaluaciones.append(evaluar_sku(entrada, corte, linea_base=base))
+                evaluaciones.append(
+                    evaluar_bloques(entrada, corte, bloques, linea_base=base)
+                )
             resultado = emitir_veredictos(
                 evaluaciones,
+                bloques,
                 datos_sinteticos=datos_sinteticos,
                 politica=self.politica,
+                seleccion_previa=tuple(
+                    SeleccionCategoria(
+                        **{**s, "skus_comparables": tuple(s["skus_comparables"])}
+                    )
+                    for s in seleccion_previa
+                ),
             )
             resultado = replace(
                 resultado,
@@ -565,6 +637,7 @@ class ControladorEvaluacion:
             run_id,
             config,
             n_previstas=n_previstas,
+            exclusiones_m2=exclusiones_m2,
             exclusiones=exclusiones,
             exclusiones_datos=exclusiones_datos,
             publicada_previamente=False,
@@ -669,6 +742,7 @@ class ControladorEvaluacion:
         config: ConfiguracionPronosticos,
         *,
         n_previstas: int,
+        exclusiones_m2: Sequence[Mapping[str, Any]],
         exclusiones: Mapping[str, Any],
         exclusiones_datos: Mapping[str, Any],
         publicada_previamente: bool,
@@ -691,6 +765,9 @@ class ControladorEvaluacion:
                 "horizonte": config.horizonte,
                 "n_unidades": n_previstas,
                 "n_fallos": n_fallos,
+                # SKU fuera de M3 segun la procedencia de la publicacion: en una
+                # reanudacion manda sobre las exclusiones del reintento.
+                "exclusiones_m2": list(exclusiones_m2),
                 "exclusiones": exclusiones,
                 "exclusiones_datos": exclusiones_datos,
                 "publicada_previamente": publicada_previamente,
@@ -712,6 +789,35 @@ def _serie(panel: pd.DataFrame, sku: str) -> pd.Series:
 
 def _id_linea_base(sku: str) -> str:
     return f"{sku}/{FAMILIA_LINEA_BASE}/{MODELO_LINEA_BASE}"
+
+
+def _previas(
+    evaluation: EvaluationArtifact,
+    handoff: HandoffValidado,
+    clases: Mapping[str, SkuClass],
+    corte: ReserveCut,
+) -> tuple[EvaluacionSku, ...]:
+    """Pliegues L3 de cada candidato del handoff, para la seleccion de robustez."""
+    ids = {(c.sku, c.familia): c for c in handoff.candidatos}
+    por_sku: dict[str, tuple[np.ndarray, list[CandidatoPrevio]]] = {}
+    for evaluado in evaluation.candidates:
+        seleccion = evaluado.fitted.selection
+        candidato = ids.get((seleccion.sku_id, seleccion.family))
+        if candidato is None:
+            continue
+        _, propios = por_sku.setdefault(candidato.sku, (evaluado.fitted.series, []))
+        propios.append(
+            CandidatoPrevio(
+                candidato.candidato_id,
+                candidato.familia,
+                candidato.modelo,
+                evaluado.walk_forward,
+            )
+        )
+    return tuple(
+        evaluacion_previa(sku, clases[sku], corte.t_star, historia, candidatos)
+        for sku, (historia, candidatos) in sorted(por_sku.items())
+    )
 
 
 @dataclass(frozen=True, slots=True)

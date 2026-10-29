@@ -24,8 +24,9 @@ interpretar texto. Solo la ingesta tenía una tabla de códigos (`ingesta/inform
 2. Los dos casos genéricos reciben tipo propio como subclases, para no romper a quien ya los
    captura: `ArchivoNoCsvError` y `RutaFueraDeRawError` (`ValueError`) y
    `NingunTrialCompletoError` (`SelectionContractError`).
-3. Cada exclusión de SKU antes de L2 lleva un código del grupo `eligibility.*`
-   (`SkuExclusion.code`); los números de la causa siguen en el texto.
+3. Cada exclusión de SKU, antes de L2 o al cerrar L2 (regla de dos familias,
+   ADR-023), lleva un código del grupo `eligibility.*` (`SkuExclusion.code`);
+   los números de la causa siguen en el texto.
 4. Los códigos se escriben como campo **opcional** junto al texto (`code`) en `corrida.json`
    (`exclusions`, `failures`), `unidades.jsonl`, `progreso.jsonl` (`excluded`, `unit_finished`,
    `stage_finished` fallida) y `seleccion.jsonl` (`no_ejecutable`, `error`). El formato

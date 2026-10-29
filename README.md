@@ -234,7 +234,9 @@ holds one line per SKU with the four families, whether each was selected, failed
 or was left out (by the policy matrix or by the families the run was configured with), the
 evidence of the chosen configuration, its HPO trials (completed, pruned and failed, each with its
 reason) and the Walk-Forward result per window. It is written as soon as L2 finishes, even if L3
-fails. The trials are read from `hpo/` without Optuna:
+fails. A family of an excluded SKU could not run and carries the exclusion's `cause` and `code`,
+except a family whose L2 unit failed before the two-family rule excluded the SKU: it keeps its
+error and trials. The trials are read from `hpo/` without Optuna:
 
 ```python
 from pred_engine.comun.ensayos_hpo import leer_ensayos

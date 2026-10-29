@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 from tests._plataforma import crear_base_plataforma
 
-from pred_engine.forecasting.adaptador_candidatos import LoteRechazadoError
+from pred_engine.forecasting.adaptador_candidatos import FABRICAS, LoteRechazadoError
 from pred_engine.forecasting.base import SeasonalNaiveStub
 from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
 from pred_engine.forecasting.persistencia_evidencia import aplicar_migraciones_m3
@@ -67,8 +67,9 @@ def test_m2_a_m3_publica_todas_las_ventanas_y_los_dos_skus(tmp_path):
         ("segundo", "EVIDENCIA_INSUFICIENTE"),
     ]
     assert conn.execute("SELECT estado FROM m3_corridas").fetchall() == [("PUBLICADA",)]
-    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 24
-    assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 48
+    # Dos SKU por SARIMA, LightGBM y la linea base, con 6 origenes de H = 2.
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 36
+    assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 72
     base = conn.execute(
         "SELECT valor FROM m3_pronosticos "
         "WHERE candidato_id = 'proof-sku/seasonal_naive/seasonal_naive' "
@@ -77,6 +78,36 @@ def test_m2_a_m3_publica_todas_las_ventanas_y_los_dos_skus(tmp_path):
     assert [fila[0] for fila in base] == pytest.approx([26.35, 27.7])
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert conn.execute("SELECT ejecucion_id FROM m3_protocolos").fetchone()[0] == 1
+    protocolo, procedencia = (
+        json.loads(texto)
+        for texto in conn.execute(
+            "SELECT protocolo, procedencia FROM m3_protocolos"
+        ).fetchone()
+    )
+    # Politica y bloques quedan fijos con el protocolo, antes de abrir la reserva:
+    # reserva de 7 dias con H = 2, seleccion de 2 dias y 4 origenes de prueba.
+    politica = protocolo["politica"]
+    assert (politica["version"], politica["fraccion_seleccion"]) == (
+        "3.4.4-bloques",
+        0.4,
+    )
+    assert (
+        politica["n_min_confirmacion"],
+        politica["bloque_bootstrap"],
+        politica["replicas_bootstrap"],
+        politica["semilla_bootstrap"],
+    ) == (10, 14, 2000, 20261029)
+    bloques = protocolo["bloques"]
+    assert bloques["dias_seleccion"] == 2
+    assert (bloques["origenes_seleccion"]["n"], bloques["origenes_prueba"]) == (
+        1,
+        {"n": 4, "primero": "2024-01-30", "ultimo": "2024-02-02"},
+    )
+    assert procedencia["limite"] == (
+        "seleccion y puntaje en bloques disjuntos de la misma reserva; "
+        "evidencia retrospectiva"
+    )
+    assert [s["sku_class"] for s in procedencia["seleccion_previa"]] == ["smooth"]
     assert conn.execute(
         "SELECT n_skus, n_instancias, n_calculables FROM m3_cartera "
         "WHERE familia = 'classical' AND metrica = 'rmse'"
@@ -85,7 +116,7 @@ def test_m2_a_m3_publica_todas_las_ventanas_y_los_dos_skus(tmp_path):
     assert pd.read_csv(Path(exports["m3_veredictos"]).with_suffix(".csv"))[
         "sku"
     ].tolist() == ["proof-sku", "segundo"]
-    assert pd.read_parquet(exports["m3_pronosticos"]).shape[0] == 48
+    assert pd.read_parquet(exports["m3_pronosticos"]).shape[0] == 72
     conn.close()
 
 
@@ -137,14 +168,14 @@ def test_l4_en_paralelo_publica_lo_mismo_que_en_un_proceso(tmp_path):
             codigo_version="revision-1",
             datos_sinteticos=True,
             data_root=tmp_path / "data",
-            fabricas={"classical": _SarimaQueAnotaProceso(procesos_ajuste)},
+            fabricas={**FABRICAS, "classical": _SarimaQueAnotaProceso(procesos_ajuste)},
             procesos=procesos,
         )
         resultado = pipeline.validate(evaluation)
         assert resultado.audit_bundle["estado"] == "PUBLICADA"
         evidencias.append(_evidencia_m3(conn))
         conn.close()
-    assert len(evidencias[0]["unidades"]) == 24
+    assert len(evidencias[0]["unidades"]) == 36
     assert evidencias[1] == evidencias[0]
     pids = {int(p.name) for p in procesos_ajuste.iterdir()}
     assert os.getpid() in pids
@@ -167,7 +198,7 @@ def test_publicada_se_relee_sin_modelos_ni_reescritura(tmp_path, monkeypatch):
     def imposible(configuracion, *, seed):
         raise KeyboardInterrupt("no se debe ajustar una corrida publicada")
 
-    pipeline.validator.fabricas = {"classical": imposible}
+    pipeline.validator.fabricas = {"classical": imposible, "ml": imposible}
     emision = json.loads((tmp_path / "corrida" / "candidatos.json").read_text())[
         "emitido_en"
     ]
@@ -225,23 +256,27 @@ def test_caida_antes_y_despues_del_commit_preserva_la_unidad_durable(
     with pytest.raises(KeyboardInterrupt, match="caida de proceso"):
         pipeline.validate(evaluation)
     # Las ventanas nuevas de los candidatos de un SKU van en un solo commit: el
-    # SARIMA de proof-sku tiene 6 y quedan todas durables o ninguna.
+    # SARIMA y el LightGBM de proof-sku tienen 6 cada uno y quedan todas durables
+    # o ninguna.
     assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == (
-        6 if despues else 0
+        12 if despues else 0
     )
     assert conn.execute("SELECT estado FROM m3_corridas").fetchone()[0] == "EN_CURSO"
     previa = conn.execute(
-        "SELECT origen, emitido_en FROM m3_unidades ORDER BY origen"
+        "SELECT candidato_id, origen, emitido_en FROM m3_unidades "
+        "ORDER BY candidato_id, origen"
     ).fetchall()
     final = pipeline.validate(evaluation)
     assert final.audit_bundle["estado"] == "PUBLICADA"
-    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 12
-    assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 24
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 18
+    assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 36
     if despues:
         assert (
             conn.execute(
-                "SELECT origen, emitido_en FROM m3_unidades "
-                "WHERE candidato_id = 'proof-sku/classical/sarima' ORDER BY origen"
+                "SELECT candidato_id, origen, emitido_en FROM m3_unidades "
+                "WHERE candidato_id IN "
+                "('proof-sku/classical/sarima', 'proof-sku/ml/lightgbm') "
+                "ORDER BY candidato_id, origen"
             ).fetchall()
             == previa
         )
@@ -277,12 +312,14 @@ def test_reanuda_fases_durables_sin_ajustar_ni_cambiar_unidades(
     unidades = conn.execute(
         "SELECT * FROM m3_unidades ORDER BY candidato_id, origen"
     ).fetchall()
-    assert len(unidades) == 12
+    assert len(unidades) == 18
 
     def no_ajustar(*args, **kwargs):
         raise KeyboardInterrupt("no se ajusta una fase con ventanas completas")
 
-    pipeline.validator.fabricas = {"classical": no_ajustar}
+    pipeline.validator.fabricas = {"classical": no_ajustar, "ml": no_ajustar}
+    # Seasonal Naive tampoco se ajusta en los pliegues L3: la seleccion de
+    # robustez se lee de la procedencia durable del protocolo.
     monkeypatch.setattr(SeasonalNaiveStub, "fit", no_ajustar)
     resultado = pipeline.validate(evaluation)
     assert resultado.audit_bundle["estado"] == "PUBLICADA"
@@ -292,6 +329,7 @@ def test_reanuda_fases_durables_sin_ajustar_ni_cambiar_unidades(
         ).fetchall()
         == unidades
     )
+    assert conn.execute("SELECT COUNT(*) FROM m3_seleccion_previa").fetchone()[0] > 0
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()
 
@@ -328,7 +366,7 @@ def test_caida_despues_del_registro_reusa_la_validacion_durable(tmp_path, monkey
     resultado = pipeline.validate(evaluation)
     assert resultado.audit_bundle["estado"] == "PUBLICADA"
     assert conn.execute("SELECT COUNT(*) FROM m3_corridas").fetchone()[0] == 1
-    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 12
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 18
     conn.close()
 
 
@@ -339,11 +377,15 @@ def test_fallo_de_un_sku_es_visible_y_no_imputa_ceros_ni_detiene_otro(tmp_path):
                 raise ValueError("fallo aislado de ajuste")
             return super().fit(y)
 
+    def falla_una_serie(config, *, seed):
+        return FalloDeUnaSerie(1, seed)
+
     conn = _conexion(tmp_path)
+    # Los dos candidatos de proof-sku fallan en todas sus ventanas.
     pipeline, request = _caso(
         tmp_path,
         conn,
-        fabricas={"classical": lambda config, *, seed: FalloDeUnaSerie(1, seed)},
+        fabricas={"classical": falla_una_serie, "ml": falla_una_serie},
     )
     datos = pd.read_csv(request.csv_path)
     pd.concat(
@@ -354,18 +396,20 @@ def test_fallo_de_un_sku_es_visible_y_no_imputa_ceros_ni_detiene_otro(tmp_path):
         ("proof-sku", "FALLO_TECNICO"),
         ("segundo", "EVIDENCIA_INSUFICIENTE"),
     ]
-    assert resultado.validation.audit_bundle["n_fallos"] == 6
-    assert conn.execute(
-        "SELECT DISTINCT estado FROM m3_unidades "
-        "WHERE candidato_id = 'proof-sku/classical/sarima'"
-    ).fetchall() == [("fallida",)]
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM m3_pronosticos "
-            "WHERE candidato_id = 'proof-sku/classical/sarima' AND valor IS NULL"
-        ).fetchone()[0]
-        == 12
-    )
+    assert resultado.validation.audit_bundle["n_fallos"] == 12
+    for candidato in ("proof-sku/classical/sarima", "proof-sku/ml/lightgbm"):
+        assert conn.execute(
+            "SELECT DISTINCT estado FROM m3_unidades WHERE candidato_id = ?",
+            (candidato,),
+        ).fetchall() == [("fallida",)]
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM m3_pronosticos "
+                "WHERE candidato_id = ? AND valor IS NULL",
+                (candidato,),
+            ).fetchone()[0]
+            == 12
+        )
     causa = json.loads(
         conn.execute(
             "SELECT causa FROM m3_unidades WHERE estado = 'fallida' LIMIT 1"
@@ -396,9 +440,13 @@ def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
                 raise ValueError("causa concreta del ajuste L2")
             return super().fit(y)
 
+    def falla_l2(config, *, seed):
+        return FalloL2(1, seed)
+
     conn = _conexion(tmp_path)
     pipeline, request = _caso(tmp_path, conn)
-    pipeline.factories = {"classical": lambda config, *, seed: FalloL2(1, seed)}
+    # Las dos familias de proof-sku fallan en L2; las de segundo se ajustan.
+    pipeline.factories = {"classical": falla_l2, "ml": falla_l2}
     if con_sku_sano:
         datos = pd.read_csv(request.csv_path)
         pd.concat(
@@ -427,8 +475,9 @@ def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
         ).fetchone()[0]
         == 6
     )
+    # Linea base de proof-sku y, para segundo, sus dos candidatos y su linea base.
     assert resultado.validation.audit_bundle["n_unidades"] == (
-        18 if con_sku_sano else 6
+        24 if con_sku_sano else 6
     )
     assert conn.execute("SELECT estado FROM m3_corridas").fetchall() == [("PUBLICADA",)]
     conn.close()
@@ -437,22 +486,23 @@ def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
 def test_candidato_l2_rechazado_por_3_2_conserva_su_veredicto_ante_otro_fallo_l2(
     tmp_path,
 ):
+    @dataclass(frozen=True)
     class SeleccionSinEstacional:
-        family = "classical"
+        family: str
 
         def select(self, request, profile):
-            # Ajusta en L2, pero 3.2 exige las claves estacionales explicitas.
+            # Ajusta en L2, pero 3.2 exige todas las claves de la familia.
             return SelectionResult(
                 sku_id=request.sku_id,
                 sku_class=request.sku_class,
-                family="classical",
+                family=self.family,
                 profile=profile,
                 produced_by="seleccion-sin-estacional",
                 forecast_config={"p": 0, "d": 0, "q": 0},
             )
 
     class SeleccionFallida:
-        family = "ml"
+        family = "dl"
 
         def select(self, request, profile):
             raise ValueError("causa concreta de la otra familia L2")
@@ -461,24 +511,26 @@ def test_candidato_l2_rechazado_por_3_2_conserva_su_veredicto_ante_otro_fallo_l2
         conn = _conexion(raiz)
         pipeline, request = _caso(raiz, conn)
         registry = StrategyRegistry()
-        registry.register("classical", SeleccionSinEstacional())
-        registry.register("ml", SeleccionFallida())
+        registry.register("classical", SeleccionSinEstacional("classical"))
+        registry.register("ml", SeleccionSinEstacional("ml"))
+        registry.register("dl", SeleccionFallida())
         pipeline.router = SelectionRouter(ConfiguredTopologyPolicy(familias), registry)
 
         def fabrica(config, *, seed):
             return SeasonalNaiveStub(1, seed)
 
-        pipeline.factories = {"classical": fabrica, "ml": fabrica}
+        pipeline.factories = {"classical": fabrica, "ml": fabrica, "dl": fabrica}
         resultado = pipeline.run(request)
         conn.close()
         assert [u.failed for u in resultado.fitting.units] == [
-            familia == "ml" for familia in familias
+            familia == "dl" for familia in familias
         ]
         (unico,) = resultado.validation.verdicts
         return {k: v for k, v in unico.evidence.items() if k != "run_id"}
 
-    solo_rechazo = veredicto(tmp_path / "sin-fallo-l2", ("classical",))
-    con_fallo_l2 = veredicto(tmp_path / "con-fallo-l2", ("classical", "ml"))
+    # Dos familias entregadas en L2: la regla de dos familias no excluye el SKU.
+    solo_rechazo = veredicto(tmp_path / "sin-fallo-l2", ("classical", "ml"))
+    con_fallo_l2 = veredicto(tmp_path / "con-fallo-l2", ("classical", "ml", "dl"))
     assert solo_rechazo["veredicto"] == "FALLO_TECNICO"
     assert con_fallo_l2 == solo_rechazo
 
@@ -494,13 +546,16 @@ def test_fallo_parcial_marca_comparacion_incompleta_y_conserva_ventanas(tmp_path
     pipeline, request = _caso(
         tmp_path,
         conn,
-        fabricas={"classical": lambda config, *, seed: FalloInicial(1, seed)},
+        fabricas={
+            **FABRICAS,
+            "classical": lambda config, *, seed: FalloInicial(1, seed),
+        },
     )
     resultado = pipeline.run(request)
     evidencia = resultado.validation.verdicts[0].evidence
     assert resultado.validation.audit_bundle["n_fallos"] == 1
     assert evidencia["comparacion_incompleta"] == 1
-    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 12
+    assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 18
     assert (
         conn.execute(
             "SELECT COUNT(*) FROM m3_pronosticos WHERE valor IS NULL"
@@ -529,7 +584,8 @@ def test_parquet_de_m1_entra_sin_transformacion_ni_republicacion(tmp_path):
         )
     )
     assert resultado.complete is True
-    assert resultado.validation.verdicts[0].evidence["n_ventanas"] == 6
+    # Reserva de 7 dias con H = 2: el bloque de prueba tiene los origenes 2 a 5.
+    assert resultado.validation.verdicts[0].evidence["n_ventanas"] == 4
     assert ingesta.parquet_path.read_bytes() == contenido
     assert not (tmp_path / "sin_publicacion").exists()
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -555,39 +611,59 @@ def test_handoff_incompatible_queda_rechazado_sin_abrir_ventanas(tmp_path):
 
 
 def test_historia_corta_entregada_por_m2_se_excluye_antes_de_ajustar(tmp_path):
+    @dataclass(frozen=True)
     class SeleccionFija:
-        family = "classical"
+        family: str
+        configuracion: tuple[tuple[str, object], ...]
 
         def select(self, request, profile):
             return SelectionResult(
                 sku_id=request.sku_id,
                 sku_class=request.sku_class,
-                family="classical",
+                family=self.family,
                 profile=profile,
                 produced_by="seleccion-fija",
-                forecast_config={
-                    "p": 0,
-                    "d": 0,
-                    "q": 0,
-                    "P": 0,
-                    "D": 0,
-                    "Q": 0,
-                    "m": 0,
-                    "tendencia": "c",
-                },
+                forecast_config=dict(self.configuracion),
             )
+
+    sarima = (
+        ("p", 0),
+        ("d", 0),
+        ("q", 0),
+        ("P", 0),
+        ("D", 0),
+        ("Q", 0),
+        ("m", 0),
+        ("tendencia", "c"),
+    )
+    lightgbm = (
+        ("lags", 1),
+        ("m", 1),
+        ("n_estimators", 1),
+        ("max_depth", 1),
+        ("learning_rate", 0.1),
+        ("min_child_weight", 0.0),
+        ("subsample", 1.0),
+        ("colsample_bytree", 1.0),
+        ("reg_alpha", 0.0),
+        ("reg_lambda", 0.0),
+    )
+
+    def fabrica(config, *, seed):
+        return SeasonalNaiveStub(1, seed)
 
     conn = _conexion(tmp_path)
     pipeline, request = _caso(tmp_path, conn)
     pd.read_csv(request.csv_path).head(8).to_csv(request.csv_path, index=False)
+    # Dos familias entregadas en L2: la regla de dos familias no excluye el SKU y
+    # es M3 quien lo excluye por historia corta.
     registry = StrategyRegistry()
-    registry.register("classical", SeleccionFija())
+    registry.register("classical", SeleccionFija("classical", sarima))
+    registry.register("ml", SeleccionFija("ml", lightgbm))
     pipeline.router = SelectionRouter(
-        ConfiguredTopologyPolicy(("classical",)), registry
+        ConfiguredTopologyPolicy(("classical", "ml")), registry
     )
-    pipeline.factories = {
-        "classical": lambda config, *, seed: SeasonalNaiveStub(1, seed)
-    }
+    pipeline.factories = {"classical": fabrica, "ml": fabrica}
     pipeline.settings = EvaluationSettings(min_train=2, horizon=1, step=1)
     resultado = pipeline.run(request)
     assert resultado.complete is True
