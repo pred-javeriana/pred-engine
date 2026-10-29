@@ -94,7 +94,11 @@ La coordinación de recuperación vive en 3.0.
 
 `publicar` exige un veredicto para cada SKU del handoff. Prepara todos los
 Parquet y CSV en un directorio temporal y solo entonces coloca el conjunto
-completo en su destino. Si falla la preparación, SQLite conserva SELECCIONADA
+completo en su destino. Lee cada tabla en orden de `rowid`, en bloques de
+10.000 filas, y mantiene abiertos un escritor Parquet y un flujo CSV por tabla.
+Cada bloque conserva los tipos declarados en SQLite, incluso si está vacío o
+solo contiene NULL. No carga todas las tablas de la corrida en memoria.
+Si falla la preparación, SQLite conserva SELECCIONADA
 y no aparece un conjunto parcial nuevo. Una caída después del renombrado y
 antes del commit deja una exportación completa no publicada que puede
 reconstruirse desde SQLite al reanudar.
