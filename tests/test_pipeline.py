@@ -198,28 +198,6 @@ def test_degenerate_final_forecast_fails_its_unit_under_rule_3(tmp_path):
     assert "configuracion={'p': 1, 'd': 0, 'q': 0" in str(raised.value)
 
 
-def test_degenerate_final_forecast_records_its_stable_code(tmp_path):
-    pipeline = verification_pipeline()
-    request = request_at(tmp_path)
-    source = pd.read_csv(request.csv_path)
-    second = source.assign(sku_id="second", demand_qty=source["demand_qty"] + 3)
-    pd.concat([source, second]).to_csv(request.csv_path, index=False)
-    sano = pipeline.factories["classical"]
-    llamadas = []
-
-    def fabrica(config, *, seed):
-        llamadas.append(seed)
-        if len(llamadas) == 1:
-            return _NullForecaster()
-        return sano(config, seed=seed)
-
-    pipeline.factories["classical"] = fabrica
-    fitting = pipeline.fit(pipeline.ingest(request))
-    failed = [unit for unit in fitting.units if unit.failed]
-    assert [unit.record.codigo for unit in failed] == ["model.degenerate_forecast"]
-    assert len(fitting.candidates) == 1
-
-
 def test_l2_rejects_missing_daily_observation(tmp_path):
     pipeline = verification_pipeline()
     ingestion = pipeline.ingest(request_at(tmp_path))

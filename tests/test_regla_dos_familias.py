@@ -170,6 +170,50 @@ def test_la_regla_no_excluye_un_sku_sin_familias_evaluables(tmp_path, monkeypatc
     assert resultado.fitting.m3_skus == {"sano", "roto"}
 
 
+class _PronosticoCero:
+    def fit(self, y):
+        return self
+
+    def predict(self, horizonte):
+        return np.zeros(horizonte)
+
+
+def test_un_pronostico_final_degenerado_registra_su_codigo_estable(tmp_path):
+    # La regla #3 (ADR-020) rechaza el pronostico final cero de SARIMA para
+    # "nulo": su unidad registra model.degenerate_forecast y el SKU, con solo
+    # LightGBM evaluable, sale por la regla de dos familias. Con la semilla 15 el
+    # HPO de SARIMA completa su ensayo en los dos SKU.
+    pipeline = build_pipeline(
+        AJUSTES, families=("classical", "ml"), n_trials=1, seed=SEMILLA
+    )
+    sana = pipeline.factories["classical"]
+    llamadas = []
+
+    def fabrica(config, *, seed):
+        # L2 ajusta los SKU en orden: la primera llamada es la de "nulo".
+        llamadas.append(seed)
+        return _PronosticoCero() if len(llamadas) == 1 else sana(config, seed=seed)
+
+    pipeline.factories = {**pipeline.factories, "classical": fabrica}
+    fitting = pipeline.fit(pipeline.ingest(_entrada(tmp_path, "nulo", "sano")))
+
+    assert [
+        (u.sku_id, u.family, u.record.codigo) for u in fitting.units if u.failed
+    ] == [("nulo", "classical", "model.degenerate_forecast")]
+    assert [(c.selection.sku_id, c.selection.family) for c in fitting.candidates] == [
+        ("sano", "classical"),
+        ("sano", "ml"),
+    ]
+    assert fitting.exclusions == (
+        SkuExclusion(
+            "nulo",
+            "menos de dos familias evaluables tras L2: evaluable ml; "
+            "fallidas classical (model.degenerate_forecast)",
+            ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
+        ),
+    )
+
+
 def test_con_una_sola_familia_enrutada_el_sku_sale_y_m3_no_publica(tmp_path):
     # Una corrida de una sola familia no deja ningun SKU con dos familias
     # evaluables: informa sus exclusiones y M3 no registra corrida.
