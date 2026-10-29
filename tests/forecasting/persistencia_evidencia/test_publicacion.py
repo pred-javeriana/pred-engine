@@ -89,7 +89,7 @@ def test_publicar_deriva_el_parquet_de_sqlite_y_abre_la_vista(
         assert ruta.with_suffix(".csv").read_bytes() == evidencia[tabla].to_csv(
             index=False
         ).encode("utf-8")
-    assert not list((tmp_path / run_id).glob("*.tmp"))
+    assert [p.name for p in tmp_path.iterdir()] == [run_id]
     # El Parquet de la corrida ya dice PUBLICADA y trae el origen de los datos.
     corrida_parquet = pd.read_parquet(rutas["m3_corridas"])
     assert corrida_parquet["estado"].tolist() == ["PUBLICADA"]
@@ -254,6 +254,32 @@ def test_visibilidad_y_recuperacion_tras_renombrar_antes_del_commit(
                 pd.testing.assert_frame_equal(
                     pd.read_parquet(destino / run_id / f"{tabla}.parquet"), frame
                 )
+
+
+def test_publicar_borra_el_temporal_de_una_caida_abrupta(tmp_path: Path) -> None:
+    conn = base()
+    run_id = _seleccionada(conn)
+    abandonado = tmp_path / f".{run_id}-abc123"
+    abandonado.mkdir()
+    (abandonado / "m3_metricas.parquet").write_bytes(b"parcial")
+
+    publicar(conn, run_id, tmp_path)
+
+    assert [p.name for p in tmp_path.iterdir()] == [run_id]
+
+
+def test_publicar_conserva_los_temporales_de_otras_corridas(tmp_path: Path) -> None:
+    conn = base()
+    run_id = _seleccionada(conn)
+    ajeno = tmp_path / ".m3-otra-corrida-abc123"
+    ajeno.mkdir()
+    parcial = ajeno / "m3_metricas.parquet"
+    parcial.write_bytes(b"parcial de otra corrida")
+
+    publicar(conn, run_id, tmp_path)
+
+    assert parcial.read_bytes() == b"parcial de otra corrida"
+    assert {p.name for p in tmp_path.iterdir()} == {run_id, ajeno.name}
 
 
 def test_una_corrida_publicada_no_se_reescribe(tmp_path: Path) -> None:

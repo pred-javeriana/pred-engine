@@ -102,6 +102,10 @@ Si falla la preparación, SQLite conserva SELECCIONADA
 y no aparece un conjunto parcial nuevo. Una caída después del renombrado y
 antes del commit deja una exportación completa no publicada que puede
 reconstruirse desde SQLite al reanudar.
+Antes de reexportar una corrida SELECCIONADA, el motor elimina los directorios
+temporales de intentos anteriores de esa corrida. Lo hace con el bloqueo de
+escritura tomado para no borrar una exportación en curso. Los temporales de
+otras corridas se conservan.
 
 M4 consume solo la vista `evidencia_publicada` y tablas de sus corridas
 PUBLICADA. En pred-platform, `DataRepository` ofrece esa lectura como

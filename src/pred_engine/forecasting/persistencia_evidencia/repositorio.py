@@ -569,8 +569,9 @@ def publicar(
     Exige veredicto para todo SKU del manifiesto. Las unidades sin marcador no
     pueden existir: cada pronostico referencia la suya. El estado cambia antes
     de exportar, dentro de la transaccion, para que el Parquet de m3_corridas
-    diga PUBLICADA; si la exportacion falla, se revierte. Repetir reexporta
-    (`.tmp` y `os.replace`) y publica; una corrida PUBLICADA no se reescribe.
+    diga PUBLICADA; si la exportacion falla, se revierte. Repetir reexporta en
+    un directorio temporal, lo renombra con `os.replace` y publica; una corrida
+    PUBLICADA no se reescribe.
     """
     destino = Path(directorio) / run_id
     rutas = {tabla: destino / f"{tabla}.parquet" for tabla in TABLAS}
@@ -594,6 +595,10 @@ def publicar(
             )
         _cambiar_estado(conn, run_id, "PUBLICADA")
         destino.parent.mkdir(parents=True, exist_ok=True)
+        # Una caida abrupta deja el temporal de un intento anterior; con el
+        # bloqueo de escritura tomado ningun otro intento de esta corrida corre.
+        for abandonado in destino.parent.glob(f".{run_id}-*"):
+            shutil.rmtree(abandonado)
         # Ningun archivo final aparece hasta que termina la exportacion completa.
         with tempfile.TemporaryDirectory(
             prefix=f".{run_id}-", dir=destino.parent
