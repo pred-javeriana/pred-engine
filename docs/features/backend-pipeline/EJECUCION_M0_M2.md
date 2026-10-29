@@ -58,7 +58,7 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
 
 | Opción | Por defecto | Efecto |
 | --- | --- | --- |
-| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. Con una sola familia ningún SKU llega a L3: la regla de dos familias los excluye y la corrida termina en L2 con código 1 y sus causas. |
+| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. Con una sola familia ningún SKU compite en M3: la regla de dos familias excluye cada SKU que entrega su candidato y M3 juzga `FALLO_TECNICO` al que no lo entrega. Si ninguna unidad falla, la corrida termina en L2 con código 1 y sus causas. |
 | `--no-foundation` | apagada | Corre sin la familia `foundation`, igual que `--families classical ml dl`; para equipos sin el extra `foundation` o con poca memoria. Los SKU `lumpy` quedan con la familia clásica sola y no compiten en M3. No se combina con `--families`. |
 | `--trials` | presupuesto por perfil | Trials de HPO por estudio; con presupuestos chicos algunos SKU pueden quedar sin trial completo. |
 | `--workers` | núcleos - 1 | Procesos para las unidades de L2 y L3 y para los pronósticos por SKU de L4. |

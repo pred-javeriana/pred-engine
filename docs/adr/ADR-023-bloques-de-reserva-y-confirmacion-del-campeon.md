@@ -82,11 +82,13 @@ Naive, con un ganador obvio.
    familia evaluable sale de la competencia con
    `eligibility.fewer_than_two_families` (ADR-022), sea cual sea el número de
    familias enrutadas. No llega a L3 ni recibe veredicto. Sin ninguna familia
-   evaluable, el SKU sigue a M3, que lo juzga `FALLO_TECNICO`. Por eso una
-   corrida de una sola familia, o un SKU `lumpy` en una corrida sin la familia
-   fundacional, no llega a M3. Una unidad L2 fallida no queda en checkpoint y se
-   repite al reanudar, así que un reintento puede cambiar la exclusión. Por eso
-   M3 honra las exclusiones de la procedencia durable de su protocolo.
+   evaluable, el SKU sigue a M3, que lo juzga `FALLO_TECNICO`. Por eso ningún
+   SKU de una corrida de una sola familia, ni un SKU `lumpy` de una corrida sin
+   la familia fundacional, compite en M3: el que entrega su candidato sale por
+   esta regla y el que no lo entrega queda `FALLO_TECNICO`. Una unidad L2
+   fallida no queda en checkpoint y se repite al reanudar, así que un reintento
+   puede cambiar la exclusión. Por eso M3 honra las exclusiones de la
+   procedencia durable de su protocolo.
 9. **Publicación.** La migración 0011 (`esquema_m3_0007.sql`) agrega
    `m3_significancia`, `m3_confirmaciones`, `m3_comparaciones`,
    `m3_seleccion_previa`, `m3_intervalos_r` y `m3_exclusiones`. Las tablas
