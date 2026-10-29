@@ -12,7 +12,9 @@ Sin esa configuracion, la biblioteca conserva L4 bloqueada.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +30,9 @@ from pred_engine.comun.ejecucion_paralela import (
     ResultadoUnidad,
     ejecutar_unidades,
     emitir_evento,
+    enviar_unidad,
+    pool_de_unidades,
+    resultado_de,
 )
 from pred_engine.comun.errores_codigo import (
     ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
@@ -583,6 +588,12 @@ class Pipeline:
         # Ruta del flujo de progreso (``progreso.jsonl``); None lo desactiva.
         self.progress = progress
         self.checkpoints = checkpoints
+        # Pool que comparten L2 y L3 mientras corre ``run`` (con mas de un proceso).
+        self._pool: ProcessPoolExecutor | None = None
+        # L3 enviadas apenas termino su L2, por (sku, familia), con su hora de envio.
+        self._early_l3: dict[
+            tuple[str, str], tuple[Future[ResultadoUnidad[ResultadoWalkForward]], float]
+        ] = {}
 
     def _run_units[T, R](
         self,
@@ -591,8 +602,18 @@ class Pipeline:
         labels: Sequence[EtiquetaUnidad],
         paths: Sequence[Path | None],
         persist: Callable[[T, ResultadoUnidad[R]], None],
+        *,
+        submitted: Mapping[int, tuple[Future[ResultadoUnidad[R]], float]] | None = None,
+        on_result: Callable[[ResultadoUnidad[R]], None] | None = None,
     ) -> list[ResultadoUnidad[R]]:
-        restored = [load_result(path) for path in paths]
+        """``submitted``: unidades ya enviadas al pool, por indice. Con el pool,
+        ``on_result`` recibe cada resultado (restaurado o nuevo) apenas existe."""
+        submitted = submitted or {}
+        # Una unidad ya enviada guarda su checkpoint al terminar: no es restaurada.
+        restored = [
+            None if i in submitted else load_result(path)
+            for i, path in enumerate(paths)
+        ]
         pending = [i for i, result in enumerate(restored) if result is None]
         for label, result in zip(labels, restored, strict=True):
             if result is not None:
@@ -610,17 +631,109 @@ class Pipeline:
                     code=None,
                     reused=True,
                 )
-        fresh = ejecutar_unidades(
-            function,
-            [tasks[i] for i in pending],
-            procesos=self.workers,
-            etiquetas=[labels[i] for i in pending],
-            progreso=self.progress,
-            al_completar=persist,
-        )
+        if self._pool is None:
+            fresh = ejecutar_unidades(
+                function,
+                [tasks[i] for i in pending],
+                procesos=self.workers,
+                etiquetas=[labels[i] for i in pending],
+                progreso=self.progress,
+                al_completar=persist,
+            )
+        else:
+            sent = {
+                i: submitted.get(i)
+                or (
+                    enviar_unidad(
+                        self._pool,
+                        function,
+                        tasks[i],
+                        labels[i],
+                        self.progress,
+                        labels[i].etapa,
+                        persist,
+                    ),
+                    time.time(),
+                )
+                for i in pending
+            }
+            if on_result is not None:
+                for result in restored:
+                    if result is not None:
+                        on_result(result)
+            # Cada resultado se atiende al terminar, no en el orden de las tareas.
+            done_by_index: dict[int, ResultadoUnidad[R]] = {}
+            waiting = {future: i for i, (future, _) in sent.items()}
+            while waiting:
+                done, _ = wait(waiting, return_when=FIRST_COMPLETED)
+                for future in done:
+                    i = waiting.pop(future)
+                    result = resultado_de(future, labels[i], self.progress, sent[i][1])
+                    done_by_index[i] = result
+                    if on_result is not None:
+                        on_result(result)
+            fresh = [done_by_index[i] for i in pending]
         for index, result in zip(pending, fresh, strict=True):
             restored[index] = result
         return cast(list[ResultadoUnidad[R]], restored)
+
+    @contextmanager
+    def _pool_l2_l3(self) -> Iterator[None]:
+        """Un solo pool para las unidades de L2 y L3 cuando hay mas de un proceso."""
+        if self.workers == 1:
+            yield
+            return
+        with pool_de_unidades(self.workers) as pool:
+            self._pool = pool
+            try:
+                yield
+            finally:
+                self._pool = None
+                self._early_l3.clear()
+
+    def _evaluation_task(self, candidate: FittedCandidate) -> _EvaluationTask:
+        family = candidate.selection.family
+        factory = self.factories.get(family)
+        if factory is None:
+            raise ValueError(f"No model factory for {family}")
+        task = _EvaluationTask(
+            candidate.selection, candidate.series, factory, self.settings
+        )
+        if self.checkpoints is None:
+            return task
+        return replace(
+            task,
+            checkpoint=self.checkpoints.path(
+                "L3",
+                {
+                    "selection": task.selection.model_dump(mode="json"),
+                    "series": task.series.tolist(),
+                    "evaluation": asdict(task.settings),
+                },
+            ),
+        )
+
+    def _submit_early_l3(self, result: ResultadoUnidad[FittedCandidate]) -> None:
+        """Envia el L3 de un candidato apenas termina su L2, si no esta restaurado."""
+        candidate = result.valor
+        if candidate is None or self._pool is None:
+            return
+        task = self._evaluation_task(candidate)
+        if load_result(task.checkpoint) is not None:
+            return
+        sku_id, family = candidate.selection.sku_id, candidate.selection.family
+        self._early_l3[(sku_id, family)] = (
+            enviar_unidad(
+                self._pool,
+                _evaluate_unit,
+                task,
+                self._label("L3", sku_id, family),
+                self.progress,
+                "L3",
+                _persist_evaluation,
+            ),
+            time.time(),
+        )
 
     def _emit(self, event: str, /, **data: Any) -> None:
         if self.progress is not None:
@@ -802,6 +915,7 @@ class Pipeline:
             labels,
             [t.checkpoint for t in tasks],
             _persist_fit,
+            on_result=self._submit_early_l3,
         )
         units = _units(
             "L2",
@@ -831,43 +945,24 @@ class Pipeline:
             and any(u.failed for u in fitting.units)
         ):
             raise ValueError("L3 requires fitted candidates")
-        tasks: list[_EvaluationTask] = []
-        for candidate in fitting.candidates:
-            family = candidate.selection.family
-            factory = self.factories.get(family)
-            if factory is None:
-                raise ValueError(f"No model factory for {family}")
-            tasks.append(
-                _EvaluationTask(
-                    candidate.selection, candidate.series, factory, self.settings
-                )
-            )
+        tasks = [self._evaluation_task(c) for c in fitting.candidates]
         labels = [
             self._label("L3", c.selection.sku_id, c.selection.family)
             for c in fitting.candidates
         ]
-        if self.checkpoints is not None:
-            tasks = [
-                replace(
-                    task,
-                    checkpoint=self.checkpoints.path(
-                        "L3",
-                        {
-                            "selection": task.selection.model_dump(mode="json"),
-                            "series": task.series.tolist(),
-                            "evaluation": asdict(task.settings),
-                        },
-                    ),
-                )
-                for task in tasks
-            ]
         self._plan("L3", labels)
+        early = {
+            i: self._early_l3.pop(key)
+            for i, c in enumerate(fitting.candidates)
+            if (key := (c.selection.sku_id, c.selection.family)) in self._early_l3
+        }
         results = self._run_units(
             _evaluate_unit,
             tasks,
             labels,
             [t.checkpoint for t in tasks],
             _persist_evaluation,
+            submitted=early,
         )
         units = _units(
             "L3",
@@ -922,44 +1017,52 @@ class Pipeline:
             self.validate,
         )
         value: Any = request
-        for index, operation in enumerate(operations):
-            current = executions[index]
-            if current.definition.id == "L4" and self.validator is None:
+        # L2 y L3 comparten un pool, que se cierra antes de M3 o si la corrida falla.
+        with ExitStack() as pool:
+            for index, operation in enumerate(operations):
+                current = executions[index]
+                if current.definition.id == "L2":
+                    pool.enter_context(self._pool_l2_l3())
+                elif current.definition.id == "L4":
+                    pool.close()
+                if current.definition.id == "L4" and self.validator is None:
+                    executions[index] = replace(
+                        current,
+                        state="blocked",
+                        message=current.definition.capability,
+                    )
+                    return PipelineResult(tuple(executions))
+                current = replace(current, started_at=time.time())
+                self._emit("stage_started", stage=current.definition.id)
+                try:
+                    value = operation(value)
+                except Exception as exc:
+                    executions[index] = replace(
+                        current,
+                        state="failed",
+                        message=str(exc),
+                        finished_at=time.time(),
+                    )
+                    self._emit(
+                        "stage_finished",
+                        stage=current.definition.id,
+                        state="failed",
+                        message=str(exc),
+                        code=codigo_de(exc, etapa=str(current.definition.id)),
+                    )
+                    raise PipelineExecutionError(
+                        current.definition.id,
+                        PipelineResult(tuple(executions)),
+                        str(exc),
+                    ) from exc
                 executions[index] = replace(
                     current,
-                    state="blocked",
-                    message=current.definition.capability,
-                )
-                return PipelineResult(tuple(executions))
-            current = replace(current, started_at=time.time())
-            self._emit("stage_started", stage=current.definition.id)
-            try:
-                value = operation(value)
-            except Exception as exc:
-                executions[index] = replace(
-                    current,
-                    state="failed",
-                    message=str(exc),
+                    state="completed",
+                    output=value,
+                    message=_stage_message(value),
                     finished_at=time.time(),
                 )
                 self._emit(
-                    "stage_finished",
-                    stage=current.definition.id,
-                    state="failed",
-                    message=str(exc),
-                    code=codigo_de(exc, etapa=str(current.definition.id)),
+                    "stage_finished", stage=current.definition.id, state="completed"
                 )
-                raise PipelineExecutionError(
-                    current.definition.id,
-                    PipelineResult(tuple(executions)),
-                    str(exc),
-                ) from exc
-            executions[index] = replace(
-                current,
-                state="completed",
-                output=value,
-                message=_stage_message(value),
-                finished_at=time.time(),
-            )
-            self._emit("stage_finished", stage=current.definition.id, state="completed")
-        return PipelineResult(tuple(executions))
+            return PipelineResult(tuple(executions))
