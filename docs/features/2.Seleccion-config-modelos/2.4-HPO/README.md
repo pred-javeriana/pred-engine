@@ -43,7 +43,8 @@ de SKU (`classical_selection.py::seleccionar_por_panel`,
 EspacioBusqueda (numerico/categorico/ordinal/condicional)
         │
         ▼
-construir_muestreador_tpe()  ──►  optuna.samplers.TPESampler
+construir_muestreador_tpe(seed=derivar_semilla(seed, "familia/sku", 0))
+        │                                   ──►  optuna.samplers.TPESampler
         │
         ▼
 ejecutar_estudio()  (bucle secuencial ask/tell)

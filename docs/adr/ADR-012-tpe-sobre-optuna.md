@@ -31,6 +31,15 @@ n_ei_candidates)` como implementacion del algoritmo TPE. El motor de HPO
 densidades (KDE) y el manejo de espacios mixtos/condicionales que la
 especificacion de Notion pide construir.
 
+Cada estudio siembra su `TPESampler` con
+`derivar_semilla(seed, f"{familia}/{sku_id or 'panel'}", 0)`
+(`pred_engine.comun.walkforward.semillas`), donde `seed` es la semilla global
+de la corrida. Asi cada estudio (cada par familia y SKU, o el panel) tiene su
+propio flujo de propuestas de arranque en frio, reproducible a partir de
+`seed`, y dos estudios de la misma corrida no comparten las mismas primeras
+configuraciones. Un `muestreador` pasado de forma explicita a
+`ejecutar_estudio` se usa tal cual, sin derivar la semilla.
+
 Los espacios mixtos se codifican en `espacio.py`:
 
 - Numericos → `Entero`/`Flotante` (`Flotante(log=True)` para escala

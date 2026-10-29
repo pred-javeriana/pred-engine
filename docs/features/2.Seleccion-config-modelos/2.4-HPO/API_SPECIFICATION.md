@@ -109,6 +109,15 @@ Cada trial ahora registra `trial.set_user_attr("timestamp", ...)` (ISO-8601
 UTC) ademas de `trial_id`/`familia`/`sku_id`. Se propaga a
 `Trial.timestamp` (`comun/dataclasses/hpo.py`) via `registro.py`.
 
+### Semilla del muestreador
+
+Si no se pasa `muestreador`, `ejecutar_estudio` construye el TPE con
+`derivar_semilla(seed, f"{familia}/{sku_id or 'panel'}", 0)`. La semilla
+depende de la semilla global de la corrida, de la familia y del SKU (o
+`panel`), por lo que cada estudio tiene un arranque en frio propio y
+reproducible. `seed` sigue registrandose sin cambios en la solicitud de la
+corrida.
+
 ## `Trial` (`comun/dataclasses/hpo.py`) — campo nuevo
 
 | Campo nuevo | Tipo | Default |
