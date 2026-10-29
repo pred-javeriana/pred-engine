@@ -110,7 +110,7 @@ Familias elegibles de la politica inicial (la matriz 2.2 de enrutamiento de M2):
 | `VALIDADO` | Datos reales, ventanas suficientes, `r < 1` y sin `comparacion_incompleta` |
 | `EXPLORATORIO` | Lo demas: datos sinteticos, `r >= 1` o no calculable, o `comparacion_incompleta` |
 
-Desde la politica `3.4.3-inicial`, si la familia campeona no tiene instancia para un SKU, se usa la siguiente familia con instancia segun la mediana de r de la categoria (empates por nombre, nunca la mejor propia del SKU), y la justificacion lo registra.
+Si la familia campeona no tiene instancia para un SKU, se usa la siguiente familia con instancia segun la mediana de r de la categoria (empates por nombre, nunca la mejor propia del SKU), y la justificacion lo registra.
 
 `comparacion_incompleta` indica que algun candidato no llego a pronosticar
 (`n_candidatos_fallidos`, en 3.2 o 3.3) o que un candidato de una familia
@@ -122,7 +122,7 @@ significancia estadistica. `n_min` es el minimo de **ventanas validas**
 (pronosticos emitidos desde un origen dentro de la reserva y contrastados con
 lo observado) que necesita el campeon de un SKU.
 
-### Diebold-Mariano (ADR-03-008, alternativa 2)
+### Diebold-Mariano (ADR-03-011)
 
 - **Que compara:** en cada SKU, la instancia de la familia campeona (o de la familia de fallback) del SKU contra
   Seasonal Naive. No compara los demas candidatos ni las familias entre si.
@@ -165,9 +165,9 @@ Chronos-2.
 | Pruebas | `tests/forecasting/evaluaciones/` |
 | Constructores de prueba | `tests/_evaluaciones.py` |
 | API | `API_SPECIFICATION.md` |
-| Notion | ADR-03-003, ADR-03-004, ADR-03-006, ADR-03-007, ADR-03-008; TASK-EVAL-3.4-A1/A2 |
+| Notion | ADR-03-003, ADR-03-004, ADR-03-006, ADR-03-007, ADR-03-008, ADR-03-011; TASK-EVAL-3.4-A1/A2 |
 
-## Mejoras respecto al texto de Notion (y por que)
+## Decisiones de implementacion
 
 - **Entrada por ventanas, de cualquier cantidad.** El generador 3.3 entrega
   todas las ventanas diarias completas de H dias. La coordinacion 3.0 guarda
@@ -191,9 +191,9 @@ Chronos-2.
   `emitir_veredictos` y queda en `ResultadoEvaluacion.datos_sinteticos`; 3.5
   lo contrasta con el de la corrida. La tabla `ingestas` de la plataforma no
   lo guarda.
-- **Diebold-Mariano como evidencia, no como regla.** La decision posterior
+- **Diebold-Mariano como evidencia, no como regla.** La decision
   documentada en ADR-03-011 y ADR-021 mantiene HLN-DM con BH activada por defecto, solo
-  sobre datos reales. La politica fija `n_min_dm` (30 inicialmente) sobre
+  sobre datos reales. La politica fija `n_min_dm` (30 por defecto) sobre
   origenes comunes. Si faltan, publica `pocas_ventanas`, no un p-valor. El
   horizonte es H y el resultado no cambia las reglas del veredicto.
 - **Todos los modelos evaluados por SKU con su r** (`modelos_evaluados`), como
