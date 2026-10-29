@@ -96,8 +96,10 @@ def test_run_parquet_con_informes_de_los_mismos_bytes(tmp_path, origenes, ruta):
         str(db),
         "--run-id",
         "compartida",
+        # La serie es smooth: ML y DL cumplen la regla de dos familias.
         "--families",
         "ml",
+        "dl",
         "--trials",
         "1",
         "--min-train",

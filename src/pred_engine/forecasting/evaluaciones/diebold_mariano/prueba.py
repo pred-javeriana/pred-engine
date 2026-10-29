@@ -51,14 +51,26 @@ class PruebaDM:
 class IntervaloRazon:
     """Valores de r que HLN-DM no rechaza al ``nivel`` dado (ADR-023).
 
-    Contiene a r y excluye 1 justo cuando la prueba rechaza a ese nivel.
-    ``superior`` es ``None`` cuando el intervalo no tiene cota superior: la
-    perdida de Seasonal Naive no se distingue de cero a ese nivel.
+    Contiene a r y excluye 1 justo cuando la prueba rechaza a ese nivel. Es
+    [inferior, superior] cuando la perdida de Seasonal Naive se distingue de cero
+    a ese nivel. Si no se distingue, el conjunto no tiene cota superior: es
+    [inferior, infinito), con ``superior`` en ``None``, o tiene dos tramos,
+    [inferior, superior] y [inferior_cola, infinito), y la prueba rechaza los
+    valores entre ambos.
     """
 
     nivel: float
     inferior: float
     superior: float | None
+    inferior_cola: float | None = None
+
+    def contiene(self, rho: float) -> bool:
+        """Si HLN-DM no rechaza ``rho`` a este nivel."""
+        if rho < self.inferior:
+            return False
+        if self.superior is None or rho <= self.superior:
+            return True
+        return self.inferior_cola is not None and rho >= self.inferior_cola
 
 
 def prueba_hln(diferencias: np.ndarray, horizonte: int) -> PruebaDM:
@@ -110,8 +122,9 @@ def intervalo_razon(
 
     Con perdidas a (campeon) y b (linea base), el diferencial a - u * b con
     u = rho ** 2 tiene media y varianza de largo plazo cuadraticas en u, asi que
-    la region aceptada es la de una cuadratica (Fieller, 1954). ``None`` si la
-    prueba no se puede calcular con esas ventanas.
+    la region aceptada es la de una cuadratica (Fieller, 1954): un intervalo, una
+    semirrecta o la union de dos tramos. ``None`` si la prueba no se puede
+    calcular con esas ventanas o no acepta ningun valor.
     """
     if not 0 < nivel < 1:
         raise ValueError("nivel debe estar en (0, 1)")
@@ -130,18 +143,19 @@ def intervalo_razon(
     var_b = _varianza_largo_plazo(b, horizonte)
     cruzada = (var_a + var_b - _varianza_largo_plazo(a - b, horizonte)) / 2
     media_a, media_b = float(a.mean()), float(b.mean())
-    aceptados = _no_positivos(
+    tramos = _no_positivos(
         media_b**2 - kappa * var_b,
         media_a * media_b - kappa * cruzada,
         media_a**2 - kappa * var_a,
     )
-    if aceptados is None:
+    if not tramos:
         return None
-    inferior, superior = aceptados
+    (inferior, superior), *cola = tramos
     return IntervaloRazon(
         nivel,
         math.sqrt(inferior),
         None if math.isinf(superior) else math.sqrt(superior),
+        math.sqrt(cola[0][0]) if cola else None,
     )
 
 
@@ -189,25 +203,32 @@ def _factor_hln(t: int, h: int) -> float:
     return math.sqrt((t + 1 - 2 * h + h * (h - 1) / t) / t)
 
 
-def _no_positivos(alfa: float, beta: float, gamma: float) -> tuple[float, float] | None:
-    """[inf, sup] de {u >= 0 : alfa u^2 - 2 beta u + gamma <= 0}; sup puede ser inf."""
+def _no_positivos(
+    alfa: float, beta: float, gamma: float
+) -> tuple[tuple[float, float], ...]:
+    """Tramos [inf, sup] de {u >= 0 : alfa u^2 - 2 beta u + gamma <= 0}.
+
+    Cero, uno o dos tramos en orden; el ultimo puede terminar en inf.
+    """
     if alfa == 0:
         if beta == 0:
-            return (0.0, math.inf) if gamma <= 0 else None
+            return ((0.0, math.inf),) if gamma <= 0 else ()
         raiz = gamma / (2 * beta)
         if beta > 0:
-            return max(raiz, 0.0), math.inf
-        return (0.0, raiz) if raiz >= 0 else None
+            return ((max(raiz, 0.0), math.inf),)
+        return ((0.0, raiz),) if raiz >= 0 else ()
     discriminante = beta * beta - alfa * gamma
     if alfa > 0:
         if discriminante < 0:
-            return None
+            return ()
         raiz = math.sqrt(discriminante)
         menor, mayor = (beta - raiz) / alfa, (beta + raiz) / alfa
-        return None if mayor < 0 else (max(menor, 0.0), mayor)
+        return () if mayor < 0 else ((max(menor, 0.0), mayor),)
     # alfa < 0: parabola abierta hacia abajo, se acepta fuera de las raices.
     if discriminante <= 0:
-        return 0.0, math.inf
+        return ((0.0, math.inf),)
     raiz = math.sqrt(discriminante)
     menor, mayor = (beta + raiz) / alfa, (beta - raiz) / alfa
-    return (0.0, math.inf) if menor >= 0 else (max(mayor, 0.0), math.inf)
+    if menor >= 0:
+        return ((0.0, menor), (mayor, math.inf))
+    return ((max(mayor, 0.0), math.inf),)

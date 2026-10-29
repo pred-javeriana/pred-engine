@@ -50,8 +50,10 @@ def ejecutar(source, root, db, rid, *flags, parquet=False):
             str(db),
             "--run-id",
             rid,
+            # La serie es smooth: ML y DL cumplen la regla de dos familias.
             "--families",
             "ml",
+            "dl",
             "--trials",
             "1",
             "--min-train",

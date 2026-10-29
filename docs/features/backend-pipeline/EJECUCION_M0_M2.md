@@ -49,16 +49,17 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
    historia admisible y pronóstico de los días reservados. El HPO solo elige
    configuraciones que ajustan en todas las ventanas, y un pronóstico final
    degenerado (regla #3) hace fallar su unidad (ADR-020). Al cerrar L2, un SKU
-   con dos o más familias enrutadas y una sola evaluable sale de la competencia
-   con `eligibility.fewer_than_two_families` (ADR-023) y queda en `exclusions`.
+   con una sola familia evaluable sale de la competencia con
+   `eligibility.fewer_than_two_families` (ADR-023) y queda en `exclusions`, sea
+   cual sea el número de familias enrutadas.
    L3 vuelve a evaluar cada candidato con walk-forward causal.
 
 ## Opciones de M2
 
 | Opción | Por defecto | Efecto |
 | --- | --- | --- |
-| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. |
-| `--no-foundation` | apagada | Corre sin la familia `foundation`, igual que `--families classical ml dl`; para equipos sin el extra `foundation` o con poca memoria. No se combina con `--families`. |
+| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. Con una sola familia ningún SKU llega a L3: la regla de dos familias los excluye y la corrida termina en L2 con código 1 y sus causas. |
+| `--no-foundation` | apagada | Corre sin la familia `foundation`, igual que `--families classical ml dl`; para equipos sin el extra `foundation` o con poca memoria. Los SKU `lumpy` quedan con la familia clásica sola y no compiten en M3. No se combina con `--families`. |
 | `--trials` | presupuesto por perfil | Trials de HPO por estudio; con presupuestos chicos algunos SKU pueden quedar sin trial completo. |
 | `--workers` | núcleos - 1 | Procesos para las unidades de L2 y L3 y para los pronósticos por SKU de L4. |
 | `--min-train`, `--horizon`, `--step`, `--seasonality`, `--metric` | 40, 7, 7, 7, rmse | Ventanas walk-forward del HPO y de L3. |
@@ -202,11 +203,12 @@ al número de núcleos menos uno.
 
 - Con la semilla Kaggle la política no enruta DL: DL solo aplica a SKU
   `smooth` y `erratic`.
-- Con `--no-foundation`, la política 2.2 enruta los SKU `lumpy`
-  solo a la familia clásica. Si esa
-  unidad falla, el SKU queda sin candidato: 2 de 110 con la semilla Kaggle
-  (`100::syn009` y `105::syn005`). Elegir el siguiente trial elegible cuando
-  el ganador falla en L2 es una decisión pendiente (ADR-020).
+- Con `--no-foundation`, la política 2.2 enruta los SKU `lumpy` solo a la
+  familia clásica, así que ningún SKU `lumpy` compite en M3. Si su unidad
+  clásica entrega candidato, el SKU sale con
+  `eligibility.fewer_than_two_families`. Si falla, el SKU queda sin candidato
+  y M3 lo juzga `FALLO_TECNICO`. Elegir el siguiente trial elegible cuando el
+  ganador falla en L2 es una decisión pendiente (ADR-020).
 - La corrida actual ejecuta L4/M3 con ventanas reservadas, recuperación y
   publicación en la base central. La interfaz visual M4 no forma parte de
   esta ruta.

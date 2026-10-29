@@ -154,10 +154,11 @@ Cada condicion lee el bloque de prueba:
 | `VALIDADO` | Datos reales, ventanas suficientes, `r < 1` y sin `comparacion_incompleta` |
 | `EXPLORATORIO` | Lo demas: datos sinteticos, `r >= 1` o no calculable, o `comparacion_incompleta` |
 
-Un SKU con dos o mas familias enrutadas y una sola evaluable al cerrar L2 no
-llega a 3.4: sale con `eligibility.fewer_than_two_families` (ADR-023) y la
-publicacion lo lista en `m3_exclusiones`. Un SKU sin ninguna familia evaluable
-si llega y queda `FALLO_TECNICO`.
+Un SKU con una sola familia evaluable al cerrar L2 no llega a 3.4, sea cual
+sea el numero de familias enrutadas: sale con
+`eligibility.fewer_than_two_families` (ADR-023) y la publicacion lo lista en
+`m3_exclusiones`. Un SKU sin ninguna familia evaluable si llega y queda
+`FALLO_TECNICO`.
 
 Si la familia campeona no tiene instancia para un SKU, se usa la siguiente familia con instancia segun la mediana de r de la categoria en el bloque de seleccion (empates por nombre, nunca la mejor propia del SKU), y la justificacion lo registra.
 
@@ -190,12 +191,15 @@ familia de un SKU en el bloque de seleccion para entrar en el conjunto comun.
   estadistico da la direccion: mejor o peor que Seasonal Naive. Los mismos
   conteos con Benjamini-Yekutieli, valido bajo cualquier dependencia, se
   informan como sensibilidad (`SignificanciaCategoria`).
-- **Intervalo de r:** el conjunto de `rho > 0` para el que HLN-DM no rechaza
+- **Intervalo de r:** el conjunto de `rho >= 0` para el que HLN-DM no rechaza
   sobre `L_campeon - rho^2 L_SN` al nivel `1 - alfa_dm` (Fieller). Contiene a
-  `r` y excluye 1 justo cuando la prueba rechaza. Sin cota superior, `superior`
-  es `None`. Un SKU que BH selecciona lleva ademas el intervalo al nivel FCR
-  `1 - R q / m` de su categoria, con `R` rechazos entre `m` pruebas (Benjamini
-  y Yekutieli, 2005).
+  `r` y excluye 1 justo cuando la prueba rechaza. Si la perdida de SN se
+  distingue de cero, el conjunto es `[inferior, superior]`. Si no se distingue,
+  no tiene cota superior: es `[inferior, infinito)`, con `superior` en `None`,
+  o tiene dos tramos, `[inferior, superior]` y `[inferior_cola, infinito)`, y
+  la prueba rechaza los valores entre ambos. Un SKU que BH selecciona lleva
+  ademas el intervalo al nivel FCR `1 - R q / m` de su categoria, con `R`
+  rechazos entre `m` pruebas (Benjamini y Yekutieli, 2005).
 - **Cuando no se prueba** queda la causa: `datos_sinteticos`,
   `campeon_es_linea_base`, `veredicto:<X>` (solo se prueban SKUs `VALIDADO` o
   `EXPLORATORIO`), `pocas_ventanas` (`T <= h`), `varianza_no_positiva` o
@@ -210,6 +214,63 @@ Para combinar varias corridas, cada SKU conserva por corrida su p-valor
 estadistico (`dm_estadistico`), cuyo signo es el del diferencial medio de
 perdida: negativo cuando el campeon pierde menos que Seasonal Naive.
 
+### Grupo final de corridas (ADR-023)
+
+La evidencia final es un grupo de tres corridas que solo difieren en la
+semilla del motor: 0, 1 y 2. Cada corrida publica su significancia propia, con
+BH dentro de cada categoria. Esa significancia por corrida no es la del grupo:
+las tres corridas usan los mismos productos y dias, asi que no son evidencia
+independiente. Quien agrupa las corridas calcula la significancia del grupo
+con esta regla, y M3 sigue publicando por corrida:
+
+1. Las entradas de cada corrida son `m3_veredictos.dm_p_valor`, el p crudo de
+   HLN-DM, y el signo de `m3_veredictos.dm_estadistico`, que es el signo del
+   diferencial de perdida campeon menos Seasonal Naive cuando la prueba es
+   valida. Negativo significa que el campeon pierde menos.
+2. Un producto entra en la familia de prueba del grupo solo si su
+   `dm_p_valor` no es nulo en las tres corridas. Un producto sin p en alguna
+   corrida queda fuera, por ejemplo si la regla de dos familias lo excluyo o si
+   su prueba tiene `dm_causa`. El resumen del grupo lo lista con su estado en
+   cada corrida.
+3. El p del grupo es el mayor de sus tres p crudos. Es un p valido con
+   cualquier dependencia entre corridas (interseccion-union, Berger 1982).
+   Nunca se suman descubrimientos entre corridas, ni se promedian los p, ni se
+   toma el mayor de los p disponibles, ni se combinan con Fisher o Stouffer.
+4. BH se aplica una sola vez dentro de cada categoria, a q = `alfa_dm` (0.05),
+   sobre los p del grupo de los productos que entran.
+5. Un producto es significativamente mejor que Seasonal Naive en el grupo solo
+   si BH lo rechaza y su estadistico es negativo en las tres corridas. Un
+   producto con signos mixtos sigue en la familia de BH, porque cuenta para el
+   umbral, pero nunca cuenta como mejor.
+
+Ejemplo trabajado, con dos categorias. La columna de signos da el signo de
+`dm_estadistico` en las semillas 0, 1 y 2.
+
+| Categoria | Producto | p semilla 0 | p semilla 1 | p semilla 2 | Signos | p del grupo | p BH | Resultado |
+| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- |
+| smooth | A | 0.001 | 0.004 | 0.002 | -, -, - | 0.004 | 0.012 | mejor |
+| smooth | B | 0.010 | 0.030 | 0.020 | -, -, + | 0.030 | 0.045 | rechazado con signos mixtos |
+| smooth | C | 0.020 | 0.010 | sin p | -, -, sin p | sin p | sin p | fuera de la familia |
+| smooth | D | 0.200 | 0.400 | 0.300 | -, -, - | 0.400 | 0.400 | no rechazado |
+| lumpy | E | 0.040 | 0.045 | 0.030 | -, -, - | 0.045 | 0.090 | no rechazado |
+| lumpy | F | 0.300 | 0.010 | 0.020 | -, -, - | 0.300 | 0.300 | no rechazado |
+
+- C no tiene p en la semilla 2, asi que la familia de smooth tiene m = 3. Si C
+  entrara con el mayor de sus p disponibles (0.020), la familia tendria m = 4 y
+  BH rechazaria tambien a C.
+- B queda rechazado por BH (0.045 <= 0.05), pero su estadistico es positivo en
+  la semilla 2: cuenta en la familia y no es mejor. Smooth tiene 1 producto
+  mejor entre 3 probados.
+- Lumpy es otra familia de BH. E tiene p < 0.05 en cada corrida, pero su p del
+  grupo, 0.045, con m = 2 da p BH = 0.090. F tiene p = 0.010 en la semilla 1,
+  pero su p del grupo es 0.300: una corrida sola no basta. Lumpy tiene 0
+  productos mejores entre 2 probados. Un solo BH sobre las dos categorias daria
+  otro umbral.
+
+La verificacion de quien agrupa las corridas debe reproducir este ejemplo: el
+producto sin p en una corrida, el producto con signos mixtos y la segunda
+categoria.
+
 ### Confirmacion del campeon (ADR-023)
 
 `confirmar_campeones` mide, en el bloque de prueba, si el campeon congelado de
@@ -217,9 +278,16 @@ cada categoria gana a cada familia competidora (las demas familias con mediana
 en la seleccion). Para el campeon `f*` y la competidora `g`:
 
 1. SKUs con ambas instancias y al menos `n_min_dm` ventanas de prueba comunes.
-2. `x_i = log(RMSE_f*,i / RMSE_g,i)` en esas ventanas.
-3. Wilcoxon de rangos con signo, bilateral (exacto con n <= 50). Cuenta solo si
-   la mediana de `x` es < 0; si no, su p vale 1 (`p_iut`).
+   Un SKU con perdida cero en esas ventanas tambien entra: un pronostico
+   perfecto es evidencia valida.
+2. `x_i = log(RMSE_f*,i / RMSE_g,i)` en esas ventanas. Si solo el campeon no
+   tiene error, la razon vale 0 (`x = -inf`). Si solo la competidora no lo
+   tiene, la razon es infinita (`x = +inf`). Si ninguno lo tiene, empatan con
+   razon 1 (`x = 0`). No se suma ningun epsilon.
+3. Wilcoxon de rangos con signo, bilateral (exacto con n <= 50). Los infinitos
+   tienen los rangos mayores y los empates `x = 0` se descartan, como en
+   `scipy`. Cuenta solo si la mediana de `x` es < 0; si no, su p vale 1
+   (`p_iut`).
 4. El p de la categoria es el mayor de sus competidoras (interseccion-union) y
    Holm lo ajusta entre las categorias probadas.
 5. `confirmado` si el p de Holm es <= `alfa_dm` y, para cada competidora, el
@@ -240,6 +308,17 @@ proporcion de victorias del campeon con intervalo de Wilson y, por SKU, los
 conteos de HLN-DM significativas con BH dentro de la comparacion. La
 categoria lleva la mediana de `r` del campeon frente a Seasonal Naive con su
 intervalo bootstrap.
+
+**Perdidas cero.** Las medianas, los percentiles del bootstrap y Hodges-Lehmann
+conservan las razones 0 e infinitas como bordes: un percentil entre un vecino
+infinito y otro valor es ese infinito. En una replica del bootstrap entra cada
+SKU con alguna de sus ventanas comunes entre los dias remuestreados. Un valor
+queda sin definir cuando combina una razon 0 y una infinita: Hodges-Lehmann
+con ambas, una mediana cuyos dos valores centrales son 0 e infinito, o un
+intervalo bootstrap con una replica sin mediana o con un extremo entre una
+replica de mediana 0 y otra de mediana infinita. Ese valor queda en `None` y la causa `perdida_cero:<campos>` lo nombra, por ejemplo
+`perdida_cero:hodges_lehmann`, sin perder los conteos ni los demas efectos.
+Una mediana sin definir no favorece al campeon, asi que su `p_iut` vale 1.
 
 **Contendiente.** La misma regla de seleccion sin la familia fundacional elige
 la mejor familia que no es Chronos-2 (`ResumenCategoria.contendiente`). Cuando
@@ -344,12 +423,13 @@ uv run pytest -m "not slow"
 
 ## Fuera de alcance y pendientes
 
-- Las ventanas 3.3, la coordinacion 3.0/L4 y la persistencia 3.5 ya estan
-  conectadas. La presentacion visual de M4 no pertenece a esta capacidad.
+- 3.3 genera los pronosticos fechados de la reserva, 3.0/L4 coordina la
+  evaluacion y su recuperacion, y 3.5 persiste y publica la evidencia. La
+  presentacion visual de M4 no pertenece a esta capacidad.
 - Model Confidence Set y Diebold-Mariano de panel (ADR-023, alternativas
   consideradas).
-- La combinacion de varias corridas pertenece a quien las agrupa: 3.4 publica
-  por corrida lo que esa combinacion necesita.
+- El calculo del grupo final de corridas pertenece a quien las agrupa, con la
+  regla de "Grupo final de corridas"; 3.4 publica por corrida sus entradas.
 - Las fallas previas de M2 se conservan en la procedencia. M3 compara el
   handoff recibido y no inventa configuraciones que M2 no entrego. Las fallas
   de adaptacion o de cualquier ventana M3 marcan `comparacion_incompleta`.

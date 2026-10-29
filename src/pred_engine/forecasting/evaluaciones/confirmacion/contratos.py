@@ -39,6 +39,8 @@ class ParametrosConfirmacion:
 
 @dataclass(frozen=True, slots=True)
 class Intervalo:
+    """Cotas de una razon; 0 e infinito son bordes validos."""
+
     inferior: float
     superior: float
 
@@ -48,9 +50,12 @@ class ComparacionFamilia:
     """Campeon frente a una competidora en los SKU con ambas instancias.
 
     La razon de cada SKU es RMSE_campeon / RMSE_competidora en sus ventanas
-    comunes de prueba; < 1 favorece al campeon. ``p_iut`` es el p de Wilcoxon si
-    la mediana favorece al campeon y 1 si no. ``n_mejores`` y ``n_peores``
-    cuentan los SKU con HLN-DM significativa por BH dentro de la comparacion.
+    comunes de prueba; < 1 favorece al campeon. Vale 0 si solo el campeon no
+    tiene error, infinito si solo la competidora no lo tiene y 1 si ninguno lo
+    tiene. ``p_iut`` es el p de Wilcoxon si la mediana favorece al campeon y 1 si
+    no. ``n_mejores`` y ``n_peores`` cuentan los SKU con HLN-DM significativa por
+    BH dentro de la comparacion. ``causa`` dice ``pocos_skus:<n><<minimo>`` sin
+    prueba y ``perdida_cero:<campos>`` con los valores que quedan sin definir.
     """
 
     competidora: str
@@ -71,11 +76,16 @@ class ComparacionFamilia:
 
 @dataclass(frozen=True, slots=True)
 class EfectoLineaBase:
-    """Mediana de r del campeon frente a Seasonal Naive en la categoria."""
+    """Mediana de r del campeon frente a Seasonal Naive en la categoria.
+
+    ``causa`` es ``perdida_cero:<campos>`` si las perdidas cero dejan la mediana
+    o su intervalo sin definir.
+    """
 
     n_skus: int
     mediana_r: float | None
     ic_mediana: Intervalo | None
+    causa: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

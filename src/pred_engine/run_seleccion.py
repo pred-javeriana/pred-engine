@@ -196,7 +196,10 @@ def _familia(
             "exclusion": {"reason_code": razon, "detail": detalle},
         }
 
-    if sku_id in ctx.excluidos:
+    clave = (sku_id, familia)
+    # La regla de dos familias excluye tras L2: la familia que fallo alli conserva
+    # su error y sus ensayos, y las demas no llegan a L3.
+    if sku_id in ctx.excluidos and clave not in ctx.fallos_l2:
         entrada_excluida: dict[str, Any] = {
             "family": familia,
             "estado": "no_ejecutable",
@@ -207,7 +210,6 @@ def _familia(
             entrada_excluida["code"] = codigo
         return entrada_excluida
 
-    clave = (sku_id, familia)
     candidato = ctx.candidatos.get(clave)
     if candidato is None:
         unidad = ctx.fallos_l2.get(clave)

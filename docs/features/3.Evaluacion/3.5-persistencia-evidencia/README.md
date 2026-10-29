@@ -52,10 +52,10 @@ vigente y su motivo se documentan en ADR-021.
 | `m3_exclusiones` | Productos que M2 excluyó antes de L2 o al cerrar L2, con categoría, código `eligibility.*` y causa |
 | `m3_observaciones` | Demanda real de cada día de la reserva por SKU; NULL sin observación |
 | `m3_significancia` | Por categoría: SKU probados, mejores y peores que Seasonal Naive con BH y con BY, y nivel FCR |
-| `m3_confirmaciones` | Por categoría: estado de la confirmación del campeón, p de intersección-unión y de Holm, mediana de r frente a Seasonal Naive con su intervalo y contendiente |
-| `m3_comparaciones` | Campeón frente a cada competidora: SKU, mediana de razones con intervalo bootstrap, Hodges-Lehmann, victorias con intervalo de Wilson, Wilcoxon y conteos HLN-DM |
+| `m3_confirmaciones` | Por categoría: estado de la confirmación del campeón, p de intersección-unión y de Holm, mediana de r frente a Seasonal Naive con su intervalo y la causa de un valor sin definir, y contendiente |
+| `m3_comparaciones` | Campeón frente a cada competidora: SKU, mediana de razones con intervalo bootstrap, Hodges-Lehmann, victorias con intervalo de Wilson, Wilcoxon, conteos HLN-DM y causa |
 | `m3_seleccion_previa` | La regla de selección sobre los pliegues L3, como control de robustez |
-| `m3_intervalos_r` | Intervalo de r de cada SKU probado y, si BH lo selecciona, al nivel FCR |
+| `m3_intervalos_r` | Intervalo de r de cada SKU probado y, si BH lo selecciona, al nivel FCR; `inferior_cola` marca un conjunto de dos tramos |
 | `m3_campeones` (vista) | SKU por familia campeona, evaluados y no evaluados, por clase y cartera |
 
 Los límites de los bloques están en `m3_protocolos.protocolo`, clave
@@ -142,6 +142,6 @@ vuelven a ejecutar modelos ni a seleccionar campeones.
 - Pruebas DAL de plataforma: visibilidad solo después de publicar y lecturas
   que no modifican la base.
 
-El contrato v1 de presentación conserva su vocabulario histórico. La nueva
-lectura M3 expone sus cinco veredictos sin convertirlos en los rótulos antiguos.
+El contrato v1 de presentación usa sus propios rótulos. La lectura M3 expone
+los cinco veredictos sin convertirlos a esos rótulos.
 La interfaz visual de M4 no forma parte de esta capacidad.

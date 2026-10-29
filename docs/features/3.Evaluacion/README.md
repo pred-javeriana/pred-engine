@@ -195,7 +195,8 @@ pliegues L3.
 La selección lee solo el bloque de selección y los veredictos solo el bloque
 de prueba, con un embargo de H − 1 orígenes entre ambos. La evidencia sigue
 siendo retrospectiva sobre un solo corte t*. ADR-021 y ADR-023 documentan los
-límites y las contradicciones de los textos anteriores.
+límites de la evidencia retrospectiva. La significancia del grupo final de
+tres corridas se calcula con la regla de ADR-023, decisión 10.
 
 ## Aceptación del hito
 

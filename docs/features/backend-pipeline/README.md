@@ -22,11 +22,11 @@ principal stage.
   recorded as 'sin historia admisible: lanzado despues del corte'. Each SKU/family
   is an isolated unit. The families are SARIMA, LightGBM, NumPy MLP and Chronos-2.
   Chronos-2 runs by default (`--no-foundation` drops it), is CPU-only and requires
-  the `foundation` extra and fixed local weights. When L2 closes, a SKU with two
-  or more routed families and exactly one evaluable family leaves the
-  competition with `eligibility.fewer_than_two_families` (ADR-023); it reaches
-  neither L3 nor M3. A SKU with no evaluable family goes on to M3 as
-  FALLO_TECNICO.
+  the `foundation` extra and fixed local weights. When L2 closes, a SKU with
+  exactly one evaluable family leaves the competition with
+  `eligibility.fewer_than_two_families` (ADR-023), whatever the number of routed
+  families; it reaches neither L3 nor M3. A SKU with no evaluable family goes on
+  to M3 as FALLO_TECNICO.
 - **L3:** causal walk-forward evaluation on the same admissible history used
   by HPO. Each window has a new fit. `selection_scope="same_history"` makes
   the limitation explicit. These diagnostic metrics are not a holdout verdict.
@@ -144,7 +144,8 @@ See [M3](../3.Evaluacion/README.md), its API pages, ADR-021 and ADR-023 for exac
 ## Diagnostics and verification
 
 `python -m pred_engine.verify` remains a bounded offline L1-L3 diagnostic with
-real SARIMA fitting and no platform database. It explicitly leaves L4
+real SARIMA and LightGBM fitting and no platform database. Two families keep its
+SKU past the two-family rule. It explicitly leaves L4
 unconfigured. Its zero exit means its diagnostic checks passed, not that M3
 was executed. Full M3 verification requires a platform database and the real
 `pred-engine run` command, followed by independent SQLite/platform readback.

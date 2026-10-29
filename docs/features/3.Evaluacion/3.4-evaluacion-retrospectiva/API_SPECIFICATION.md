@@ -246,10 +246,16 @@ corregir_multiplicidad(pruebas, alfa, *, metodo="fdr_bh") -> dict[str, PruebaDM]
   confirmacion la usa entre familias.
 - `emitir_veredictos` pasa el minimo de politica `n_min_dm` a la prueba.
   El default matematico de bajo nivel no sustituye ese minimo de corrida.
-- `intervalo_razon`: los `rho > 0` para los que HLN-DM no rechaza
-  `L_campeon - rho^2 L_SN` al `nivel` dado (Fieller). `IntervaloRazon(nivel,
-  inferior, superior)`, con `superior = None` sin cota superior; `None` si la
-  prueba no se puede calcular. `ValueError` si `nivel` no esta en (0, 1).
+- `intervalo_razon`: los `rho >= 0` para los que HLN-DM no rechaza
+  `L_campeon - rho^2 L_SN` al `nivel` dado (Fieller). Devuelve
+  `IntervaloRazon(nivel, inferior, superior, inferior_cola)`. El conjunto es
+  `[inferior, superior]`, o `[inferior, infinito)` con `superior = None`.
+  Con `inferior_cola` tiene dos tramos, `[inferior, superior]` y
+  `[inferior_cola, infinito)`, y la prueba rechaza los valores entre ambos.
+  Los dos ultimos casos ocurren cuando la perdida de SN no se distingue de
+  cero a ese nivel. `contiene(rho)` dice si la prueba no rechaza `rho`. Devuelve
+  `None` si la prueba no se puede calcular. `ValueError` si `nivel` no esta en
+  (0, 1).
 - `corregir_multiplicidad`: Benjamini-Hochberg (`fdr_bh`) o
   Benjamini-Yekutieli (`fdr_by`) de `statsmodels` sobre las pruebas con
   p-valor; las demas quedan igual. `emitir_veredictos` la aplica dentro de cada
@@ -292,11 +298,18 @@ remuestrea sus posiciones. Holm ajusta entre las categorias con `p_iut`.
 | `CategoriaAConfirmar` | `sku_class`, `familia_campeona`, `competidoras`, `instancias: Mapping[sku, Mapping[familia, MetricasCandidato]]` (prueba, linea base incluida) |
 | `ConfirmacionCategoria` | `sku_class`, `familia_campeona`, `estado`, `causa`, `p_iut`, `p_holm`, `alfa`, `comparaciones`, `efecto_linea_base` |
 | `ComparacionFamilia` | `competidora`, `n_skus`, `mediana_razon`, `ic_mediana`, `hodges_lehmann`, `ic_hodges_lehmann`, `n_victorias`, `ic_victorias`, `estadistico_wilcoxon`, `p_wilcoxon`, `p_iut`, `n_mejores`, `n_peores`, `causa` |
-| `EfectoLineaBase` | `n_skus`, `mediana_r`, `ic_mediana` |
+| `EfectoLineaBase` | `n_skus`, `mediana_r`, `ic_mediana`, `causa` |
 | `Intervalo` | `inferior`, `superior` |
 
-Causa de una comparacion sin prueba: `pocos_skus:n<minimo`, por ejemplo
-`pocos_skus:9<10`. Causas de la categoria: `pocos_skus:<familias>`,
+Las razones y sus cotas pueden valer 0 (solo el campeon no tiene error) o
+infinito (solo la competidora, o Seasonal Naive, no lo tiene); dos pronosticos
+sin error empatan con razon 1. Causa de una comparacion sin prueba:
+`pocos_skus:n<minimo`, por ejemplo `pocos_skus:9<10`. Un valor que las perdidas
+cero dejan sin definir queda en `None`, y `causa` de la comparacion o del efecto
+lo nombra con `perdida_cero:<campos>`: `mediana_razon`, `ic_mediana` o
+`hodges_lehmann` en `ComparacionFamilia`, y `mediana_r` o `ic_mediana` en
+`EfectoLineaBase`. En una comparacion sin prueba las dos causas se unen con
+`; `. Causas de la categoria: `pocos_skus:<familias>`,
 `sin_familias_competidoras`, `campeon_es_linea_base`, `datos_sinteticos`,
 `origen_desconocido` y, para `no_confirmado`, `p_holm><alfa>` y
 `intervalo_no_bajo_1:<familias>`, unidas con `; `.

@@ -32,8 +32,10 @@ CREATE TABLE m3_significancia (
 -- (pocos SKU para alguna competidora) o no_aplica (el campeon es la linea base o los
 -- datos no son reales declarados). p_iut es el mayor p de las competidoras y p_holm su
 -- ajuste Holm entre categorias. efecto_*: mediana de r del campeon frente a Seasonal
--- Naive con su intervalo bootstrap. contendiente: la familia que la misma regla elige
--- sin la fundacional; su fila de m3_comparaciones es Chronos-2 frente a ella.
+-- Naive con su intervalo bootstrap; efecto_causa 'perdida_cero:<campos>' nombra los
+-- valores que las perdidas cero dejan sin definir. contendiente: la familia que la
+-- misma regla elige sin la fundacional; su fila de m3_comparaciones es Chronos-2
+-- frente a ella.
 CREATE TABLE m3_confirmaciones (
     run_id             TEXT    NOT NULL,
     sku_class          TEXT    NOT NULL,
@@ -48,6 +50,7 @@ CREATE TABLE m3_confirmaciones (
     efecto_mediana_r   REAL,
     efecto_ic_inferior REAL,
     efecto_ic_superior REAL,
+    efecto_causa       TEXT,
     contendiente       TEXT,
     PRIMARY KEY (run_id, sku_class),
     FOREIGN KEY (run_id, sku_class) REFERENCES m3_categorias (run_id, sku_class),
@@ -57,11 +60,14 @@ CREATE TABLE m3_confirmaciones (
 
 -- Campeon frente a una competidora en los SKU con ambas instancias y al menos n_min_dm
 -- ventanas comunes de prueba (politica del protocolo). La razon de un SKU es
--- RMSE_campeon / RMSE_competidora; < 1 favorece al campeon. ic_mediana es el intervalo
--- bootstrap por bloques de dias de la mediana de razones; p_iut es p_wilcoxon si esa
--- mediana es < 1 y 1 si no. n_mejores y n_peores cuentan los SKU con HLN-DM significativa
--- por BH dentro de la comparacion. Con menos SKU que el minimo, causa lo dice y solo
--- quedan n_skus, la mediana y las victorias.
+-- RMSE_campeon / RMSE_competidora; < 1 favorece al campeon. Vale 0 si solo el campeon
+-- no tiene error, infinito (REAL Inf) si solo la competidora no lo tiene y 1 si ninguno
+-- lo tiene. ic_mediana es el intervalo bootstrap por bloques de dias de la mediana de
+-- razones; p_iut es p_wilcoxon si esa mediana es < 1 y 1 si no. n_mejores y n_peores
+-- cuentan los SKU con HLN-DM significativa por BH dentro de la comparacion. Con menos SKU
+-- que el minimo, causa lo dice y solo quedan n_skus, la mediana y las victorias. Una
+-- causa 'perdida_cero:<campos>' nombra los valores que las perdidas cero dejan sin
+-- definir, como Hodges-Lehmann con una razon 0 y una infinita.
 CREATE TABLE m3_comparaciones (
     run_id                     TEXT    NOT NULL,
     sku_class                  TEXT    NOT NULL,
@@ -84,7 +90,7 @@ CREATE TABLE m3_comparaciones (
     causa                      TEXT,
     PRIMARY KEY (run_id, sku_class, competidora),
     FOREIGN KEY (run_id, sku_class) REFERENCES m3_confirmaciones (run_id, sku_class),
-    CHECK ((causa IS NULL) = (p_wilcoxon IS NOT NULL))
+    CHECK (p_wilcoxon IS NOT NULL OR causa IS NOT NULL)
 );
 
 -- Seleccion de robustez: la regla de m3_categorias sobre los pliegues L3, que solo usan
@@ -104,21 +110,27 @@ CREATE TABLE m3_seleccion_previa (
     FOREIGN KEY (run_id, sku_class) REFERENCES m3_categorias (run_id, sku_class)
 );
 
--- Intervalo de r del campeon que invierte HLN-DM contra Seasonal Naive (Fieller): contiene
--- r y excluye 1 justo cuando la prueba rechaza a nivel 1 - nivel. superior NULL: sin cota
--- superior. *_fcr: el mismo intervalo al nivel FCR de su categoria, solo para los SKU con
--- prueba significativa por BH.
+-- Valores de r del campeon que HLN-DM contra Seasonal Naive no rechaza (Fieller): contiene
+-- r y excluye 1 justo cuando la prueba rechaza a nivel 1 - nivel. El conjunto es
+-- [inferior, superior]; superior NULL: sin cota superior. Con inferior_cola tiene dos
+-- tramos, [inferior, superior] y [inferior_cola, infinito), y la prueba rechaza los
+-- valores entre ambos. *_fcr: el mismo conjunto al nivel FCR de su categoria, solo para
+-- los SKU con prueba significativa por BH.
 CREATE TABLE m3_intervalos_r (
-    run_id       TEXT NOT NULL,
-    sku          TEXT NOT NULL,
-    nivel        REAL NOT NULL CHECK (nivel > 0 AND nivel < 1),
-    inferior     REAL NOT NULL CHECK (inferior >= 0),
-    superior     REAL CHECK (superior >= inferior),
-    nivel_fcr    REAL CHECK (nivel_fcr > 0 AND nivel_fcr < 1),
-    inferior_fcr REAL CHECK (inferior_fcr >= 0),
-    superior_fcr REAL CHECK (superior_fcr >= inferior_fcr),
+    run_id            TEXT NOT NULL,
+    sku               TEXT NOT NULL,
+    nivel             REAL NOT NULL CHECK (nivel > 0 AND nivel < 1),
+    inferior          REAL NOT NULL CHECK (inferior >= 0),
+    superior          REAL CHECK (superior >= inferior),
+    inferior_cola     REAL CHECK (inferior_cola > superior),
+    nivel_fcr         REAL CHECK (nivel_fcr > 0 AND nivel_fcr < 1),
+    inferior_fcr      REAL CHECK (inferior_fcr >= 0),
+    superior_fcr      REAL CHECK (superior_fcr >= inferior_fcr),
+    inferior_cola_fcr REAL CHECK (inferior_cola_fcr > superior_fcr),
     PRIMARY KEY (run_id, sku),
     FOREIGN KEY (run_id, sku) REFERENCES m3_veredictos (run_id, sku),
+    CHECK (inferior_cola IS NULL OR superior IS NOT NULL),
+    CHECK (inferior_cola_fcr IS NULL OR superior_fcr IS NOT NULL),
     CHECK ((nivel_fcr IS NULL) = (inferior_fcr IS NULL)),
     CHECK (nivel_fcr IS NOT NULL OR superior_fcr IS NULL)
 );

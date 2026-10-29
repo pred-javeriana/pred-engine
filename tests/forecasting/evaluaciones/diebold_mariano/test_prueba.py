@@ -9,7 +9,7 @@ import pytest
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
 from statsmodels.tsa.stattools import acovf
-from tests._evaluaciones import metricas_candidato
+from tests._evaluaciones import metricas_candidato, par_fieller_disjunto
 
 from pred_engine.forecasting.evaluaciones.calculo_errores import FAMILIA_LINEA_BASE
 from pred_engine.forecasting.evaluaciones.diebold_mariano import (
@@ -181,6 +181,32 @@ def test_intervalo_sin_cota_superior_si_sn_no_se_distingue_de_cero() -> None:
     intervalo = intervalo_razon(campeon, linea_base, nivel=0.95)
     assert intervalo is not None
     assert intervalo.superior is None and intervalo.inferior > 0
+
+
+def test_intervalo_con_dos_tramos_los_conserva_y_excluye_1() -> None:
+    campeon, base = par_fieller_disjunto()
+    a = np.square([v.metricas.rmse for v in campeon.por_ventana])
+    b = np.square([v.metricas.rmse for v in base.por_ventana])
+    p_valor = probar_pares(campeon, base, n_min_ventanas=30).p_valor
+    assert p_valor is not None and p_valor < 1e-80
+    intervalo = intervalo_razon(campeon, base, nivel=0.95)
+    assert intervalo is not None
+    # [0, 0.9923] U [1.0257, inf): la cuadratica abre hacia abajo con dos raices
+    # positivas, y la prueba rechaza los valores entre ellas.
+    assert intervalo.inferior == 0.0
+    assert intervalo.superior == pytest.approx(0.992283906333525)
+    assert intervalo.inferior_cola == pytest.approx(1.0256630707673464)
+    critico = stats.t.ppf(0.975, df=39)
+    for rho in (intervalo.superior, intervalo.inferior_cola):
+        prueba = prueba_hln(a - rho**2 * b, 7)
+        assert prueba.estadistico is not None
+        assert abs(prueba.estadistico) == pytest.approx(critico)
+    r = math.sqrt(a.mean() / b.mean())
+    for rho in (0.5, r, 1.0, 2.0):
+        prueba = prueba_hln(a - rho**2 * b, 7)
+        assert prueba.p_valor is not None
+        assert intervalo.contiene(rho) is (prueba.p_valor >= 0.05)
+    assert intervalo.contiene(r) and not intervalo.contiene(1.0)
 
 
 def test_intervalo_a_mayor_nivel_es_mas_ancho_y_sin_prueba_no_existe() -> None:

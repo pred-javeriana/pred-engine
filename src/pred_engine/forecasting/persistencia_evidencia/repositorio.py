@@ -829,8 +829,8 @@ def _insertar_prueba(
     conn.executemany(
         "INSERT INTO m3_confirmaciones (run_id, sku_class, familia_campeona, estado,"
         " causa, p_iut, p_holm, alfa, efecto_n_skus, efecto_mediana_r,"
-        " efecto_ic_inferior, efecto_ic_superior, contendiente)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " efecto_ic_inferior, efecto_ic_superior, efecto_causa, contendiente)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 run_id,
@@ -842,9 +842,14 @@ def _insertar_prueba(
                 c.confirmacion.p_holm,
                 c.confirmacion.alfa,
                 *(
-                    (None,) * 4
+                    (None,) * 5
                     if (efecto := c.confirmacion.efecto_linea_base) is None
-                    else (efecto.n_skus, efecto.mediana_r, *_limites(efecto.ic_mediana))
+                    else (
+                        efecto.n_skus,
+                        efecto.mediana_r,
+                        *_limites(efecto.ic_mediana),
+                        efecto.causa,
+                    )
                 ),
                 c.contendiente,
             )
@@ -893,7 +898,8 @@ def _insertar_prueba(
     )
     conn.executemany(
         "INSERT INTO m3_intervalos_r (run_id, sku, nivel, inferior, superior,"
-        " nivel_fcr, inferior_fcr, superior_fcr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " inferior_cola, nivel_fcr, inferior_fcr, superior_fcr, inferior_cola_fcr)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (run_id, v.sku, *_intervalo(v.intervalo_r), *_intervalo(v.intervalo_r_fcr))
             for v in resultado.skus
@@ -922,8 +928,13 @@ def _limites(intervalo: Intervalo | None) -> tuple[float | None, float | None]:
 
 def _intervalo(intervalo: IntervaloRazon | None) -> tuple[float | None, ...]:
     if intervalo is None:
-        return (None, None, None)
-    return (intervalo.nivel, intervalo.inferior, intervalo.superior)
+        return (None, None, None, None)
+    return (
+        intervalo.nivel,
+        intervalo.inferior,
+        intervalo.superior,
+        intervalo.inferior_cola,
+    )
 
 
 def _insertar_observaciones(

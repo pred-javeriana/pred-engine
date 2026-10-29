@@ -47,7 +47,9 @@ Naive, con un ganador obvio.
    sensibilidad. Cada SKU probado lleva el intervalo de r que invierte la prueba
    (Fieller) al nivel 1 − `alfa_dm`. Un SKU que BH selecciona lleva además el
    mismo intervalo al nivel 1 − R · q / m de su categoría, con R rechazos entre
-   m pruebas (Benjamini y Yekutieli, 2005).
+   m pruebas (Benjamini y Yekutieli, 2005). Cuando la pérdida de Seasonal Naive
+   no se distingue de cero, la inversión puede dar dos tramos,
+   [inferior, superior] y [inferior_cola, ∞), y la publicación guarda los dos.
 5. **Confirmación del campeón.** En el bloque de prueba, el campeón se compara
    con cada competidora de su categoría en los SKU que tienen ambas instancias
    y al menos `n_min_dm` ventanas comunes. Para cada SKU,
@@ -63,7 +65,11 @@ Naive, con un ganador obvio.
    el campeón es Seasonal Naive o los datos no son reales declarados, queda
    `no_aplica`. Una confirmación fallida queda `no_confirmado` y nunca cambia
    al campeón. Cada comparación informa también Hodges-Lehmann y la proporción
-   de victorias con intervalo de Wilson.
+   de victorias con intervalo de Wilson. Un SKU con pérdida cero también
+   compite, sin epsilon: su razón vale 0 si solo el campeón no tiene error,
+   infinito si solo la competidora no lo tiene y 1 si ninguno lo tiene. Un
+   valor que combina una razón 0 y una infinita queda sin definir y la causa
+   `perdida_cero:<campos>` lo nombra.
 6. **Contendiente.** La misma regla de selección, sin la familia fundacional,
    elige la mejor familia que no es Chronos-2. Su fila de comparación mide a
    Chronos-2 frente a ella cuando Chronos-2 es el campeón.
@@ -71,12 +77,14 @@ Naive, con un ganador obvio.
    pliegues L3, que solo usan historia hasta t*, con Seasonal Naive ajustado en
    cada pliegue. Se fija con el protocolo y solo se informa. Nunca elige al
    campeón: las familias optimizadas se puntúan en los pliegues que su HPO usó.
-8. **Regla de dos familias.** Al cerrar L2, un SKU con dos o más familias
-   enrutadas y una sola evaluable sale de la competencia con
-   `eligibility.fewer_than_two_families` (ADR-022). No llega a L3 ni recibe
-   veredicto. Sin ninguna familia evaluable, el SKU sigue a M3, que lo juzga
-   `FALLO_TECNICO`. Con una sola familia enrutada no hay competencia que
-   proteger y el SKU sigue. Una unidad L2 fallida no queda en checkpoint y se
+8. **Regla de dos familias.** Una familia es evaluable para un SKU si su
+   unidad L2 terminó y entregó un candidato. Al cerrar L2, un SKU con una sola
+   familia evaluable sale de la competencia con
+   `eligibility.fewer_than_two_families` (ADR-022), sea cual sea el número de
+   familias enrutadas. No llega a L3 ni recibe veredicto. Sin ninguna familia
+   evaluable, el SKU sigue a M3, que lo juzga `FALLO_TECNICO`. Por eso una
+   corrida de una sola familia, o un SKU `lumpy` en una corrida sin la familia
+   fundacional, no llega a M3. Una unidad L2 fallida no queda en checkpoint y se
    repite al reanudar, así que un reintento puede cambiar la exclusión. Por eso
    M3 honra las exclusiones de la procedencia durable de su protocolo.
 9. **Publicación.** La migración 0011 (`esquema_m3_0007.sql`) agrega
@@ -86,6 +94,25 @@ Naive, con un ganador obvio.
    `agregada` de `m3_metricas` leen el bloque de prueba. Las filas por ventana de
    `m3_metricas` cubren toda la reserva. `m3_exclusiones` lista los SKU que M2
    excluyó, con su categoría, código y causa.
+10. **Grupo final de corridas.** La evidencia final es un grupo de tres
+    corridas que solo difieren en la semilla del motor: 0, 1 y 2. Cada corrida
+    publica su significancia propia (decisión 4), que no es la del grupo,
+    porque las corridas usan los mismos productos y días. Quien agrupa las
+    corridas aplica esta regla y M3 sigue publicando por corrida. Las entradas
+    son `m3_veredictos.dm_p_valor` (p crudo de HLN-DM) y el signo de
+    `m3_veredictos.dm_estadistico`, que es el signo del diferencial campeón
+    menos Seasonal Naive cuando la prueba es válida. Un producto entra en la
+    familia de prueba del grupo solo si su `dm_p_valor` no es nulo en las tres
+    corridas. Su p del grupo es el mayor de esos tres p, un p válido con
+    cualquier dependencia (intersección-unión). Benjamini-Hochberg se aplica una
+    sola vez dentro de cada categoría, a q = 0,05, sobre los p del grupo. Un
+    producto es significativamente mejor que Seasonal Naive solo si BH lo
+    rechaza y su estadístico es negativo en las tres corridas. Un producto con
+    signos mixtos sigue en la familia de BH y nunca cuenta como mejor. Los
+    descubrimientos de corridas distintas nunca se suman, los p nunca se
+    promedian ni se combinan con Fisher o Stouffer, y un producto sin p en una
+    corrida nunca entra con el mayor de sus p disponibles. La guía 3.4 tiene un
+    ejemplo trabajado que la verificación del agrupador debe reproducir.
 
 ## Consecuencias
 

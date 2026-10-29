@@ -1,12 +1,13 @@
 """Regla de dos familias al cerrar L2 (ADR-023).
 
-Un SKU con dos o mas familias enrutadas y una sola evaluable sale de la
-competencia con su causa: no llega a L3 ni recibe veredicto en M3.
+Un SKU con una sola familia evaluable sale de la competencia con su causa: no
+llega a L3 ni recibe veredicto en M3.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +33,7 @@ from pred_engine.pipeline import (
     summarize_run,
 )
 from pred_engine.pipeline_setup import build_pipeline
+from pred_engine.run_seleccion import construir_seleccion
 from tests._plataforma import crear_base_plataforma
 from tests._series import serie_ar_estacional
 
@@ -44,6 +46,10 @@ SEMILLA = 15
 CAUSA = (
     "menos de dos familias evaluables tras L2: evaluable ml; "
     "fallidas classical (selection.no_viable_trial)"
+)
+CAUSA_UNA_ENRUTADA = (
+    "menos de dos familias evaluables tras L2: evaluable classical; "
+    "sin otra familia enrutada"
 )
 
 
@@ -122,38 +128,81 @@ def test_un_sku_con_una_sola_familia_evaluable_sale_antes_de_l3(tmp_path, monkey
     assert [(e["sku_id"], e["cause"], e["code"]) for e in eventos] == [
         ("solo-ml", CAUSA, ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS)
     ]
+    # En la seleccion la familia que fallo conserva su error, y la evaluable no
+    # llega a L3 por la exclusion.
+    (linea,) = (
+        x
+        for x in construir_seleccion(resultado, run_id="r", hpo=tmp_path / "hpo")
+        if x["sku_id"] == "solo-ml"
+    )
+    familias = {f["family"]: f for f in linea["families"]}
+    fallida = next(u for u in fitting.units if u.sku_id == "solo-ml" and u.failed)
+    assert familias["classical"]["estado"] == "fallida"
+    assert familias["classical"]["error"] == {
+        "stage": "L2",
+        "text": fallida.record.error,
+        "code": "selection.no_viable_trial",
+    }
+    assert familias["ml"] == {
+        "family": "ml",
+        "estado": "no_ejecutable",
+        "cause": CAUSA,
+        "code": ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
+    }
 
 
-@pytest.mark.parametrize(
-    ("familias", "rotas"),
-    [
-        # Sin familias evaluables el SKU sigue a M3, que lo juzga FALLO_TECNICO.
-        (("classical", "ml"), ("classical", "ml")),
-        # Con una sola familia enrutada no hay competencia que proteger.
-        (("classical",), ("classical",)),
-    ],
-    ids=["ninguna-evaluable", "una-enrutada"],
-)
-def test_la_regla_no_excluye_sin_familias_ni_con_una_sola_enrutada(
-    tmp_path, monkeypatch, familias, rotas
-):
-    if "classical" in rotas:
-        _sin_ensayos(
-            monkeypatch,
-            estrategia_clasica,
-            "seleccionar_configuracion_clasica",
-            {"roto"},
-        )
-    if "ml" in rotas:
-        _sin_ensayos(
-            monkeypatch, estrategia_ml, "seleccionar_configuracion_ml", {"roto"}
-        )
-    pipeline = build_pipeline(AJUSTES, families=familias, n_trials=1, seed=SEMILLA)
+def test_la_regla_no_excluye_un_sku_sin_familias_evaluables(tmp_path, monkeypatch):
+    # Sin familias evaluables el SKU sigue a M3, que lo juzga FALLO_TECNICO.
+    _sin_ensayos(
+        monkeypatch,
+        estrategia_clasica,
+        "seleccionar_configuracion_clasica",
+        {"roto"},
+    )
+    _sin_ensayos(monkeypatch, estrategia_ml, "seleccionar_configuracion_ml", {"roto"})
+    pipeline = build_pipeline(
+        AJUSTES, families=("classical", "ml"), n_trials=1, seed=SEMILLA
+    )
     resultado = pipeline.run(_entrada(tmp_path, "sano", "roto"))
 
     assert resultado.fitting.exclusions == ()
     assert {c.selection.sku_id for c in resultado.fitting.candidates} == {"sano"}
     assert resultado.fitting.m3_skus == {"sano", "roto"}
+
+
+def test_con_una_sola_familia_enrutada_el_sku_sale_y_m3_no_publica(tmp_path):
+    # Una corrida de una sola familia no deja ningun SKU con dos familias
+    # evaluables: informa sus exclusiones y M3 no registra corrida.
+    conn = sqlite3.connect(crear_base_plataforma(tmp_path / "central.db"))
+    aplicar_migraciones_m3(conn)
+    pipeline = build_pipeline(
+        AJUSTES, families=("classical",), n_trials=1, seed=SEMILLA
+    )
+    pipeline.progress = tmp_path / "progreso.jsonl"
+    pipeline.validator = ControladorEvaluacion(
+        conn,
+        tmp_path / "corrida",
+        run_id_m2="m2-una-familia",
+        codigo_version="revision-1",
+        datos_sinteticos=True,
+        data_root=tmp_path / "data",
+    )
+    with pytest.raises(
+        PipelineExecutionError,
+        match=r"L2 sin resultados \(1 unidades, 1 SKU excluidos\): sano: "
+        + re.escape(CAUSA_UNA_ENRUTADA),
+    ):
+        pipeline.run(_entrada(tmp_path, "sano"))
+    eventos = [
+        json.loads(linea)
+        for linea in pipeline.progress.read_text().splitlines()
+        if json.loads(linea)["event"] == "excluded"
+    ]
+    assert [(e["sku_id"], e["cause"], e["code"]) for e in eventos] == [
+        ("sano", CAUSA_UNA_ENRUTADA, ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS)
+    ]
+    assert conn.execute("SELECT COUNT(*) FROM m3_corridas").fetchone() == (0,)
+    conn.close()
 
 
 def test_m3_no_juzga_al_sku_excluido_tras_l2(tmp_path, monkeypatch):

@@ -545,26 +545,26 @@ def _two_family_rule(
 ) -> tuple[tuple[FittedCandidate, ...], tuple[SkuExclusion, ...]]:
     """Regla de dos familias al cerrar L2 (ADR-023).
 
-    Si el SKU tiene dos o mas familias enrutadas y solo una entrega candidato, sale
-    de la competencia antes de L3 con ``eligibility.fewer_than_two_families``. Sin
-    familias entregadas sigue a M3, que lo juzga ``FALLO_TECNICO``. Con una sola
-    familia enrutada no hay competencia que proteger y el SKU sigue. Solo lee
-    resultados de L2; una unidad fallida se repite al reanudar, asi que M3 honra
-    las exclusiones de su procedencia durable.
+    Si una sola familia del SKU entrega candidato, el SKU sale de la competencia
+    antes de L3 con ``eligibility.fewer_than_two_families``, sea cual sea el
+    numero de familias enrutadas. Sin familias entregadas sigue a M3, que lo juzga
+    ``FALLO_TECNICO``. Solo lee resultados de L2; una unidad fallida se repite al
+    reanudar, asi que M3 honra las exclusiones de su procedencia durable.
     """
     routed: dict[str, list[UnitExecution]] = {}
     for unit in units:
         routed.setdefault(unit.sku_id, []).append(unit)
-    delivered: dict[str, list[str]] = {}
+    delivered: dict[str, set[str]] = {}
     for candidate in candidates:
-        delivered.setdefault(candidate.selection.sku_id, []).append(
+        delivered.setdefault(candidate.selection.sku_id, set()).add(
             candidate.selection.family
         )
     exclusions = []
     for sku_id, sku_units in routed.items():
-        families = delivered.get(sku_id, [])
-        if len(sku_units) < 2 or len(families) != 1:
+        families = delivered.get(sku_id, set())
+        if len(families) != 1:
             continue
+        (family,) = families
         failed = ", ".join(
             f"{u.family} ({u.record.codigo})"
             for u in sku_units
@@ -573,8 +573,8 @@ def _two_family_rule(
         exclusions.append(
             SkuExclusion(
                 sku_id,
-                "menos de dos familias evaluables tras L2: "
-                f"evaluable {families[0]}; fallidas {failed}",
+                f"menos de dos familias evaluables tras L2: evaluable {family}; "
+                + (f"fallidas {failed}" if failed else "sin otra familia enrutada"),
                 ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
             )
         )

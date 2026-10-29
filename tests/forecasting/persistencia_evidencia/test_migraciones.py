@@ -354,13 +354,34 @@ def test_version_10_recibe_las_tablas_del_bloque_de_prueba(tmp_path):
     with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
         conn.execute(confirmar, ("no_aplica", "datos_sinteticos", 0.01))
     conn.execute(confirmar, ("confirmado", None, 0.01))
+    comparar = (
+        "INSERT INTO m3_comparaciones (run_id, sku_class, competidora, n_skus,"
+        " n_victorias, p_wilcoxon, causa) VALUES ('m3-a', 'smooth', ?, 12, 12, ?, ?)"
+    )
+    # Sin Wilcoxon la fila dice por que; con Wilcoxon puede nombrar valores que
+    # las perdidas cero dejan sin definir.
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        conn.execute(comparar, ("ml", None, None))
+    conn.execute(comparar, ("ml", 0.0005, "perdida_cero:hodges_lehmann"))
+    conn.execute(comparar, ("dl", None, "pocos_skus:9<10"))
     with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
         conn.execute(
             "INSERT INTO m3_intervalos_r (run_id, sku, nivel, inferior)"
             " VALUES ('m3-a', 'S9', 0.95, 0.5)"
         )
-    conn.execute(
-        "INSERT INTO m3_intervalos_r (run_id, sku, nivel, inferior)"
-        " VALUES ('m3-a', 'S1', 0.95, 0.5)"
+    intervalo = (
+        "INSERT INTO m3_intervalos_r (run_id, sku, nivel, inferior, superior,"
+        " inferior_cola, nivel_fcr, inferior_fcr, superior_fcr, inferior_cola_fcr)"
+        " VALUES ('m3-a', 'S1', 0.95, 0.0, ?, ?, ?, ?, ?, ?)"
     )
+    # El segundo tramo empieza despues de un primer tramo acotado.
+    for invalida in (
+        (None, 1.03, None, None, None, None),
+        (0.99, 0.98, None, None, None, None),
+        (0.99, 1.03, 0.96, 0.0, None, 1.04),
+        (0.99, 1.03, 0.96, 0.0, 0.98, 0.97),
+    ):
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            conn.execute(intervalo, invalida)
+    conn.execute(intervalo, (0.99, 1.03, 0.96, 0.0, 0.98, 1.04))
     conn.close()

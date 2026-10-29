@@ -93,21 +93,22 @@ def test_multi_sku_chronology_survives_shuffled_input(tmp_path):
         index=False,
     )
     result = verification_pipeline().run(request)
-    assert [c.selection.sku_id for c in result.fitting.candidates] == [
-        "proof-sku",
-        "second",
+    assert [
+        (c.selection.sku_id, c.selection.family) for c in result.fitting.candidates
+    ] == [
+        ("proof-sku", "classical"),
+        ("proof-sku", "ml"),
+        ("second", "classical"),
+        ("second", "ml"),
     ]
-    np.testing.assert_array_equal(
-        result.fitting.candidates[0].series[:3],
-        [18.0, 19.35, 20.7],
-    )
-    np.testing.assert_array_equal(
-        result.fitting.candidates[1].series[:3],
-        [21.0, 22.35, 23.7],
-    )
+    # Cada familia del SKU ve la misma historia ordenada.
+    for candidate in result.fitting.candidates[:2]:
+        np.testing.assert_array_equal(candidate.series[:3], [18.0, 19.35, 20.7])
+    for candidate in result.fitting.candidates[2:]:
+        np.testing.assert_array_equal(candidate.series[:3], [21.0, 22.35, 23.7])
     assert [
         c.walk_forward.n_ventanas_evaluadas for c in result.evaluation.candidates
-    ] == [4, 4]
+    ] == [4, 4, 4, 4]
     assert result.evaluation.selection_scope == "same_history"
     assert result.evaluation.statistical_comparison_available is False
     assert result.blocked_stage == "L4"
@@ -613,8 +614,8 @@ def test_sparse_policy_does_not_enable_excluded_dl():
 def test_real_other_core_families_connect_to_fitting_and_walkforward(tmp_path, family):
     settings = EvaluationSettings(16, horizon=2, step=3, metric="mae", seasonality=1)
     rules = ReglasPoda(habilitar_poda_semantica=False)
-    if family == "ml":
-        strategy = MLSelectionStrategy(
+    strategies = {
+        "ml": MLSelectionStrategy(
             espacio=EspacioML(
                 lags_min=3,
                 lags_max=3,
@@ -630,9 +631,8 @@ def test_real_other_core_families_connect_to_fitting_and_walkforward(tmp_path, f
             paso=3,
             metrica_objetivo="mae",
             seed=9,
-        )
-    else:
-        strategy = DLSelectionStrategy(
+        ),
+        "dl": DLSelectionStrategy(
             espacio=EspacioDL(
                 lags=(3, 3),
                 capas=(2, 2),
@@ -648,19 +648,27 @@ def test_real_other_core_families_connect_to_fitting_and_walkforward(tmp_path, f
             estacionalidad=1,
             reglas=rules,
             seed=9,
-        )
+        ),
+    }
+    # Las dos familias juntas: con una sola, la regla de dos familias excluye el SKU.
     registry = StrategyRegistry()
-    registry.register(family, strategy)
+    for name, strategy in strategies.items():
+        registry.register(name, strategy)
     pipeline = Pipeline(
-        SelectionRouter(ConfiguredTopologyPolicy((family,)), registry),
+        SelectionRouter(ConfiguredTopologyPolicy(tuple(strategies)), registry),
         settings,
         factories=model_factories(),
     )
     result = pipeline.run(request_at(tmp_path))
-    candidate = result.fitting.candidates[0]
-    assert candidate.selection.family == family
+    assert [c.selection.family for c in result.fitting.candidates] == ["ml", "dl"]
+    (candidate,) = (
+        c for c in result.fitting.candidates if c.selection.family == family
+    )
     assert candidate.selection.forecast_seed == 9
-    assert result.evaluation.candidates[0].walk_forward.n_ventanas_evaluadas == 4
+    (evaluated,) = (
+        c for c in result.evaluation.candidates if c.fitted.selection.family == family
+    )
+    assert evaluated.walk_forward.n_ventanas_evaluadas == 4
     assert result.blocked_stage == "L4"
     factory = model_factories()[family]
     native = factory(candidate.selection.forecast_config, seed=9).fit(candidate.series)
@@ -790,23 +798,29 @@ def test_failed_unit_is_isolated_and_short_sku_is_excluded_with_cause(tmp_path):
         "completed",
         "blocked",
     ]
-    assert [c.selection.sku_id for c in result.fitting.candidates] == ["proof-sku"]
-    assert [(u.sku_id, u.failed) for u in result.fitting.units] == [
-        ("broken", True),
-        ("proof-sku", False),
+    assert [c.selection.sku_id for c in result.fitting.candidates] == [
+        "proof-sku",
+        "proof-sku",
+    ]
+    assert [(u.sku_id, u.family, u.failed) for u in result.fitting.units] == [
+        ("broken", "classical", True),
+        ("broken", "ml", True),
+        ("proof-sku", "classical", False),
+        ("proof-sku", "ml", False),
     ]
     assert result.stages[1].message == (
-        "1 de 2 unidades fallaron (aisladas); 1 SKU excluidos con causa"
+        "2 de 4 unidades fallaron (aisladas); 1 SKU excluidos con causa"
     )
     summary = summarize_run(result)
     assert summary["failures"] == [
         {
             "stage": "L2",
             "sku_id": "broken",
-            "family": "classical",
+            "family": family,
             "error": "RuntimeError: HPO interrumpido para este SKU",
             "code": "pipeline.stage_failed",
         }
+        for family in ("classical", "ml")
     ]
     assert summary["exclusions"] == [
         {
@@ -816,8 +830,8 @@ def test_failed_unit_is_isolated_and_short_sku_is_excluded_with_cause(tmp_path):
         }
     ]
     assert summary["units"] == {
-        "L2": {"total": 2, "completed": 1, "failed": 1},
-        "L3": {"total": 1, "completed": 1, "failed": 0},
+        "L2": {"total": 4, "completed": 2, "failed": 2},
+        "L3": {"total": 2, "completed": 2, "failed": 0},
     }
 
 
@@ -863,7 +877,7 @@ def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
     def run():
         return build_pipeline(
             settings,
-            families=("classical",),
+            families=("classical", "ml"),
             n_trials=2,
             seed=3,
             hpo_root=hpo,
@@ -872,20 +886,20 @@ def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
 
     first = run()
     manifests = sorted(hpo.glob("*/manifiesto.json"))
-    assert [m.parent.name for m in manifests] == ["classical-core-sku-s1"]
-    assert json.loads(manifests[0].read_text())["estado"] == "completada"
-    assert first.fitting.candidates[0].selection.payload["estudio_hpo"] == (
-        "classical-core-sku-s1"
-    )
+    estudios = ["classical-core-sku-s1", "ml-core-sku-s1"]
+    assert [m.parent.name for m in manifests] == estudios
+    assert all(json.loads(m.read_text())["estado"] == "completada" for m in manifests)
+    assert [
+        c.selection.payload["estudio_hpo"] for c in first.fitting.candidates
+    ] == estudios
     snapshot = {path: path.read_bytes() for path in hpo.rglob("*") if path.is_file()}
 
     second = run()
-    assert second.fitting.candidates[0].selection == (
-        first.fitting.candidates[0].selection
-    )
-    np.testing.assert_array_equal(
-        second.fitting.candidates[0].forecast, first.fitting.candidates[0].forecast
-    )
+    for again, original in zip(
+        second.fitting.candidates, first.fitting.candidates, strict=True
+    ):
+        assert again.selection == original.selection
+        np.testing.assert_array_equal(again.forecast, original.forecast)
     assert {p: p.read_bytes() for p in hpo.rglob("*") if p.is_file()} == snapshot
 
 
@@ -1061,14 +1075,22 @@ def test_cli_reports_isolated_unit_failures_with_exit_code_8(
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert code == 8
     assert report["blocked_stage"] == "L4"
-    assert [(f["sku_id"], f["stage"]) for f in report["failures"]] == [("broken", "L2")]
+    assert [(f["sku_id"], f["stage"], f["family"]) for f in report["failures"]] == [
+        ("broken", "L2", "classical"),
+        ("broken", "L2", "ml"),
+    ]
     units = [
         json.loads(line) for line in (Path(report["run_dir"]) / "unidades.jsonl").open()
     ]
-    assert [(u["sku_id"], u["stage"], u["state"]) for u in units] == [
-        ("broken", "L2", "fallida"),
-        ("proof-sku", "L2", "completada"),
-        ("proof-sku", "L3", "completada"),
+    assert sorted(
+        (u["sku_id"], u["stage"], u["family"], u["state"]) for u in units
+    ) == [
+        ("broken", "L2", "classical", "fallida"),
+        ("broken", "L2", "ml", "fallida"),
+        ("proof-sku", "L2", "classical", "completada"),
+        ("proof-sku", "L2", "ml", "completada"),
+        ("proof-sku", "L3", "classical", "completada"),
+        ("proof-sku", "L3", "ml", "completada"),
     ]
 
 
