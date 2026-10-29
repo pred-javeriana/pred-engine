@@ -6,6 +6,7 @@ No empieza con `test_`: pytest no lo recolecta; lo importan los `test_*.py`.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -13,6 +14,8 @@ import pandas as pd
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.forecasting.evaluaciones.calculo_errores import (
     FAMILIA_LINEA_BASE,
+    BloquesReserva,
+    EvaluacionBloques,
     EvaluacionSku,
     Metricas,
     MetricasCandidato,
@@ -20,6 +23,7 @@ from pred_engine.forecasting.evaluaciones.calculo_errores import (
     PronosticoFechado,
     SerieCandidato,
 )
+from pred_engine.forecasting.evaluaciones.veredictos import POLITICA_INICIAL
 
 T_ESTRELLA = pd.Timestamp("2024-01-14")
 
@@ -125,4 +129,41 @@ def evaluacion(
         n_obs_validas_reserva=n_obs,
         reserva_toda_cero=toda_cero,
         n_candidatos_fallidos=fallidos,
+    )
+
+
+# Reserva de 100 dias con horizonte 1: seleccion con los origenes t*..t*+39 y
+# prueba con t*+40..t*+99, sin embargo.
+BLOQUES = BloquesReserva(T_ESTRELLA, 100, 1, POLITICA_INICIAL.fraccion_seleccion)
+
+
+def en_bloques(
+    prueba: EvaluacionSku, seleccion: EvaluacionSku | None = None
+) -> EvaluacionBloques:
+    """La evidencia de `prueba` en el bloque de prueba de `BLOQUES`.
+
+    Las ventanas de `metricas_candidato` empiezan en t*; aqui se corren al
+    primer origen de prueba. Sin `seleccion`, el bloque de seleccion tiene la
+    misma evidencia en sus propios origenes. Los veredictos no leen `reserva`.
+    """
+    corrida = _desplazar(prueba, BLOQUES.dias_seleccion)
+    return EvaluacionBloques(
+        reserva=corrida, seleccion=seleccion or prueba, prueba=corrida
+    )
+
+
+def _desplazar(evaluado: EvaluacionSku, dias: int) -> EvaluacionSku:
+    def mover(c: MetricasCandidato) -> MetricasCandidato:
+        return replace(
+            c,
+            por_ventana=tuple(
+                replace(v, origen=v.origen + pd.Timedelta(days=dias))
+                for v in c.por_ventana
+            ),
+        )
+
+    return replace(
+        evaluado,
+        linea_base=mover(evaluado.linea_base),
+        candidatos=tuple(mover(c) for c in evaluado.candidatos),
     )

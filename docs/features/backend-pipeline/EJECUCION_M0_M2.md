@@ -48,8 +48,10 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
    admitido como unidad: HPO (TPE + ASHA sobre walk-forward), ajuste final en la
    historia admisible y pronóstico de los días reservados. El HPO solo elige
    configuraciones que ajustan en todas las ventanas, y un pronóstico final
-   degenerado (regla #3) hace fallar su unidad (ADR-020). L3 vuelve a evaluar cada
-   candidato con walk-forward causal.
+   degenerado (regla #3) hace fallar su unidad (ADR-020). Al cerrar L2, un SKU
+   con dos o más familias enrutadas y una sola evaluable sale de la competencia
+   con `eligibility.fewer_than_two_families` (ADR-023) y queda en `exclusions`.
+   L3 vuelve a evaluar cada candidato con walk-forward causal.
 
 ## Opciones de M2
 
@@ -152,7 +154,9 @@ unidades.
   reconstruyen desde su manifiesto sin reentrenar, los interrumpidos continúan
   desde su último checkpoint y solo los que faltan arrancan de cero. L3 y el
   pronóstico inicial de M2 se reconstruyen. Las ventanas M3 ya confirmadas se
-  leen de SQLite y no se recalculan.
+  leen de SQLite y no se recalculan. Una unidad L2 fallida se repite; si el
+  reintento cambia qué SKU excluye la regla de dos familias, M3 conserva las
+  exclusiones de la procedencia durable de su protocolo.
 - Un estudio en estado `fallida` no se reabre (2.9); su unidad vuelve a fallar
   con ese motivo.
 - Una evaluación M3 PUBLICADA es inmutable. Repetir el mismo comando después

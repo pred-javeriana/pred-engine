@@ -155,7 +155,10 @@ def test_ejemplo_de_composicion_documentado_publica_m3(tmp_path, monkeypatch):
     codigo = bloque.split("```python\n", 1)[1].split("```", 1)[0]
     monkeypatch.chdir(tmp_path)
     crear_base_plataforma(tmp_path / "data/pred.db")
-    fuente(tmp_path).rename(tmp_path / "sales.csv")
+    # Las dos familias del ejemplo deben entregar candidato: sin ruido, SARIMA
+    # no ajusta y el unico SKU sale con la regla de dos familias (ADR-023).
+    demanda = np.round(serie_ar_estacional(220), 2)
+    fuente(tmp_path, demanda=demanda).rename(tmp_path / "sales.csv")
     espacio: dict[str, object] = {"__name__": "__main__"}
     exec(compile(codigo, str(readme), "exec"), espacio)
     assert espacio["result"].validation.audit_bundle["estado"] == "PUBLICADA"

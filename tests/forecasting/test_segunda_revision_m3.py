@@ -20,13 +20,18 @@ from pred_engine.run_artifacts import sha256_file
 pytestmark = pytest.mark.slow
 
 
+# 450 dias: reserva de 90 con H = 7, asi el bloque de seleccion tiene 30 ventanas
+# y el de prueba 48, por encima de n_min (ADR-023).
+DIAS = 450
+
+
 def fuente(tmp_path):
     path = tmp_path / "source.csv"
     pd.DataFrame(
         {
-            "sku_id": ["SKU"] * 220,
-            "timestamp": pd.date_range("2024-01-01", periods=220),
-            "demand_qty": 30 + np.arange(220) * 0.05 + np.sin(np.arange(220)),
+            "sku_id": ["SKU"] * DIAS,
+            "timestamp": pd.date_range("2024-01-01", periods=DIAS),
+            "demand_qty": 30 + np.arange(DIAS) * 0.05 + np.sin(np.arange(DIAS)),
             "lead_time_days": 4,
         }
     ).to_csv(path, index=False)

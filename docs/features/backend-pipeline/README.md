@@ -22,13 +22,19 @@ principal stage.
   recorded as 'sin historia admisible: lanzado despues del corte'. Each SKU/family
   is an isolated unit. The families are SARIMA, LightGBM, NumPy MLP and Chronos-2.
   Chronos-2 runs by default (`--no-foundation` drops it), is CPU-only and requires
-  the `foundation` extra and fixed local weights.
+  the `foundation` extra and fixed local weights. When L2 closes, a SKU with two
+  or more routed families and exactly one evaluable family leaves the
+  competition with `eligibility.fewer_than_two_families` (ADR-023); it reaches
+  neither L3 nor M3. A SKU with no evaluable family goes on to M3 as
+  FALLO_TECNICO.
 - **L3:** causal walk-forward evaluation on the same admissible history used
   by HPO. Each window has a new fit. `selection_scope="same_history"` makes
   the limitation explicit. These diagnostic metrics are not a holdout verdict.
 - **L4:** native M3 through `ControladorEvaluacion`: strict M2 handoff,
-  complete daily reserved windows, category selection, five descriptive
-  verdicts, complementary HLN-DM/BH and durable publication to the central
+  complete daily reserved windows split into a selection block and a test
+  block, category selection frozen on the selection block, five descriptive
+  verdicts, complementary HLN-DM with BH within each class and the champion
+  confirmation on the test block, and durable publication to the central
   platform database.
 
 L2/L3 retain independent process units with `workers > 1`. A unit failure
@@ -126,12 +132,14 @@ M2 reuses its HPO manifests and completed trials. M3 freezes its protocol and
 handoff before reserved observations are used. It confirms result, marker and
 failure cause together for each origin. A restart loads confirmed forecasts
 and executes only pending origins, then resumes evaluation or publication from
-the durable run phase. The M2 handoff emission does not change on resume.
+the durable run phase. The M2 handoff emission does not change on resume. A
+failed L2 unit runs again on resume, so the retry can change which SKUs the
+two-family rule excludes; M3 keeps the exclusions of its durable provenance.
 
 The central database is authoritative. CSV and Parquet are complete derived
 exports prepared before the final directory rename. Platform readers expose
 only PUBLICADA evidence, so a stopped run never appears as a completed result.
-See [M3](../3.Evaluacion/README.md), its API pages and ADR-021 for exact contracts.
+See [M3](../3.Evaluacion/README.md), its API pages, ADR-021 and ADR-023 for exact contracts.
 
 ## Diagnostics and verification
 

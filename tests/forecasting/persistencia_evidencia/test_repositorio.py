@@ -27,6 +27,12 @@ from pred_engine.forecasting.evaluaciones.calculo_errores import (
     PronosticoFechado,
     SerieCandidato,
 )
+from pred_engine.forecasting.evaluaciones.confirmacion import (
+    ComparacionFamilia,
+    Intervalo,
+)
+from pred_engine.forecasting.evaluaciones.diebold_mariano import IntervaloRazon
+from pred_engine.forecasting.evaluaciones.veredictos import SignificanciaCategoria
 from pred_engine.forecasting.persistencia_evidencia import (
     VENTANA_AGREGADA,
     EstadoCorridaError,
@@ -240,10 +246,12 @@ def test_guardar_evaluacion_persiste_metricas_seleccion_y_veredictos() -> None:
     sarima = metricas[metricas["candidato_id"] == _SARIMA].set_index(
         ["ventana", "metrica"]
     )["valor"]
-    # Real 10, SARIMA 9 y Seasonal Naive 6: MAE = 1 y r = 1 / 4.
+    # Real 10, SARIMA 9 y Seasonal Naive 6: MAE = 1 y r = 1 / 4. Las ventanas son
+    # las de toda la reserva; la agregada, la del bloque de prueba (origen t*+2).
     assert sarima[("2024-01-14", "mae")] == pytest.approx(1.0)
+    assert sarima[("2024-01-16", "mae")] == pytest.approx(1.0)
     assert sarima[(VENTANA_AGREGADA, "razon_sn")] == pytest.approx(0.25)
-    assert sarima[(VENTANA_AGREGADA, "n_ventanas_validas")] == 2
+    assert sarima[(VENTANA_AGREGADA, "n_ventanas_validas")] == 1
 
     categorias = consultar(conn, run_id)["m3_categorias"].set_index("sku_class")
     assert set(json.loads(categorias.loc["smooth", "medianas_r"])) == {
@@ -258,14 +266,96 @@ def test_guardar_evaluacion_persiste_metricas_seleccion_y_veredictos() -> None:
     }
 
     veredicto = consultar(conn, run_id, sku="S1")["m3_veredictos"].iloc[0]
-    assert veredicto["veredicto"] == "EVIDENCIA_INSUFICIENTE"
+    assert veredicto["veredicto"] == "VALIDADO"
     assert veredicto["candidato_campeon"] == _SARIMA
     evaluados = json.loads(veredicto["modelos_evaluados"])
     assert [m["familia"] for m in evaluados] == ["seasonal_naive", "classical", "ml"]
     assert evaluados[0]["razon_sn"] == 1.0
-    # Dos ventanas no alcanzan n_min: no hay prueba y queda la causa.
-    assert veredicto["dm_causa"] == "veredicto:EVIDENCIA_INSUFICIENTE"
+    # Una ventana de prueba no alcanza n_min_dm: no hay prueba y queda la causa.
+    assert veredicto["dm_causa"] == "pocas_ventanas"
     assert pd.isna(veredicto["dm_p_valor"])
+    # Sin p-valores ni competidoras con SKU suficientes: resumen sin inferencia.
+    significancia = consultar(conn, run_id)["m3_significancia"].set_index("sku_class")
+    assert significancia.loc["smooth", "n_probados"] == 0
+    assert pd.isna(significancia.loc["smooth", "nivel_fcr"])
+    confirmaciones = consultar(conn, run_id)["m3_confirmaciones"].set_index("sku_class")
+    assert confirmaciones.loc["smooth", "estado"] == "sin_comparables"
+    assert confirmaciones.loc["smooth", "causa"] == "pocos_skus:ml"
+    assert filas(conn, "m3_intervalos_r") == filas(conn, "m3_seleccion_previa") == 0
+
+
+def test_guardar_evaluacion_persiste_la_evidencia_del_bloque_de_prueba() -> None:
+    conn = base()
+    run_id, evaluaciones, resultado = corrida_evaluada(conn)
+    lumpy, smooth = resultado.categorias
+    fila = ComparacionFamilia(
+        "ml",
+        12,
+        0.8,
+        Intervalo(0.7, 0.9),
+        0.79,
+        Intervalo(0.72, 0.88),
+        11,
+        Intervalo(0.65, 0.98),
+        3.0,
+        0.001,
+        0.001,
+        5,
+        0,
+        None,
+    )
+    smooth = replace(
+        smooth,
+        significancia=SignificanciaCategoria(4, 3, 1, 2, 1, 0.95),
+        confirmacion=replace(
+            smooth.confirmacion,
+            estado="confirmado",
+            causa=None,
+            p_iut=0.001,
+            p_holm=0.002,
+            comparaciones=(fila,),
+        ),
+        contendiente="ml",
+        seleccion_previa=smooth.seleccion,
+    )
+    skus = tuple(
+        replace(
+            v,
+            intervalo_r=IntervaloRazon(0.95, 0.2, None),
+            intervalo_r_fcr=IntervaloRazon(0.96, 0.19, None),
+        )
+        if v.sku == "S1"
+        else v
+        for v in resultado.skus
+    )
+    resultado = replace(resultado, categorias=(lumpy, smooth), skus=skus)
+    guardar_evaluacion(
+        conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
+    )
+    evidencia = consultar(conn, run_id)
+    confirmacion = evidencia["m3_confirmaciones"].set_index("sku_class").loc["smooth"]
+    assert (confirmacion["estado"], confirmacion["p_holm"]) == ("confirmado", 0.002)
+    assert confirmacion["contendiente"] == "ml"
+    comparacion = evidencia["m3_comparaciones"].iloc[0]
+    assert comparacion["competidora"] == "ml"
+    assert (
+        comparacion["ic_hodges_lehmann_inferior"],
+        comparacion["ic_hodges_lehmann_superior"],
+    ) == (0.72, 0.88)
+    assert pd.isna(comparacion["causa"])
+    significancia = evidencia["m3_significancia"].set_index("sku_class").loc["smooth"]
+    assert significancia[["n_mejores", "n_peores_by", "nivel_fcr"]].tolist() == [
+        3,
+        1,
+        0.95,
+    ]
+    previa = evidencia["m3_seleccion_previa"].iloc[0]
+    assert (previa["sku_class"], previa["familia_campeona"]) == ("smooth", "classical")
+    assert json.loads(previa["medianas_r"]) == dict(smooth.seleccion.medianas_r)
+    intervalo = consultar(conn, run_id, sku="S1")["m3_intervalos_r"].iloc[0]
+    assert (intervalo["nivel"], intervalo["inferior"]) == (0.95, 0.2)
+    assert pd.isna(intervalo["superior"]) and pd.isna(intervalo["superior_fcr"])
+    assert intervalo["nivel_fcr"] == 0.96
 
 
 def test_los_pronosticos_de_la_linea_base_tambien_se_guardan() -> None:
@@ -279,19 +369,26 @@ def test_una_metrica_no_calculable_queda_nula_con_su_causa() -> None:
     conn = base()
     run_id, evaluaciones, resultado = corrida_evaluada(conn)
     s1 = evaluaciones[0]
-    assert s1.linea_base.agregadas is not None
+    # La fila agregada se escribe desde el bloque de prueba.
+    prueba = s1.prueba
+    assert prueba.linea_base.agregadas is not None
     sin_escala = replace(
-        s1.linea_base.agregadas, mase=None, no_calculables={"mase": "historia_corta"}
+        prueba.linea_base.agregadas,
+        mase=None,
+        no_calculables={"mase": "historia_corta"},
     )
     evaluaciones[0] = replace(
-        s1, linea_base=replace(s1.linea_base, agregadas=sin_escala)
+        s1,
+        prueba=replace(
+            prueba, linea_base=replace(prueba.linea_base, agregadas=sin_escala)
+        ),
     )
     guardar_evaluacion(
         conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
     )
     metricas = consultar(conn, run_id, sku="S1")["m3_metricas"]
     mase = metricas[
-        (metricas["candidato_id"] == s1.linea_base.candidato_id)
+        (metricas["candidato_id"] == prueba.linea_base.candidato_id)
         & (metricas["ventana"] == VENTANA_AGREGADA)
         & (metricas["metrica"] == "mase")
     ].iloc[0]
@@ -389,6 +486,8 @@ def test_consultar_por_sku_solo_devuelve_ese_sku() -> None:
     )
     por_sku = consultar(conn, run_id, sku="S2")
     assert "m3_corridas" not in por_sku
+    # Sin p-valores en esta corrida no hay intervalos de r.
+    assert por_sku.pop("m3_intervalos_r").empty
     assert all(set(frame["sku"]) == {"S2"} for frame in por_sku.values())
 
 

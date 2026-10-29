@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from pred_engine.cli import diagnose_pipeline, main
+from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
 from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
@@ -828,12 +829,18 @@ def test_parallel_workers_reproduce_sequential_results_in_other_processes(tmp_pa
     settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
 
     def run(workers):
+        # Con esta semilla SARIMA ajusta los dos SKU: con una sola familia
+        # evaluable saldrian con la regla de dos familias (ADR-023).
         pipeline = build_pipeline(
-            settings, families=("classical", "ml"), n_trials=1, seed=3, workers=workers
+            settings, families=("classical", "ml"), n_trials=1, seed=20, workers=workers
         )
         return pipeline.run(request)
 
     sequential, parallel = run(1), run(2)
+    assert {
+        (c.fitted.selection.sku_id, c.fitted.selection.family)
+        for c in sequential.evaluation.candidates
+    } == {(s, f) for s in ("core-sku", "core-b") for f in ("classical", "ml")}
     pairs = zip(
         sequential.evaluation.candidates, parallel.evaluation.candidates, strict=True
     )
@@ -921,6 +928,10 @@ def _seed_run_args(tmp_path: Path) -> list[str]:
         "28",
         "--workers",
         "2",
+        # Con esta semilla unos SKU entregan las dos familias y otros solo
+        # LightGBM, y estos salen con la regla de dos familias (ADR-023).
+        "--seed",
+        "16",
     ]
 
 
@@ -963,7 +974,13 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     assert handoff.run_id_m2 == report["run_id"]
     assert handoff.fallos == ()
     candidates = {(c.sku, c.familia) for c in handoff.candidatos}
-    assert len(candidates) == report["units"]["L2"]["completed"] > 0
+    skus = {sku for sku, _ in candidates}
+    assert candidates == {(sku, f) for sku in skus for f in ("classical", "ml")}
+    # Cada SKU excluido entrego una sola unidad L2 y no llega a M3.
+    excluded = {e["sku_id"]: e["code"] for e in report["exclusions"]}
+    assert skus and excluded and skus.isdisjoint(excluded)
+    assert set(excluded.values()) == {ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS}
+    assert len(candidates) == report["units"]["L2"]["completed"] - len(excluded)
     for candidate in handoff.candidatos:
         instanciar(candidate)
     assert [c["candidato_id"] for c in run["candidates"]] == [

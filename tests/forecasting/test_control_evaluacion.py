@@ -77,6 +77,36 @@ def test_m2_a_m3_publica_todas_las_ventanas_y_los_dos_skus(tmp_path):
     assert [fila[0] for fila in base] == pytest.approx([26.35, 27.7])
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert conn.execute("SELECT ejecucion_id FROM m3_protocolos").fetchone()[0] == 1
+    protocolo, procedencia = (
+        json.loads(texto)
+        for texto in conn.execute(
+            "SELECT protocolo, procedencia FROM m3_protocolos"
+        ).fetchone()
+    )
+    # Politica y bloques quedan fijos con el protocolo, antes de abrir la reserva:
+    # reserva de 7 dias con H = 2, seleccion de 2 dias y 4 origenes de prueba.
+    politica = protocolo["politica"]
+    assert (politica["version"], politica["fraccion_seleccion"]) == (
+        "3.4.4-bloques",
+        0.4,
+    )
+    assert (
+        politica["n_min_confirmacion"],
+        politica["bloque_bootstrap"],
+        politica["replicas_bootstrap"],
+        politica["semilla_bootstrap"],
+    ) == (10, 14, 2000, 20261029)
+    bloques = protocolo["bloques"]
+    assert bloques["dias_seleccion"] == 2
+    assert (bloques["origenes_seleccion"]["n"], bloques["origenes_prueba"]) == (
+        1,
+        {"n": 4, "primero": "2024-01-30", "ultimo": "2024-02-02"},
+    )
+    assert procedencia["limite"] == (
+        "seleccion y puntaje en bloques disjuntos de la misma reserva; "
+        "evidencia retrospectiva"
+    )
+    assert [s["sku_class"] for s in procedencia["seleccion_previa"]] == ["smooth"]
     assert conn.execute(
         "SELECT n_skus, n_instancias, n_calculables FROM m3_cartera "
         "WHERE familia = 'classical' AND metrica = 'rmse'"
@@ -283,6 +313,8 @@ def test_reanuda_fases_durables_sin_ajustar_ni_cambiar_unidades(
         raise KeyboardInterrupt("no se ajusta una fase con ventanas completas")
 
     pipeline.validator.fabricas = {"classical": no_ajustar}
+    # Seasonal Naive tampoco se ajusta en los pliegues L3: la seleccion de
+    # robustez se lee de la procedencia durable del protocolo.
     monkeypatch.setattr(SeasonalNaiveStub, "fit", no_ajustar)
     resultado = pipeline.validate(evaluation)
     assert resultado.audit_bundle["estado"] == "PUBLICADA"
@@ -292,6 +324,7 @@ def test_reanuda_fases_durables_sin_ajustar_ni_cambiar_unidades(
         ).fetchall()
         == unidades
     )
+    assert conn.execute("SELECT COUNT(*) FROM m3_seleccion_previa").fetchone()[0] > 0
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()
 
@@ -437,22 +470,23 @@ def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
 def test_candidato_l2_rechazado_por_3_2_conserva_su_veredicto_ante_otro_fallo_l2(
     tmp_path,
 ):
+    @dataclass(frozen=True)
     class SeleccionSinEstacional:
-        family = "classical"
+        family: str
 
         def select(self, request, profile):
-            # Ajusta en L2, pero 3.2 exige las claves estacionales explicitas.
+            # Ajusta en L2, pero 3.2 exige todas las claves de la familia.
             return SelectionResult(
                 sku_id=request.sku_id,
                 sku_class=request.sku_class,
-                family="classical",
+                family=self.family,
                 profile=profile,
                 produced_by="seleccion-sin-estacional",
                 forecast_config={"p": 0, "d": 0, "q": 0},
             )
 
     class SeleccionFallida:
-        family = "ml"
+        family = "dl"
 
         def select(self, request, profile):
             raise ValueError("causa concreta de la otra familia L2")
@@ -461,24 +495,26 @@ def test_candidato_l2_rechazado_por_3_2_conserva_su_veredicto_ante_otro_fallo_l2
         conn = _conexion(raiz)
         pipeline, request = _caso(raiz, conn)
         registry = StrategyRegistry()
-        registry.register("classical", SeleccionSinEstacional())
-        registry.register("ml", SeleccionFallida())
+        registry.register("classical", SeleccionSinEstacional("classical"))
+        registry.register("ml", SeleccionSinEstacional("ml"))
+        registry.register("dl", SeleccionFallida())
         pipeline.router = SelectionRouter(ConfiguredTopologyPolicy(familias), registry)
 
         def fabrica(config, *, seed):
             return SeasonalNaiveStub(1, seed)
 
-        pipeline.factories = {"classical": fabrica, "ml": fabrica}
+        pipeline.factories = {"classical": fabrica, "ml": fabrica, "dl": fabrica}
         resultado = pipeline.run(request)
         conn.close()
         assert [u.failed for u in resultado.fitting.units] == [
-            familia == "ml" for familia in familias
+            familia == "dl" for familia in familias
         ]
         (unico,) = resultado.validation.verdicts
         return {k: v for k, v in unico.evidence.items() if k != "run_id"}
 
-    solo_rechazo = veredicto(tmp_path / "sin-fallo-l2", ("classical",))
-    con_fallo_l2 = veredicto(tmp_path / "con-fallo-l2", ("classical", "ml"))
+    # Dos familias entregadas en L2: la regla de dos familias no excluye el SKU.
+    solo_rechazo = veredicto(tmp_path / "sin-fallo-l2", ("classical", "ml"))
+    con_fallo_l2 = veredicto(tmp_path / "con-fallo-l2", ("classical", "ml", "dl"))
     assert solo_rechazo["veredicto"] == "FALLO_TECNICO"
     assert con_fallo_l2 == solo_rechazo
 
@@ -529,7 +565,8 @@ def test_parquet_de_m1_entra_sin_transformacion_ni_republicacion(tmp_path):
         )
     )
     assert resultado.complete is True
-    assert resultado.validation.verdicts[0].evidence["n_ventanas"] == 6
+    # Reserva de 7 dias con H = 2: el bloque de prueba tiene los origenes 2 a 5.
+    assert resultado.validation.verdicts[0].evidence["n_ventanas"] == 4
     assert ingesta.parquet_path.read_bytes() == contenido
     assert not (tmp_path / "sin_publicacion").exists()
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

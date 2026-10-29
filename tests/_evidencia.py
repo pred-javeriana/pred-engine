@@ -20,14 +20,16 @@ from pred_engine.forecasting.adaptador_candidatos import (
 )
 from pred_engine.forecasting.evaluaciones.calculo_errores import (
     VERSION_METRICAS,
+    BloquesReserva,
     EntradaSku,
-    EvaluacionSku,
+    EvaluacionBloques,
     SerieCandidato,
-    evaluar_sku,
+    evaluar_bloques,
     pronosticar_linea_base,
 )
 from pred_engine.forecasting.evaluaciones.veredictos import (
     POLITICA_INICIAL,
+    PoliticaSeleccion,
     ResultadoEvaluacion,
     emitir_veredictos,
 )
@@ -122,8 +124,12 @@ def corrida(
 # --- Dos SKUs, dos candidatos y la linea base, con dos ventanas de 2 dias ----
 
 # Q1 = 7 (MASE calculable) y Seasonal Naive pronostica 6 en ambas ventanas.
-# Reserva real constante en 10.
+# Reserva real de 4 dias, constante en 10.
 _HISTORIA = np.r_[np.full(7, 13.0), np.full(7, 6.0)]
+# La ventana con origen t* es el bloque de seleccion y la de t*+2 el de prueba;
+# la politica acepta esa unica ventana por bloque. Misma version que la inicial.
+POLITICA = PoliticaSeleccion(n_min=1, fraccion_seleccion=0.5)
+BLOQUES = BloquesReserva.de(corte(4), 2, POLITICA.fraccion_seleccion)
 
 
 def _serie(sku: str, familia: str, modelo: str, valores: float) -> SerieCandidato:
@@ -152,7 +158,7 @@ def corrida_evaluada(
     conn: sqlite3.Connection,
     *fallos: FalloCandidato,
     con_linea_base: bool = True,
-) -> tuple[str, list[EvaluacionSku], ResultadoEvaluacion]:
+) -> tuple[str, list[EvaluacionBloques], ResultadoEvaluacion]:
     """Corrida en EVALUADA con sus unidades y la evaluacion real de 3.4.
 
     Como orquestaria 3.3: las unidades de cada candidato y las de Seasonal
@@ -162,18 +168,21 @@ def corrida_evaluada(
     for entrada in entradas():
         series = list(entrada.candidatos)
         if con_linea_base:
-            series.append(pronosticar_linea_base(entrada, corte()))
+            series.append(pronosticar_linea_base(entrada, corte(4)))
         for serie_candidato in series:
             guardar_unidades(conn, run_id, entrada.sku, serie_candidato)
     marcar_evaluada(conn, run_id)
     # El corte lo fija el protocolo; aqui se siembra para probar solo 3.4 y 3.5.
     conn.execute(
         "INSERT INTO m3_cortes (run_id, t_star) VALUES (?, ?)",
-        (run_id, corte().t_star.strftime("%Y-%m-%d")),
+        (run_id, corte(4).t_star.strftime("%Y-%m-%d")),
     )
     conn.commit()
-    evaluaciones = [evaluar_sku(e, corte()) for e in entradas()]
-    return run_id, evaluaciones, emitir_veredictos(evaluaciones, datos_sinteticos=False)
+    evaluaciones = [evaluar_bloques(e, corte(4), BLOQUES) for e in entradas()]
+    resultado = emitir_veredictos(
+        evaluaciones, BLOQUES, datos_sinteticos=False, politica=POLITICA
+    )
+    return run_id, evaluaciones, resultado
 
 
 def observaciones(conn: sqlite3.Connection, run_id: str) -> dict[str, pd.Series]:

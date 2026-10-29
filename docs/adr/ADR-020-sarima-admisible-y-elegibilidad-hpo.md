@@ -76,7 +76,9 @@ HPO.
   cuando el pronóstico final del ganador es degenerado (código de salida 8).
   La guía de ejecución registra cuántas fallan en la corrida de referencia.
 - La política 2.2 enruta los SKU `lumpy` a las familias clásica y fundacional;
-  si la unidad clásica falla, el SKU queda con una sola familia evaluable. La
+  si la unidad clásica falla, el SKU queda con una sola familia evaluable y
+  sale de la competencia con la causa `eligibility.fewer_than_two_families`
+  (ADR-023). La
   política M3 `3.4.3-inicial` resuelve el caso distinto de un SKU con candidatos pero sin
   instancia de la familia campeona de su clase: usa la siguiente familia
   disponible en el orden de mediana r de la clase, nunca la mejor del SKU.

@@ -1,4 +1,4 @@
-"""Diebold-Mariano HLN y correccion BH (ADR-03-008, alternativa 2)."""
+"""Diebold-Mariano HLN, intervalo de r y correccion BH (ADR-03-011, ADR-023)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import math
 import numpy as np
 import pytest
 from scipy import stats
+from statsmodels.stats.multitest import multipletests
 from statsmodels.tsa.stattools import acovf
 from tests._evaluaciones import metricas_candidato
 
@@ -14,9 +15,23 @@ from pred_engine.forecasting.evaluaciones.calculo_errores import FAMILIA_LINEA_B
 from pred_engine.forecasting.evaluaciones.diebold_mariano import (
     PruebaDM,
     corregir_multiplicidad,
+    intervalo_razon,
     probar_contra_linea_base,
+    probar_pares,
     prueba_hln,
 )
+
+_T = np.arange(40)
+_LINEA_BASE = list(np.sqrt(1.0 + 0.4 * np.cos(0.7 * _T)))
+
+
+def _par(media: float):
+    """Campeon con perdida media `media` frente a una linea base de perdida 1."""
+    rmses = list(np.sqrt(media + 0.3 * np.sin(1.1 * _T)))
+    return (
+        metricas_candidato("ml", 0.8, rmses=rmses),
+        metricas_candidato(FAMILIA_LINEA_BASE, 1.0, rmses=_LINEA_BASE),
+    )
 
 
 def test_hln_coincide_con_el_calculo_a_mano() -> None:
@@ -120,3 +135,62 @@ def test_bh_ajusta_solo_las_pruebas_calculadas() -> None:
     assert [corregidas[s].significativa for s in "ABC"] == [True, False, False]
     assert {corregidas[s].alfa for s in "ABC"} == {0.035}
     assert corregidas["D"] == pruebas["D"]
+
+
+def test_bh_by_ajusta_con_benjamini_yekutieli() -> None:
+    pruebas = {
+        s: PruebaDM(40, 1, estadistico=-2.0, p_valor=p)
+        for s, p in zip("ABC", (0.01, 0.02, 0.03), strict=True)
+    }
+    corregidas = corregir_multiplicidad(pruebas, alfa=0.05, metodo="fdr_by")
+    rechazos, ajustados, _, _ = multipletests(
+        [0.01, 0.02, 0.03], alpha=0.05, method="fdr_by"
+    )
+    assert [corregidas[s].p_ajustado for s in "ABC"] == pytest.approx(list(ajustados))
+    assert [corregidas[s].significativa for s in "ABC"] == list(rechazos)
+
+
+@pytest.mark.parametrize("media", [0.6, 0.95])
+def test_intervalo_de_r_invierte_hln(media: float) -> None:
+    campeon, base = _par(media)
+    intervalo = intervalo_razon(campeon, base, nivel=0.95)
+    assert intervalo is not None and intervalo.superior is not None
+    a = np.square([v.metricas.rmse for v in campeon.por_ventana])
+    b = np.square(_LINEA_BASE)
+    # En r la media del diferencial a - r^2 b es 0: el intervalo contiene a r.
+    r = math.sqrt(a.mean() / b.mean())
+    assert intervalo.inferior < r < intervalo.superior
+    # En cada extremo el estadistico HLN vale el valor critico.
+    critico = stats.t.ppf(0.975, df=39)
+    for rho in (intervalo.inferior, intervalo.superior):
+        prueba = prueba_hln(a - rho**2 * b, 1)
+        assert abs(prueba.estadistico) == pytest.approx(critico)
+    # Excluye 1 justo cuando la prueba rechaza al mismo nivel.
+    p_valor = probar_pares(campeon, base).p_valor
+    assert p_valor is not None
+    assert (intervalo.superior < 1) is (p_valor < 0.05)
+
+
+def test_intervalo_sin_cota_superior_si_sn_no_se_distingue_de_cero() -> None:
+    campeon = metricas_candidato(
+        "ml", 0.8, n=8, rmses=[0.5, 0.4, 0.6, 0.5, 0.45, 0.55, 0.5, 0.5]
+    )
+    linea_base = metricas_candidato(
+        FAMILIA_LINEA_BASE, 1.0, n=8, rmses=[3.0] + [0.01] * 7
+    )
+    intervalo = intervalo_razon(campeon, linea_base, nivel=0.95)
+    assert intervalo is not None
+    assert intervalo.superior is None and intervalo.inferior > 0
+
+
+def test_intervalo_a_mayor_nivel_es_mas_ancho_y_sin_prueba_no_existe() -> None:
+    campeon, base = _par(0.6)
+    al_95 = intervalo_razon(campeon, base, nivel=0.95)
+    al_99 = intervalo_razon(campeon, base, nivel=0.99)
+    assert al_95 is not None and al_99 is not None
+    assert al_95.superior is not None and al_99.superior is not None
+    assert al_99.inferior < al_95.inferior and al_95.superior < al_99.superior
+    corto = metricas_candidato("ml", 0.8, n=1)
+    assert intervalo_razon(corto, base, nivel=0.95) is None
+    with pytest.raises(ValueError, match="nivel"):
+        intervalo_razon(campeon, base, nivel=1.0)

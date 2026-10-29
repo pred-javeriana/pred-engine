@@ -6,8 +6,8 @@ resuelven de forma perezosa (modulo, nombre) para que este modulo, que vive en
 usan los subprocesos ``spawn`` de la ejecucion paralela.
 
 Lo que no esta en la tabla cae en ``pipeline.stage_failed`` (o ``evaluation.failed``
-cuando la etapa es L3). Las exclusiones de SKU antes de L2 llevan sus propios
-codigos ``eligibility.*``.
+cuando la etapa es L3). Las exclusiones de SKU, antes de L2 o al cerrar L2, llevan
+sus propios codigos ``eligibility.*``.
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ ELEGIBILIDAD_HUECOS: Final = "eligibility.calendar_gaps"
 ELEGIBILIDAD_SIN_RESERVA: Final = "eligibility.no_reserved_observations"
 ELEGIBILIDAD_NO_FINITA: Final = "eligibility.non_finite_demand"
 ELEGIBILIDAD_HISTORIA_INSUFICIENTE: Final = "eligibility.insufficient_history"
+# Exclusion al cerrar L2: una sola familia evaluable de las enrutadas (ADR-023).
+ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS: Final = "eligibility.fewer_than_two_families"
 
 CODIGO_ETAPA_FALLIDA: Final = "pipeline.stage_failed"
 CODIGO_EVALUACION_FALLIDA: Final = "evaluation.failed"
@@ -252,6 +254,7 @@ def codigos_conocidos() -> frozenset[str]:
             ELEGIBILIDAD_SIN_RESERVA,
             ELEGIBILIDAD_NO_FINITA,
             ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
+            ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
         }
     )
 

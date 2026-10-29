@@ -1,9 +1,8 @@
 """Entrada y salida tipadas del calculo de metricas sobre la reserva (3.4-A1).
 
-La entrada es minima a proposito: un pronostico fechado por origen. Hoy el
-pipeline entrega un solo origen (t*, toda la reserva); cuando 3.3 genere las
-ventanas de la reserva, cada ventana es un `PronosticoFechado` mas. La linea
-base no llega en la entrada: 3.4 la genera en esas mismas ventanas.
+La entrada es minima a proposito: un pronostico fechado por cada origen diario
+de la reserva (3.3). La linea base no llega en la entrada: 3.4 la genera en
+esas mismas ventanas.
 """
 
 from __future__ import annotations
@@ -95,6 +94,11 @@ class MetricasCandidato:
 
 @dataclass(frozen=True, slots=True)
 class EvaluacionSku:
+    """Metricas de un SKU en un tramo de la reserva: toda ella o uno de sus bloques.
+
+    Las observaciones validas y la demanda en cero se cuentan en los dias del tramo.
+    """
+
     sku: str
     sku_class: SkuClass
     linea_base: MetricasCandidato
@@ -102,3 +106,25 @@ class EvaluacionSku:
     n_obs_validas_reserva: int
     reserva_toda_cero: bool
     n_candidatos_fallidos: int
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluacionBloques:
+    """Un SKU en toda la reserva y en cada bloque (ADR-023).
+
+    Las tres vistas comparten las metricas por ventana; cambian los agregados y
+    los conteos. La seleccion lee solo `seleccion`; veredictos, pruebas y efectos
+    leen solo `prueba`; la publicacion por ventana lee `reserva`.
+    """
+
+    reserva: EvaluacionSku
+    seleccion: EvaluacionSku
+    prueba: EvaluacionSku
+
+    @property
+    def sku(self) -> str:
+        return self.reserva.sku
+
+    @property
+    def sku_class(self) -> SkuClass:
+        return self.reserva.sku_class

@@ -127,7 +127,7 @@ def test_m4_lee_diebold_mariano_en_la_vista_publicada(tmp_path: Path) -> None:
     s1 = vista.loc["S1"]
     assert s1.iloc[:7].tolist() == [35, 1, -3.1, 0.004, 0.008, 0.05, 1]
     assert pd.isna(s1["dm_causa"])
-    assert vista.loc["S2", "dm_causa"] == "veredicto:EVIDENCIA_INSUFICIENTE"
+    assert vista.loc["S2", "dm_causa"] == "pocas_ventanas"
     assert pd.isna(vista.loc["S2", "dm_p_ajustado"])
 
 
