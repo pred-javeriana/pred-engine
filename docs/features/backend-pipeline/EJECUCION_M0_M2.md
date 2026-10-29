@@ -176,6 +176,10 @@ unidades.
 
 Las mediciones siguientes corresponden al cierre M0-M2 anterior a la
 integración de M3. No son mediciones de la evaluación reservada actual.
+Se tomaron antes del 2026-10-27, cuando Chronos-2 pasó a ser parte de las
+familias por defecto, con tres familias: `classical`, `ml` y `dl`. La corrida
+por defecto actual usa cuatro familias (agrega `foundation`), así que sus
+conteos de candidatos y unidades son distintos de los que siguen.
 
 24 núcleos, 30 GB de RAM y `--workers 22`. Semilla Kaggle con `mbb-directo` y
 presupuesto por defecto:
@@ -210,9 +214,10 @@ presupuesto por defecto:
   unidad falla, el SKU queda sin candidato: 2 de 110 con la semilla Kaggle
   (`100::syn009` y `105::syn005`). Elegir el siguiente trial elegible cuando
   el ganador falla en L2 es una decisión pendiente (ADR-020).
-- Las corridas de referencia de esta guía se midieron sin la familia
-  `foundation`, antes de que fuera parte de las familias por defecto. Con las
-  cuatro familias cambian los conteos de candidatos y unidades.
+- Las corridas de referencia de esta guía se midieron antes del 2026-10-27
+  con tres familias (`classical`, `ml`, `dl`), sin `foundation`. La corrida
+  por defecto usa cuatro familias, así que cambian los conteos de candidatos
+  y unidades.
 - La corrida actual ejecuta L4/M3 con ventanas reservadas, recuperación y
   publicación en la base central. La interfaz visual M4 no forma parte de
   esta ruta. Los resultados históricos anteriores no sustituyen esa prueba.
