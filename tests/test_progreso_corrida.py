@@ -209,7 +209,8 @@ def test_reintento_reparado_conserva_la_publicacion_con_fallo_tecnico(
             filas.append(tabla.num_rows)
         return filas
 
-    ejecutar = SelectionRouter.execute
+    # L2 selecciona con execute_with_walk_forward (no con execute).
+    ejecutar = SelectionRouter.execute_with_walk_forward
     averia = {"activa": True}
 
     def con_averia(router: SelectionRouter, request: Any, decision: Any) -> Any:
@@ -217,7 +218,7 @@ def test_reintento_reparado_conserva_la_publicacion_con_fallo_tecnico(
             raise RuntimeError("fallo transitorio de L2")
         return ejecutar(router, request, decision)
 
-    monkeypatch.setattr(SelectionRouter, "execute", con_averia)
+    monkeypatch.setattr(SelectionRouter, "execute_with_walk_forward", con_averia)
     crear_base_plataforma(tmp_path / "data" / "pred.db")
     args = [
         "run", "--csv", str(_csv(tmp_path)), "--data-root", str(tmp_path / "data"),

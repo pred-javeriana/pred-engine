@@ -63,6 +63,9 @@ class ResultadoWalkForward:
     completo: bool
     n_ventanas_evaluadas: int
     n_ventanas_totales: int
+    # Ajustes de validacion con que se calculo; los anota el HPO para que L3
+    # reutilice este resultado solo si son los suyos.
+    ajustes: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)

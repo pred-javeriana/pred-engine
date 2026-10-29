@@ -448,3 +448,36 @@ def test_todos_los_trials_podados_tienen_motivo_auditable():
     podados = [t for t in resultado.trials if t.estado == "podado"]
     assert len(podados) > 0
     assert all(t.motivo for t in podados)
+
+
+class _NivelQueDesborda:
+    """Nivel constante; sobre 60 pronostica 1e200, finito, pero su RMSE desborda."""
+
+    def __init__(self, nivel: float) -> None:
+        self.nivel = nivel
+
+    def fit(self, y: np.ndarray) -> _NivelQueDesborda:
+        return self
+
+    def predict(self, horizon: int) -> np.ndarray:
+        return np.full(horizon, 1e200 if self.nivel > 60 else self.nivel)
+
+
+def test_un_trial_que_asha_cierra_en_la_ultima_ventana_sin_valor_finito_queda_fallido():
+    # Con 4 ventanas y min_ventanas=4, ASHA decide por primera vez en la ultima. Un
+    # trial sin ninguna ventana finita llega ahi con un valor parcial no finito.
+    resultado = ejecutar_estudio(
+        np.full(24, 50.0),
+        _espacio(),
+        lambda configuracion, *, seed: _NivelQueDesborda(configuracion["nivel"]),
+        n_trials=30,
+        min_train=20,
+        metrica_objetivo="rmse",
+        estacionalidad=1,
+        seed=0,
+        reglas=ReglasPoda(min_ventanas=4, habilitar_poda_semantica=False),
+    )
+    desbordados = [t for t in resultado.trials if t.configuracion["nivel"] > 60]
+    assert len(desbordados) > 0
+    assert all(t.estado == "fallido" and t.motivo for t in desbordados)
+    assert resultado.n_completados + resultado.n_podados + resultado.n_fallidos == 30

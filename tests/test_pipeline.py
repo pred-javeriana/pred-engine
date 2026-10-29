@@ -19,6 +19,7 @@ from pred_engine import pipeline as pipeline_module
 from pred_engine.cli import diagnose_pipeline, main
 from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.comun.reserva import ReserveCut
+from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 from pred_engine.optimizacion.optimizadores.modelos_deep_learning.espacio_dl import (
     EspacioDL,
@@ -303,9 +304,8 @@ def test_l3_causal_window_error_preserves_fitting(tmp_path, monkeypatch):
     def broken_walk_forward(*args, **kwargs):
         raise ValueError("ventana causal imposible")
 
-    monkeypatch.setattr(
-        "pred_engine.pipeline.evaluar_walk_forward", broken_walk_forward
-    )
+    # La unidad L3 entera: SARIMA ya no recalcula su walk-forward (usa el del HPO).
+    monkeypatch.setattr("pred_engine.pipeline._evaluate_unit", broken_walk_forward)
     pipeline = verification_pipeline()
     with pytest.raises(PipelineExecutionError, match="ventana causal") as raised:
         pipeline.run(request_at(tmp_path))
@@ -962,6 +962,44 @@ def test_con_l2_y_l3_solapados_cada_etapa_conserva_su_plan_y_sus_unidades(
     ]
 
 
+def test_l3_de_sarima_usa_el_walk_forward_del_hpo_sin_volver_a_ajustar(
+    tmp_path, monkeypatch
+):
+    settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
+    pipeline = build_pipeline(settings, families=("classical",), n_trials=2, seed=3)
+    fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
+    [candidato] = fitting.candidates
+    # Lo que calcula L3 hoy para la configuracion ganadora.
+    esperado = evaluar_walk_forward(
+        candidato.series,
+        pipeline.factories["classical"],
+        dict(candidato.selection.forecast_config or {}),
+        min_train=settings.min_train,
+        horizonte=settings.horizon,
+        paso=settings.step,
+        metrica_objetivo=settings.metric,
+        estacionalidad=settings.seasonality,
+        agregacion=settings.aggregation,
+        proporcion_recorte=settings.trim,
+        seed=candidato.selection.forecast_seed,
+        tolerar_fallos=False,
+        identificador=candidato.selection.sku_id,
+    )
+
+    def recalcular(*args, **kwargs):
+        raise AssertionError("L3 de SARIMA volvio a calcular el walk-forward")
+
+    monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", recalcular)
+    [evaluado] = pipeline.evaluate(fitting).candidates
+
+    assert evaluado.walk_forward.valor_agregado == esperado.valor_agregado
+    for obtenida, calculada in zip(
+        evaluado.walk_forward.ventanas, esperado.ventanas, strict=True
+    ):
+        np.testing.assert_array_equal(obtenida.y_pred, calculada.y_pred)
+        assert dict(obtenida.metricas) == dict(calculada.metricas)
+
+
 def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
     request = core_request_at(tmp_path)
     settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
@@ -994,6 +1032,81 @@ def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
         second.fitting.candidates[0].forecast, first.fitting.candidates[0].forecast
     )
     assert {p: p.read_bytes() for p in hpo.rglob("*") if p.is_file()} == snapshot
+
+
+def test_un_hpo_reanudado_sin_walk_forward_calcula_l3_como_hoy(tmp_path, monkeypatch):
+    request = core_request_at(tmp_path)
+    settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
+
+    def run():
+        return build_pipeline(
+            settings,
+            families=("classical",),
+            n_trials=2,
+            seed=3,
+            hpo_root=tmp_path / "hpo",
+            session="s1",
+        ).run(request)
+
+    primera = run()  # L3 usa el walk-forward que calculo el HPO
+    calculos = []
+    original = pipeline_module.evaluar_walk_forward
+
+    def contar(*args, **kwargs):
+        calculos.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", contar)
+    segunda = run()  # el estudio se rearma desde su manifiesto, sin walk-forward
+
+    assert calculos == [1]
+    [antes] = primera.evaluation.candidates
+    [despues] = segunda.evaluation.candidates
+    assert despues.walk_forward.valor_agregado == antes.walk_forward.valor_agregado
+    for nueva, previa in zip(
+        despues.walk_forward.ventanas, antes.walk_forward.ventanas, strict=True
+    ):
+        np.testing.assert_array_equal(nueva.y_pred, previa.y_pred)
+        assert dict(nueva.metricas) == dict(previa.metricas)
+
+
+def test_l3_no_reutiliza_un_walk_forward_calculado_con_otros_ajustes(
+    tmp_path, monkeypatch
+):
+    # L3 agrega con la mediana; el HPO de SARIMA, con su media recortada.
+    settings = EvaluationSettings(
+        40, horizon=2, step=14, seasonality=7, metric="mae", aggregation="mediana"
+    )
+    pipeline = build_pipeline(settings, families=("classical",), n_trials=2, seed=3)
+    fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
+    [candidato] = fitting.candidates
+    esperado = evaluar_walk_forward(
+        candidato.series,
+        pipeline.factories["classical"],
+        dict(candidato.selection.forecast_config or {}),
+        min_train=settings.min_train,
+        horizonte=settings.horizon,
+        paso=settings.step,
+        metrica_objetivo=settings.metric,
+        estacionalidad=settings.seasonality,
+        agregacion=settings.aggregation,
+        proporcion_recorte=settings.trim,
+        seed=candidato.selection.forecast_seed,
+        tolerar_fallos=False,
+        identificador=candidato.selection.sku_id,
+    )
+    calculos = []
+    original = pipeline_module.evaluar_walk_forward
+
+    def contar(*args, **kwargs):
+        calculos.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", contar)
+    [evaluado] = pipeline.evaluate(fitting).candidates
+
+    assert calculos == [1]
+    assert evaluado.walk_forward.valor_agregado == esperado.valor_agregado
 
 
 def test_hpo_persistence_requires_root_and_session_together():

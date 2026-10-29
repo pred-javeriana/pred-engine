@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -212,6 +213,9 @@ def ejecutar_estudio(
         )
 
     intentos_invalidos = 0
+    # Walk-forward del mejor trial completo de esta sesion, para entregarlo con
+    # el resultado si es el `mejor` del estudio.
+    mejor_completo: tuple[str, ResultadoWalkForward] | None = None
     try:
         while indice_trial < n_trials:
             trial_id = f"{familia}-{sku_id or 'panel'}-{indice_trial:04d}"
@@ -266,7 +270,13 @@ def ejecutar_estudio(
                 identificador=trial_id,
             )
 
-            _correr_trial(trial, ejecutor, study, podador, reglas_efectivas)
+            completo = _correr_trial(trial, ejecutor, study, podador, reglas_efectivas)
+            # El primero de los menores, igual que elige `mejor` (min en orden).
+            if completo is not None and (
+                mejor_completo is None
+                or completo.valor_agregado < mejor_completo[1].valor_agregado
+            ):
+                mejor_completo = (trial_id, completo)
             indice_trial += 1
             if sesion is not None:
                 assert controlador_efectivo is not None
@@ -281,6 +291,22 @@ def ejecutar_estudio(
             seed=seed,
             familia=familia,
         )
+        if mejor_completo is not None and (
+            resultado.mejor is not None and resultado.mejor.id == mejor_completo[0]
+        ):
+            ajustes = {
+                "min_train": min_train,
+                "horizonte": horizonte,
+                "paso": paso,
+                "estacionalidad": estacionalidad,
+                "metrica_objetivo": metrica_objetivo,
+                "agregacion": reglas_efectivas.agregacion,
+                "proporcion_recorte": reglas_efectivas.proporcion_recorte,
+            }
+            resultado = replace(
+                resultado,
+                walk_forward_mejor=replace(mejor_completo[1], ajustes=ajustes),
+            )
         if sesion is not None:
             assert controlador_efectivo is not None
             controlador_efectivo.completar(sesion, n_trials_finalizados=indice_trial)
@@ -350,13 +376,14 @@ def _correr_trial(
     study: EstudioHPO,
     pruner: ProveedorMotivoPoda,
     reglas: ReglasPoda,
-) -> None:
+) -> ResultadoWalkForward | None:
+    """Corre un trial; devuelve su walk-forward si lo completo con valor finito."""
     while True:
         estado = ejecutor.avanzar()
         if estado is None:
             resultado = ejecutor.resultado()
             _cerrar_por_agotamiento(trial, study, resultado)
-            return
+            return resultado if math.isfinite(resultado.valor_agregado) else None
 
         if estado.ultima.fallo is not None:
             # ADR-020: todos los trials se comparan en las mismas ventanas, y L3
@@ -394,7 +421,10 @@ def _correr_trial(
 
         if trial.should_prune():
             motivo_asha = pruner.motivo_de(trial.number)
-            if estado.n_evaluadas == estado.n_totales:
+            # Sin valor finito no hay completado: queda fallido, con su motivo.
+            if estado.n_evaluadas == estado.n_totales and math.isfinite(
+                estado.valor_parcial
+            ):
                 # El backend conserva PRUNED para no cambiar el muestreo TPE.
                 trial.set_user_attr("estado_motor", "completado")
                 motivo_completo = None

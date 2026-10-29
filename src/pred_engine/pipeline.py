@@ -199,6 +199,9 @@ class FittedCandidate:
     selection: SelectionResult
     series: np.ndarray
     forecast: np.ndarray
+    # Walk-forward que el HPO ya calculo para esta configuracion: el que L3
+    # calcularia. No se guarda en el checkpoint de L2 (pesa megas).
+    walk_forward: ResultadoWalkForward | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -450,7 +453,12 @@ class _FitTask:
 
 def _fit_unit(task: _FitTask) -> FittedCandidate:
     """Unidad L2: seleccion de la familia, ajuste final y pronostico desde t*."""
-    selection = task.router.execute(task.request, task.decision)
+    # Un router que solo sabe `execute` (un envoltorio, por ejemplo) no da walk-forward.
+    ejecutar = getattr(task.router, "execute_with_walk_forward", None)
+    if ejecutar is None:
+        selection, walk_forward = task.router.execute(task.request, task.decision), None
+    else:
+        selection, walk_forward = ejecutar(task.request, task.decision)
     if selection.forecast_config is None:
         raise ValueError(f"{selection.family} must provide forecast_config for L2")
     y = np.array([obs.demand_qty for obs in task.request.series], dtype=float)
@@ -470,7 +478,7 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
             f"desde t*: {motivo} (regla #3); "
             f"configuracion={dict(selection.forecast_config)}"
         )
-    return FittedCandidate(selection, y, forecast)
+    return FittedCandidate(selection, y, forecast, walk_forward)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -480,12 +488,14 @@ class _EvaluationTask:
     factory: FabricaPronosticador
     settings: EvaluationSettings
     checkpoint: Path | None = None
+    walk_forward: ResultadoWalkForward | None = None
 
 
 def _evaluate_unit(task: _EvaluationTask) -> ResultadoWalkForward:
     """Unidad L3: modelos nuevos por ventana causal, nunca el ajuste final."""
     cfg, selection = task.settings, task.selection
-    evidence = evaluar_walk_forward(
+    # El HPO ya evaluo esta configuracion en las mismas ventanas: no se repite.
+    evidence = task.walk_forward or evaluar_walk_forward(
         task.series,
         task.factory,
         cast(Mapping[str, Any], selection.forecast_config),
@@ -508,6 +518,9 @@ def _evaluate_unit(task: _EvaluationTask) -> ResultadoWalkForward:
 
 
 def _persist_fit(task: _FitTask, result: ResultadoUnidad[FittedCandidate]) -> None:
+    # El walk-forward del HPO no se guarda: L3 lo recalcula si el L2 se restaura.
+    if result.valor is not None and result.valor.walk_forward is not None:
+        result = replace(result, valor=replace(result.valor, walk_forward=None))
     save_result(task.checkpoint, result)
 
 
@@ -696,8 +709,26 @@ class Pipeline:
         factory = self.factories.get(family)
         if factory is None:
             raise ValueError(f"No model factory for {family}")
+        cfg = self.settings
+        ajustes_l3 = {
+            "min_train": cfg.min_train,
+            "horizonte": cfg.horizon,
+            "paso": cfg.step,
+            "estacionalidad": cfg.seasonality,
+            "metrica_objetivo": cfg.metric,
+            "agregacion": cfg.aggregation,
+            "proporcion_recorte": cfg.trim,
+        }
+        # El walk-forward del HPO solo vale si se calculo con los ajustes de L3.
+        walk_forward = candidate.walk_forward
+        if walk_forward is not None and walk_forward.ajustes != ajustes_l3:
+            walk_forward = None
         task = _EvaluationTask(
-            candidate.selection, candidate.series, factory, self.settings
+            candidate.selection,
+            candidate.series,
+            factory,
+            cfg,
+            walk_forward=walk_forward,
         )
         if self.checkpoints is None:
             return task

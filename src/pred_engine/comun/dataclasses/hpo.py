@@ -10,7 +10,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pred_engine.comun.dataclasses.validacion_temporal import VentanaTemporal
+from pred_engine.comun.dataclasses.validacion_temporal import (
+    ResultadoWalkForward,
+    VentanaTemporal,
+)
 
 EstadoTrial = Literal["pendiente", "corriendo", "completado", "podado", "fallido"]
 
@@ -40,6 +43,9 @@ class ResultadoEstudio:
     metrica_objetivo: str
     seed: int
     causas: Mapping[str, int] = field(default_factory=dict)
+    # Walk-forward completo de ``mejor`` si este estudio lo evaluo (no si lo
+    # reconstruyo de un manifiesto); es el mismo que L3 calcularia.
+    walk_forward_mejor: ResultadoWalkForward | None = None
 
     @property
     def resumen_causas(self) -> str:

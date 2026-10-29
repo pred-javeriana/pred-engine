@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
+from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
 from pred_engine.comun.logger import get_logger
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
@@ -92,6 +93,12 @@ class ClassicalSelectionStrategy:
     def select(
         self, request: SelectionRequest, profile: TopologicalProfile
     ) -> SelectionResult:
+        return self.select_with_walk_forward(request, profile)[0]
+
+    def select_with_walk_forward(
+        self, request: SelectionRequest, profile: TopologicalProfile
+    ) -> tuple[SelectionResult, ResultadoWalkForward | None]:
+        """``select`` y el walk-forward completo del ganador, si el HPO lo evaluo."""
         presupuesto = self._presupuestos.get(profile)
         if presupuesto is None:
             raise SelectionContractError(
@@ -140,7 +147,7 @@ class ClassicalSelectionStrategy:
             len(resultado.estudio.trials),
             resultado.estudio.n_podados,
         )
-        return SelectionResult(
+        seleccion = SelectionResult(
             sku_id=request.sku_id,
             sku_class=request.sku_class,
             family=FAMILIA_CLASICA,
@@ -175,6 +182,7 @@ class ClassicalSelectionStrategy:
                 "estudio_hpo": run_id,
             },
         )
+        return seleccion, resultado.estudio.walk_forward_mejor
 
 
 def _serie_de(request: SelectionRequest) -> np.ndarray:

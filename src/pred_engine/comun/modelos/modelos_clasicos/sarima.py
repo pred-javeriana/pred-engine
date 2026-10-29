@@ -74,7 +74,15 @@ class SarimaForecaster(BaseForecaster):
                 warnings.simplefilter("ignore")
                 resultado = cast(
                     "SARIMAXResultsWrapper",
-                    modelo.fit(disp=False, maxiter=self.max_iter, return_params=False),
+                    # Nadie lee la covarianza de los parametros, y calcularla tras
+                    # cada ajuste cuesta ~9 %; omitirla no cambia parametros ni
+                    # pronostico.
+                    modelo.fit(
+                        disp=False,
+                        maxiter=self.max_iter,
+                        return_params=False,
+                        cov_type="none",
+                    ),
                 )
         except (np.linalg.LinAlgError, ValueError) as exc:
             raise AjusteModeloError(
