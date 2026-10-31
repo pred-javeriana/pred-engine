@@ -22,7 +22,7 @@ from pred_engine.forecasting.persistencia_evidencia.migraciones import (
 def test_migracion_desde_plataforma_y_repeticion_sin_duplicados(tmp_path: Path):
     ruta = crear_base_plataforma(tmp_path / "central.db")
     with abrir_base_plataforma(ruta) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
         assert aplicar_migraciones_m3(conn) == ()
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert {r[1] for r in conn.execute("PRAGMA table_info(m3_unidades)")} >= {
@@ -49,7 +49,7 @@ def test_una_version_atras_se_actualiza_una_vez_sin_perder_ingestas(tmp_path: Pa
         "VALUES ('origen', 'origen.csv', 17, 2)"
     )
     conn.commit()
-    assert aplicar_migraciones_m3(conn) == (6, 7, 8, 9, 10)
+    assert aplicar_migraciones_m3(conn) == (6, 7, 8, 9, 10, 11)
     assert conn.execute(
         "SELECT filas, skus FROM ingestas WHERE sha256 = 'origen'"
     ).fetchone() == (17, 2)
@@ -71,22 +71,21 @@ def test_base_ausente_no_crea_archivos_ni_directorios(tmp_path: Path):
     assert not ruta.parent.exists()
     presente = crear_base_plataforma(tmp_path / "presente.db")
     with abrir_base_plataforma(presente) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
 
 
-def test_m3_acepta_una_base_de_plataforma_en_version_11(tmp_path: Path):
-    # La plataforma suma sus migraciones 0010 (publicacion para M4) y 0011 (estado
-    # finalizo_m2) despues de las de M3.
+def test_m3_acepta_una_base_de_plataforma_en_version_12(tmp_path: Path):
+    # La plataforma suma su migracion 0012 (estado finalizo_m2) despues de las de M3.
     ruta = crear_base_plataforma(tmp_path / "central.db")
     conn = sqlite3.connect(ruta)
     aplicar_migraciones_m3(conn)
-    conn.execute("PRAGMA user_version = 11")
+    conn.execute("PRAGMA user_version = 12")
     assert aplicar_migraciones_m3(conn) == ()
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
     conn.close()
 
 
-@pytest.mark.parametrize("version", [0, 3, 12])
+@pytest.mark.parametrize("version", [0, 3, 13])
 def test_version_incompatible_no_modifica_el_esquema(tmp_path: Path, version: int):
     ruta = crear_base_plataforma(tmp_path / "central.db")
     conn = sqlite3.connect(ruta)
@@ -147,8 +146,8 @@ def test_colision_despues_de_alter_revierte_todas_las_columnas(tmp_path):
         )
         conn.execute("DROP TRIGGER m3_unidad_fallida_con_causa")
         conn.commit()
-        assert aplicar_migraciones_m3(conn) == (6, 7, 8, 9, 10)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert aplicar_migraciones_m3(conn) == (6, 7, 8, 9, 10, 11)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
 
 
 def test_caida_real_despues_de_alter_no_deja_ddl_parcial(tmp_path):
@@ -183,8 +182,8 @@ aplicar_migraciones_m3(conn)
             ).fetchone()[0]
             == 0
         )
-        assert aplicar_migraciones_m3(conn) == (6, 7, 8, 9, 10)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert aplicar_migraciones_m3(conn) == (6, 7, 8, 9, 10, 11)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
 
 
 def test_transaccion_ajena_no_se_confirma(tmp_path: Path):
@@ -242,7 +241,7 @@ def _publicada(conn: sqlite3.Connection, run_id: str, veredictos) -> None:
         )
 
 
-def test_version_9_con_corridas_publicadas_pasa_a_10_y_cuenta_campeones(tmp_path):
+def test_version_9_con_corridas_publicadas_se_actualiza_y_cuenta_campeones(tmp_path):
     conn = _base_version_9(tmp_path / "central.db")
     _publicada(
         conn,
@@ -257,7 +256,7 @@ def test_version_9_con_corridas_publicadas_pasa_a_10_y_cuenta_campeones(tmp_path
     _publicada(conn, "m3-b", [("S1", "erratic", "EVIDENCIA_INSUFICIENTE", "dl")])
     conn.commit()
 
-    assert aplicar_migraciones_m3(conn) == (10,)
+    assert aplicar_migraciones_m3(conn) == (10, 11)
 
     filas = conn.execute(
         "SELECT run_id, sku_class, familia, n_skus, n_evaluados, n_no_evaluados "
@@ -326,4 +325,74 @@ def test_observacion_exige_corte_y_fecha_de_la_reserva(tmp_path):
     assert conn.execute(
         "SELECT fecha, valor FROM m3_observaciones ORDER BY fecha"
     ).fetchall() == [("2024-01-15", 3.0), ("2024-01-16", None)]
+    conn.close()
+
+
+def test_version_10_recibe_las_tablas_del_bloque_de_prueba(tmp_path):
+    conn = _base_version_9(tmp_path / "central.db")
+    _publicada(conn, "m3-a", [("S1", "smooth", "VALIDADO", "classical")])
+    conn.commit()
+    for version, texto in textos_migraciones_m3():
+        if version == 10:
+            conn.executescript(texto)
+    conn.execute("PRAGMA user_version = 10")
+    conn.commit()
+
+    assert aplicar_migraciones_m3(conn) == (11,)
+
+    nuevas = {
+        "m3_significancia",
+        "m3_confirmaciones",
+        "m3_comparaciones",
+        "m3_seleccion_previa",
+        "m3_intervalos_r",
+        "m3_exclusiones",
+    }
+    assert nuevas <= {
+        n for (n,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    # Una corrida publicada antes de la version 11 queda sin esta evidencia.
+    assert all(
+        conn.execute(f"SELECT COUNT(*) FROM {tabla}").fetchone()[0] == 0
+        for tabla in nuevas
+    )
+    confirmar = (
+        "INSERT INTO m3_confirmaciones (run_id, sku_class, familia_campeona, estado,"
+        " causa, p_holm, alfa) VALUES ('m3-a', 'smooth', 'classical', ?, ?, ?, 0.05)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        conn.execute(confirmar, ("confirmado", "p_holm>0.05", 0.2))
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        conn.execute(confirmar, ("no_aplica", "datos_sinteticos", 0.01))
+    conn.execute(confirmar, ("confirmado", None, 0.01))
+    comparar = (
+        "INSERT INTO m3_comparaciones (run_id, sku_class, competidora, n_skus,"
+        " n_victorias, p_wilcoxon, causa) VALUES ('m3-a', 'smooth', ?, 12, 12, ?, ?)"
+    )
+    # Sin Wilcoxon la fila dice por que; con Wilcoxon puede nombrar valores que
+    # las perdidas cero dejan sin definir.
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        conn.execute(comparar, ("ml", None, None))
+    conn.execute(comparar, ("ml", 0.0005, "perdida_cero:hodges_lehmann"))
+    conn.execute(comparar, ("dl", None, "pocos_skus:9<10"))
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        conn.execute(
+            "INSERT INTO m3_intervalos_r (run_id, sku, nivel, inferior)"
+            " VALUES ('m3-a', 'S9', 0.95, 0.5)"
+        )
+    intervalo = (
+        "INSERT INTO m3_intervalos_r (run_id, sku, nivel, inferior, superior,"
+        " inferior_cola, nivel_fcr, inferior_fcr, superior_fcr, inferior_cola_fcr)"
+        " VALUES ('m3-a', 'S1', 0.95, 0.0, ?, ?, ?, ?, ?, ?)"
+    )
+    # El segundo tramo empieza despues de un primer tramo acotado.
+    for invalida in (
+        (None, 1.03, None, None, None, None),
+        (0.99, 0.98, None, None, None, None),
+        (0.99, 1.03, 0.96, 0.0, None, 1.04),
+        (0.99, 1.03, 0.96, 0.0, 0.98, 0.97),
+    ):
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            conn.execute(intervalo, invalida)
+    conn.execute(intervalo, (0.99, 1.03, 0.96, 0.0, 0.98, 1.04))
     conn.close()

@@ -48,9 +48,10 @@ def evaluar_parquet(root, db, datos_sinteticos):
             datos_sinteticos=datos_sinteticos,
             data_root=root,
         )
+        # La serie es smooth: ML y DL cumplen la regla de dos familias.
         pipeline = build_pipeline(
             EvaluationSettings(min_train=60, horizon=7, step=28),
-            families=("ml",),
+            families=("ml", "dl"),
             n_trials=1,
             seed=17,
             workers=1,
@@ -106,6 +107,7 @@ def correr(source, root, db, runs, *extra):
             "compartida",
             "--families",
             "ml",
+            "dl",
             "--trials",
             "1",
             "--min-train",

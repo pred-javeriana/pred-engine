@@ -1,4 +1,4 @@
-"""Seleccion por categoria 3.4-A2 (ADR-03-007): mediana de r con compuerta."""
+"""Seleccion por categoria 3.4-A2 (ADR-03-007, ADR-023): mediana de r con compuerta."""
 
 from __future__ import annotations
 
@@ -96,6 +96,20 @@ def test_sku_sin_r_calculable_sale_del_conjunto_comun_con_causa() -> None:
     assert seleccion.familia_campeona == "ml"
 
 
+def test_sku_con_pocas_ventanas_comunes_sale_del_conjunto_comun() -> None:
+    # B tiene r para ambas familias, pero ML comparte solo 29 ventanas con SN.
+    seleccion = _seleccionar(
+        _sku("A", classical=0.8, ml=0.6),
+        evaluacion(
+            "B",
+            [metricas_candidato("classical", 0.9), metricas_candidato("ml", 0.1, n=29)],
+        ),
+    )
+    assert seleccion.skus_comparables == ("A",)
+    assert seleccion.excluidos == {"B": "pocas_ventanas:ml"}
+    assert seleccion.medianas_r == {"classical": 0.8, "ml": 0.6}
+
+
 def test_compuerta_de_linea_base_si_ninguna_familia_mejora() -> None:
     seleccion = _seleccionar(
         _sku("A", classical=1.2, ml=1.0), _sku("B", classical=1.1, ml=1.3)
@@ -159,6 +173,12 @@ def test_familia_fuera_del_orden_declarado_es_la_menos_simple() -> None:
         {"orden_simplicidad": ("ml", "ml")},
         {"alfa_dm": 0.0},
         {"alfa_dm": 1.0},
+        {"fraccion_seleccion": 0.0},
+        {"fraccion_seleccion": 1.0},
+        {"n_min_confirmacion": 0},
+        {"bloque_bootstrap": True},
+        {"replicas_bootstrap": 0},
+        {"semilla_bootstrap": -1},
         {"familias_elegibles": {"smooth": ("ml",)}},
         {"familias_elegibles": {**FAMILIES_BY_SKU_CLASS, "lumpy": ()}},
         {"familias_elegibles": {**FAMILIES_BY_SKU_CLASS, "lumpy": ("ml", "ml")}},
@@ -179,5 +199,11 @@ def test_modificar_el_diccionario_original_no_cambia_la_politica_fijada() -> Non
 
 
 def test_politica_inicial_predeclarada() -> None:
+    assert POLITICA_INICIAL.version == "3.4.4-bloques"
     assert POLITICA_INICIAL.n_min == 30
     assert POLITICA_INICIAL.orden_simplicidad[0] == "classical"
+    assert POLITICA_INICIAL.fraccion_seleccion == 0.4
+    confirmacion = POLITICA_INICIAL.confirmacion
+    assert (confirmacion.alfa, confirmacion.n_min_ventanas) == (0.05, 30)
+    assert (confirmacion.n_min_skus, confirmacion.bloque_dias) == (10, 14)
+    assert (confirmacion.replicas, confirmacion.semilla) == (2000, 20261029)

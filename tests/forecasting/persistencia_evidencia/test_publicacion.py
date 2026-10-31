@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from tests._evaluaciones import pronostico, serie
+from tests._evaluaciones import (
+    T_ESTRELLA,
+    metricas_candidato,
+    par_fieller_disjunto,
+    pronostico,
+    serie,
+)
 from tests._evidencia import (
     base,
     corrida,
@@ -18,7 +26,19 @@ from tests._evidencia import (
     observaciones,
 )
 
-from pred_engine.forecasting.evaluaciones.diebold_mariano import PruebaDM
+from pred_engine.forecasting.evaluaciones.calculo_errores import FAMILIA_LINEA_BASE
+from pred_engine.forecasting.evaluaciones.confirmacion import (
+    CategoriaAConfirmar,
+    ComparacionFamilia,
+    ConfirmacionCategoria,
+    Intervalo,
+    confirmar_campeones,
+)
+from pred_engine.forecasting.evaluaciones.diebold_mariano import (
+    PruebaDM,
+    intervalo_razon,
+)
+from pred_engine.forecasting.evaluaciones.veredictos import POLITICA_INICIAL
 from pred_engine.forecasting.persistencia_evidencia import (
     TABLAS,
     EstadoCorridaError,
@@ -105,6 +125,228 @@ def test_publicar_deriva_el_parquet_de_sqlite_y_abre_la_vista(
     assert vista["datos_sinteticos"].tolist() == [0, 0]
 
 
+def test_un_intervalo_de_r_con_dos_tramos_llega_entero_a_sqlite_y_parquet(
+    tmp_path: Path,
+) -> None:
+    intervalo = intervalo_razon(*par_fieller_disjunto(), nivel=0.95)
+    fcr = intervalo_razon(*par_fieller_disjunto(), nivel=0.96)
+    assert intervalo is not None and fcr is not None
+    assert intervalo.inferior_cola is not None and fcr.inferior_cola is not None
+    assert not intervalo.contiene(1.0) and not fcr.contiene(1.0)
+    conn = base()
+    run_id, evaluaciones, resultado = corrida_evaluada(conn)
+    skus = tuple(
+        replace(v, intervalo_r=intervalo, intervalo_r_fcr=fcr) if v.sku == "S1" else v
+        for v in resultado.skus
+    )
+    guardar_evaluacion(
+        conn,
+        run_id,
+        evaluaciones,
+        replace(resultado, skus=skus),
+        observaciones=observaciones(conn, run_id),
+    )
+    rutas = publicar(conn, run_id, tmp_path)
+
+    columnas = [
+        "nivel",
+        "inferior",
+        "superior",
+        "inferior_cola",
+        "nivel_fcr",
+        "inferior_fcr",
+        "superior_fcr",
+        "inferior_cola_fcr",
+    ]
+    esperado = [
+        0.95,
+        intervalo.inferior,
+        intervalo.superior,
+        intervalo.inferior_cola,
+        0.96,
+        fcr.inferior,
+        fcr.superior,
+        fcr.inferior_cola,
+    ]
+    for publicada in (
+        consultar(conn, run_id, sku="S1")["m3_intervalos_r"],
+        pd.read_parquet(rutas["m3_intervalos_r"]),
+    ):
+        assert publicada.loc[publicada["sku"] == "S1", columnas].iloc[0].tolist() == (
+            esperado
+        )
+
+
+def _a_confirmar(
+    sku_class: str, rmse: dict[str, Sequence[float]]
+) -> CategoriaAConfirmar:
+    """Doce SKU con RMSE constante por ventana; la campeona es la fundacional."""
+    return CategoriaAConfirmar(
+        sku_class,  # type: ignore[arg-type]
+        "foundation",
+        tuple(f for f in rmse if f not in ("foundation", FAMILIA_LINEA_BASE)),
+        {
+            f"S{i}": {
+                f: metricas_candidato(f, 0.8, rmses=[v[i]] * 40)
+                for f, v in rmse.items()
+            }
+            for i in range(12)
+        },
+    )
+
+
+def _sin_nulos(valores: Sequence[object]) -> list[object]:
+    return [None if v is None or v is pd.NA or v != v else v for v in valores]
+
+
+def _intervalo(i: Intervalo | None) -> list[float | None]:
+    return [None, None] if i is None else [i.inferior, i.superior]
+
+
+def _fila_comparacion(c: ComparacionFamilia) -> list[object]:
+    return [
+        c.n_skus,
+        c.mediana_razon,
+        *_intervalo(c.ic_mediana),
+        c.hodges_lehmann,
+        *_intervalo(c.ic_hodges_lehmann),
+        c.n_victorias,
+        *_intervalo(c.ic_victorias),
+        c.estadistico_wilcoxon,
+        c.p_wilcoxon,
+        c.p_iut,
+        c.n_mejores,
+        c.n_peores,
+        c.causa,
+    ]
+
+
+def _fila_confirmacion(c: ConfirmacionCategoria) -> list[object]:
+    efecto = c.efecto_linea_base
+    assert efecto is not None
+    return [
+        c.estado,
+        c.causa,
+        c.p_iut,
+        c.p_holm,
+        efecto.n_skus,
+        efecto.mediana_r,
+        *_intervalo(efecto.ic_mediana),
+        efecto.causa,
+    ]
+
+
+def test_la_confirmacion_con_perdidas_cero_llega_entera_a_sqlite_y_parquet(
+    tmp_path: Path,
+) -> None:
+    sin_error, uno = [0.0] * 12, [1.0] * 12
+    smooth, lumpy = confirmar_campeones(
+        (
+            # El campeon no se equivoca en S0-S10; dl tampoco en S11.
+            _a_confirmar(
+                "smooth",
+                {
+                    FAMILIA_LINEA_BASE: [1.25] * 12,
+                    "foundation": [0.0] * 11 + [1.0],
+                    "ml": [1.2] * 12,
+                    "dl": [1.2] * 11 + [0.0],
+                },
+            ),
+            # SARIMA no se equivoca nunca; Seasonal Naive tampoco en S6-S11.
+            _a_confirmar(
+                "lumpy",
+                {
+                    FAMILIA_LINEA_BASE: [1.25] * 6 + sin_error[:6],
+                    "foundation": sin_error[:6] + uno[:6],
+                    "classical": sin_error,
+                },
+            ),
+        ),
+        pd.date_range(T_ESTRELLA, periods=40, freq="D"),
+        POLITICA_INICIAL.confirmacion,
+        datos_sinteticos=False,
+    )
+    ml, dl = smooth.comparaciones
+    (classical,) = lumpy.comparaciones
+    assert (ml.mediana_razon, ml.hodges_lehmann, ml.causa) == (0.0, 0.0, None)
+    assert dl.hodges_lehmann is None and dl.causa == "perdida_cero:hodges_lehmann"
+    assert classical.mediana_razon == math.inf
+    assert smooth.efecto_linea_base is not None
+    assert smooth.efecto_linea_base.mediana_r == 0.0
+    assert lumpy.efecto_linea_base is not None
+    assert lumpy.efecto_linea_base.causa == "perdida_cero:mediana_r,ic_mediana"
+
+    conn = base()
+    run_id, evaluaciones, resultado = corrida_evaluada(conn)
+    categorias = {c.sku_class: c for c in resultado.categorias}
+    resultado = replace(
+        resultado,
+        categorias=tuple(
+            replace(c, confirmacion={"smooth": smooth, "lumpy": lumpy}[c.sku_class])
+            for c in resultado.categorias
+        ),
+    )
+    assert set(categorias) == {"smooth", "lumpy"}
+    guardar_evaluacion(
+        conn, run_id, evaluaciones, resultado, observaciones=observaciones(conn, run_id)
+    )
+    rutas = publicar(conn, run_id, tmp_path)
+
+    columnas_comparacion = [
+        "n_skus",
+        "mediana_razon",
+        "ic_mediana_inferior",
+        "ic_mediana_superior",
+        "hodges_lehmann",
+        "ic_hodges_lehmann_inferior",
+        "ic_hodges_lehmann_superior",
+        "n_victorias",
+        "ic_victorias_inferior",
+        "ic_victorias_superior",
+        "estadistico_wilcoxon",
+        "p_wilcoxon",
+        "p_iut",
+        "n_mejores",
+        "n_peores",
+        "causa",
+    ]
+    columnas_confirmacion = [
+        "estado",
+        "causa",
+        "p_iut",
+        "p_holm",
+        "efecto_n_skus",
+        "efecto_mediana_r",
+        "efecto_ic_inferior",
+        "efecto_ic_superior",
+        "efecto_causa",
+    ]
+    evidencia = consultar(conn, run_id)
+    for comparaciones, confirmaciones in (
+        (evidencia["m3_comparaciones"], evidencia["m3_confirmaciones"]),
+        (
+            pd.read_parquet(rutas["m3_comparaciones"]),
+            pd.read_parquet(rutas["m3_confirmaciones"]),
+        ),
+    ):
+        filas_comparacion = comparaciones.set_index(["sku_class", "competidora"])
+        for clase, fila in (
+            ("smooth", ml),
+            ("smooth", dl),
+            ("lumpy", classical),
+        ):
+            publicada = filas_comparacion.loc[(clase, fila.competidora)]
+            assert _sin_nulos(publicada[columnas_comparacion].tolist()) == (
+                _sin_nulos(_fila_comparacion(fila))
+            )
+        filas_confirmacion = confirmaciones.set_index("sku_class")
+        for confirmacion in (smooth, lumpy):
+            publicada = filas_confirmacion.loc[confirmacion.sku_class]
+            assert _sin_nulos(publicada[columnas_confirmacion].tolist()) == (
+                _sin_nulos(_fila_confirmacion(confirmacion))
+            )
+
+
 def test_m4_lee_diebold_mariano_en_la_vista_publicada(tmp_path: Path) -> None:
     conn = base()
     prueba = PruebaDM(
@@ -127,7 +369,7 @@ def test_m4_lee_diebold_mariano_en_la_vista_publicada(tmp_path: Path) -> None:
     s1 = vista.loc["S1"]
     assert s1.iloc[:7].tolist() == [35, 1, -3.1, 0.004, 0.008, 0.05, 1]
     assert pd.isna(s1["dm_causa"])
-    assert vista.loc["S2", "dm_causa"] == "veredicto:EVIDENCIA_INSUFICIENTE"
+    assert vista.loc["S2", "dm_causa"] == "pocas_ventanas"
     assert pd.isna(vista.loc["S2", "dm_p_ajustado"])
 
 

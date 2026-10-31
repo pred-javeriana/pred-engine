@@ -1,7 +1,8 @@
 # ADR-021: Evaluación reservada, recuperación M3 y base única de plataforma
 
 **Fecha:** 2026-10-18
-**Estado:** Aceptada
+**Estado:** Aceptada; ADR-023 reemplaza en parte la decisión 3 y la sección
+«Límites» (bloques de selección y de prueba, BH por categoría).
 **Referencias:** ADR-03-003 a ADR-03-011 del Hub; tareas 3.0 a 3.7.
 
 ## Contexto

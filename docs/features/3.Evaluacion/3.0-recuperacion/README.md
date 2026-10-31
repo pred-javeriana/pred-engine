@@ -23,7 +23,12 @@ marcadores durables.
 El controlador no reemplaza la recuperación HPO de M2. Los estudios existentes
 siguen conservando sus ensayos completos con su propio contrato 2.9. La
 procedencia M3 registra las exclusiones y fallas de M2 sin inventar
-configuraciones que M2 no entregó.
+configuraciones que M2 no entregó. Una unidad L2 fallida se repite al
+reanudar, así que el reintento puede excluir o dejar de excluir un SKU con la
+regla de dos familias (ADR-023). La receta aceptada no cambia: M3 compara los
+candidatos sin esos SKU, juzga los SKU de su receta durable y publica las
+exclusiones de su procedencia. La selección de robustez también queda en la
+procedencia, fijada antes de abrir la reserva.
 
 `tests/forecasting/test_control_evaluacion.py` prueba el flujo con M2 real,
 caídas antes y después del commit, múltiples SKU, fallos aislados, rechazo del

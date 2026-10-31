@@ -17,6 +17,7 @@ import pytest
 
 from pred_engine import pipeline as pipeline_module
 from pred_engine.cli import diagnose_pipeline, main
+from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
 from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.comun.walkforward import evaluar_walk_forward
@@ -100,21 +101,22 @@ def test_multi_sku_chronology_survives_shuffled_input(tmp_path):
         index=False,
     )
     result = verification_pipeline().run(request)
-    assert [c.selection.sku_id for c in result.fitting.candidates] == [
-        "proof-sku",
-        "second",
+    assert [
+        (c.selection.sku_id, c.selection.family) for c in result.fitting.candidates
+    ] == [
+        ("proof-sku", "classical"),
+        ("proof-sku", "ml"),
+        ("second", "classical"),
+        ("second", "ml"),
     ]
-    np.testing.assert_array_equal(
-        result.fitting.candidates[0].series[:3],
-        [18.0, 19.35, 20.7],
-    )
-    np.testing.assert_array_equal(
-        result.fitting.candidates[1].series[:3],
-        [21.0, 22.35, 23.7],
-    )
+    # Cada familia del SKU ve la misma historia ordenada.
+    for candidate in result.fitting.candidates[:2]:
+        np.testing.assert_array_equal(candidate.series[:3], [18.0, 19.35, 20.7])
+    for candidate in result.fitting.candidates[2:]:
+        np.testing.assert_array_equal(candidate.series[:3], [21.0, 22.35, 23.7])
     assert [
         c.walk_forward.n_ventanas_evaluadas for c in result.evaluation.candidates
-    ] == [4, 4]
+    ] == [4, 4, 4, 4]
     assert result.evaluation.selection_scope == "same_history"
     assert result.evaluation.statistical_comparison_available is False
     assert result.blocked_stage == "L4"
@@ -619,8 +621,8 @@ def test_sparse_policy_does_not_enable_excluded_dl():
 def test_real_other_core_families_connect_to_fitting_and_walkforward(tmp_path, family):
     settings = EvaluationSettings(16, horizon=2, step=3, metric="mae", seasonality=1)
     rules = ReglasPoda(habilitar_poda_semantica=False)
-    if family == "ml":
-        strategy = MLSelectionStrategy(
+    strategies = {
+        "ml": MLSelectionStrategy(
             espacio=EspacioML(
                 lags_min=3,
                 lags_max=3,
@@ -636,9 +638,8 @@ def test_real_other_core_families_connect_to_fitting_and_walkforward(tmp_path, f
             paso=3,
             metrica_objetivo="mae",
             seed=9,
-        )
-    else:
-        strategy = DLSelectionStrategy(
+        ),
+        "dl": DLSelectionStrategy(
             espacio=EspacioDL(
                 lags=(3, 3),
                 capas=(2, 2),
@@ -654,19 +655,27 @@ def test_real_other_core_families_connect_to_fitting_and_walkforward(tmp_path, f
             estacionalidad=1,
             reglas=rules,
             seed=9,
-        )
+        ),
+    }
+    # Las dos familias juntas: con una sola, la regla de dos familias excluye el SKU.
     registry = StrategyRegistry()
-    registry.register(family, strategy)
+    for name, strategy in strategies.items():
+        registry.register(name, strategy)
     pipeline = Pipeline(
-        SelectionRouter(ConfiguredTopologyPolicy((family,)), registry),
+        SelectionRouter(ConfiguredTopologyPolicy(tuple(strategies)), registry),
         settings,
         factories=model_factories(),
     )
     result = pipeline.run(request_at(tmp_path))
-    candidate = result.fitting.candidates[0]
-    assert candidate.selection.family == family
+    assert [c.selection.family for c in result.fitting.candidates] == ["ml", "dl"]
+    (candidate,) = (
+        c for c in result.fitting.candidates if c.selection.family == family
+    )
     assert candidate.selection.forecast_seed == 9
-    assert result.evaluation.candidates[0].walk_forward.n_ventanas_evaluadas == 4
+    (evaluated,) = (
+        c for c in result.evaluation.candidates if c.fitted.selection.family == family
+    )
+    assert evaluated.walk_forward.n_ventanas_evaluadas == 4
     assert result.blocked_stage == "L4"
     factory = model_factories()[family]
     native = factory(candidate.selection.forecast_config, seed=9).fit(candidate.series)
@@ -796,23 +805,29 @@ def test_failed_unit_is_isolated_and_short_sku_is_excluded_with_cause(tmp_path):
         "completed",
         "blocked",
     ]
-    assert [c.selection.sku_id for c in result.fitting.candidates] == ["proof-sku"]
-    assert [(u.sku_id, u.failed) for u in result.fitting.units] == [
-        ("broken", True),
-        ("proof-sku", False),
+    assert [c.selection.sku_id for c in result.fitting.candidates] == [
+        "proof-sku",
+        "proof-sku",
+    ]
+    assert [(u.sku_id, u.family, u.failed) for u in result.fitting.units] == [
+        ("broken", "classical", True),
+        ("broken", "ml", True),
+        ("proof-sku", "classical", False),
+        ("proof-sku", "ml", False),
     ]
     assert result.stages[1].message == (
-        "1 de 2 unidades fallaron (aisladas); 1 SKU excluidos con causa"
+        "2 de 4 unidades fallaron (aisladas); 1 SKU excluidos con causa"
     )
     summary = summarize_run(result)
     assert summary["failures"] == [
         {
             "stage": "L2",
             "sku_id": "broken",
-            "family": "classical",
+            "family": family,
             "error": "RuntimeError: HPO interrumpido para este SKU",
             "code": "pipeline.stage_failed",
         }
+        for family in ("classical", "ml")
     ]
     assert summary["exclusions"] == [
         {
@@ -822,8 +837,8 @@ def test_failed_unit_is_isolated_and_short_sku_is_excluded_with_cause(tmp_path):
         }
     ]
     assert summary["units"] == {
-        "L2": {"total": 2, "completed": 1, "failed": 1},
-        "L3": {"total": 1, "completed": 1, "failed": 0},
+        "L2": {"total": 4, "completed": 2, "failed": 2},
+        "L3": {"total": 2, "completed": 2, "failed": 0},
     }
 
 
@@ -835,12 +850,18 @@ def test_parallel_workers_reproduce_sequential_results_in_other_processes(tmp_pa
     settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
 
     def run(workers):
+        # Con esta semilla SARIMA ajusta los dos SKU: con una sola familia
+        # evaluable saldrian con la regla de dos familias (ADR-023).
         pipeline = build_pipeline(
-            settings, families=("classical", "ml"), n_trials=1, seed=3, workers=workers
+            settings, families=("classical", "ml"), n_trials=1, seed=20, workers=workers
         )
         return pipeline.run(request)
 
     sequential, parallel = run(1), run(2)
+    assert {
+        (c.fitted.selection.sku_id, c.fitted.selection.family)
+        for c in sequential.evaluation.candidates
+    } == {(s, f) for s in ("core-sku", "core-b") for f in ("classical", "ml")}
     pairs = zip(
         sequential.evaluation.candidates, parallel.evaluation.candidates, strict=True
     )
@@ -853,6 +874,11 @@ def test_parallel_workers_reproduce_sequential_results_in_other_processes(tmp_pa
     assert os.getpid() not in parallel_pids
     assert len(parallel_pids) >= 2
     assert summarize_run(parallel) == summarize_run(sequential)
+
+
+def _clasicos(candidatos):
+    """Los candidatos de la familia clasica (SARIMA) de una corrida."""
+    return [c for c in candidatos if c.selection.family == "classical"]
 
 
 def _l2_retenido(task):
@@ -881,9 +907,10 @@ def _ocurrio(progreso: Path, evento: str, etapa: str, sku: str) -> bool:
 
 
 def _correr_con_l2_retenido(tmp_path, monkeypatch, hasta, **opciones):
-    """Dos SKU con 2 procesos; el L2 de core-sku espera a que ocurra ``hasta``.
+    """Dos SKU y dos familias; los L2 de core-sku esperan a que ocurra ``hasta``.
 
-    Devuelve el resultado de la corrida y su flujo de progreso completo.
+    Con 3 procesos, las dos unidades retenidas dejan uno libre para core-b. Devuelve
+    el resultado de la corrida y su flujo de progreso completo.
     """
     request = core_request_at(tmp_path)
     source = pd.read_csv(request.csv_path)
@@ -895,10 +922,10 @@ def _correr_con_l2_retenido(tmp_path, monkeypatch, hasta, **opciones):
     progreso = tmp_path / "progreso.jsonl"
     pipeline = build_pipeline(
         EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae"),
-        families=("ml",),
+        families=("ml", "dl"),
         n_trials=1,
         seed=3,
-        workers=2,
+        workers=3,
         progress=progreso,
         **opciones,
     )
@@ -921,7 +948,7 @@ def test_el_l3_de_una_unidad_empieza_antes_de_que_termine_todo_l2(
     result, _ = _correr_con_l2_retenido(
         tmp_path, monkeypatch, ("unit_started", "L3", "core-b")
     )
-    assert result.evaluation is not None and len(result.evaluation.candidates) == 2
+    assert result.evaluation is not None and len(result.evaluation.candidates) == 4
 
 
 def test_con_l2_y_l3_solapados_cada_etapa_conserva_su_plan_y_sus_unidades(
@@ -934,7 +961,7 @@ def test_con_l2_y_l3_solapados_cada_etapa_conserva_su_plan_y_sus_unidades(
         ("unit_finished", "L3", "core-b"),
         checkpoints=UnitCheckpoints(tmp_path / "checkpoints", identity="prueba-v1"),
     )
-    skus = ["core-b", "core-sku"]
+    skus = ["core-b", "core-b", "core-sku", "core-sku"]  # dos familias por SKU
     for etapa in ("L2", "L3"):
         [plan] = [
             e for e in eventos if (e["event"], e.get("stage")) == ("planned", etapa)
@@ -966,9 +993,11 @@ def test_l3_de_sarima_usa_el_walk_forward_del_hpo_sin_volver_a_ajustar(
     tmp_path, monkeypatch
 ):
     settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
-    pipeline = build_pipeline(settings, families=("classical",), n_trials=2, seed=3)
+    pipeline = build_pipeline(
+        settings, families=("classical", "ml"), n_trials=2, seed=3
+    )
     fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
-    [candidato] = fitting.candidates
+    [candidato] = _clasicos(fitting.candidates)
     # Lo que calcula L3 hoy para la configuracion ganadora.
     esperado = evaluar_walk_forward(
         candidato.series,
@@ -986,11 +1015,19 @@ def test_l3_de_sarima_usa_el_walk_forward_del_hpo_sin_volver_a_ajustar(
         identificador=candidato.selection.sku_id,
     )
 
+    original = pipeline_module.evaluar_walk_forward
+
     def recalcular(*args, **kwargs):
-        raise AssertionError("L3 de SARIMA volvio a calcular el walk-forward")
+        if args[1] is pipeline.factories["classical"]:
+            raise AssertionError("L3 de SARIMA volvio a calcular el walk-forward")
+        return original(*args, **kwargs)
 
     monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", recalcular)
-    [evaluado] = pipeline.evaluate(fitting).candidates
+    [evaluado] = [
+        c
+        for c in pipeline.evaluate(fitting).candidates
+        if c.fitted.selection.family == "classical"
+    ]
 
     assert evaluado.walk_forward.valor_agregado == esperado.valor_agregado
     for obtenida, calculada in zip(
@@ -1008,7 +1045,7 @@ def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
     def run():
         return build_pipeline(
             settings,
-            families=("classical",),
+            families=("classical", "ml"),
             n_trials=2,
             seed=3,
             hpo_root=hpo,
@@ -1017,20 +1054,20 @@ def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
 
     first = run()
     manifests = sorted(hpo.glob("*/manifiesto.json"))
-    assert [m.parent.name for m in manifests] == ["classical-core-sku-s1"]
-    assert json.loads(manifests[0].read_text())["estado"] == "completada"
-    assert first.fitting.candidates[0].selection.payload["estudio_hpo"] == (
-        "classical-core-sku-s1"
-    )
+    estudios = ["classical-core-sku-s1", "ml-core-sku-s1"]
+    assert [m.parent.name for m in manifests] == estudios
+    assert all(json.loads(m.read_text())["estado"] == "completada" for m in manifests)
+    assert [
+        c.selection.payload["estudio_hpo"] for c in first.fitting.candidates
+    ] == estudios
     snapshot = {path: path.read_bytes() for path in hpo.rglob("*") if path.is_file()}
 
     second = run()
-    assert second.fitting.candidates[0].selection == (
-        first.fitting.candidates[0].selection
-    )
-    np.testing.assert_array_equal(
-        second.fitting.candidates[0].forecast, first.fitting.candidates[0].forecast
-    )
+    for again, original in zip(
+        second.fitting.candidates, first.fitting.candidates, strict=True
+    ):
+        assert again.selection == original.selection
+        np.testing.assert_array_equal(again.forecast, original.forecast)
     assert {p: p.read_bytes() for p in hpo.rglob("*") if p.is_file()} == snapshot
 
 
@@ -1041,7 +1078,7 @@ def test_un_hpo_reanudado_sin_walk_forward_calcula_l3_como_hoy(tmp_path, monkeyp
     def run():
         return build_pipeline(
             settings,
-            families=("classical",),
+            families=("classical", "ml"),
             n_trials=2,
             seed=3,
             hpo_root=tmp_path / "hpo",
@@ -1053,15 +1090,22 @@ def test_un_hpo_reanudado_sin_walk_forward_calcula_l3_como_hoy(tmp_path, monkeyp
     original = pipeline_module.evaluar_walk_forward
 
     def contar(*args, **kwargs):
-        calculos.append(1)
+        if args[1] is model_factories()["classical"]:
+            calculos.append(1)
         return original(*args, **kwargs)
 
     monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", contar)
     segunda = run()  # el estudio se rearma desde su manifiesto, sin walk-forward
 
     assert calculos == [1]
-    [antes] = primera.evaluation.candidates
-    [despues] = segunda.evaluation.candidates
+    [antes, despues] = [
+        next(
+            c
+            for c in corrida.evaluation.candidates
+            if c.fitted.selection.family == "classical"
+        )
+        for corrida in (primera, segunda)
+    ]
     assert despues.walk_forward.valor_agregado == antes.walk_forward.valor_agregado
     for nueva, previa in zip(
         despues.walk_forward.ventanas, antes.walk_forward.ventanas, strict=True
@@ -1077,9 +1121,11 @@ def test_l3_no_reutiliza_un_walk_forward_calculado_con_otros_ajustes(
     settings = EvaluationSettings(
         40, horizon=2, step=14, seasonality=7, metric="mae", aggregation="mediana"
     )
-    pipeline = build_pipeline(settings, families=("classical",), n_trials=2, seed=3)
+    pipeline = build_pipeline(
+        settings, families=("classical", "ml"), n_trials=2, seed=3
+    )
     fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
-    [candidato] = fitting.candidates
+    [candidato] = _clasicos(fitting.candidates)
     esperado = evaluar_walk_forward(
         candidato.series,
         pipeline.factories["classical"],
@@ -1099,11 +1145,16 @@ def test_l3_no_reutiliza_un_walk_forward_calculado_con_otros_ajustes(
     original = pipeline_module.evaluar_walk_forward
 
     def contar(*args, **kwargs):
-        calculos.append(1)
+        if args[1] is pipeline.factories["classical"]:
+            calculos.append(1)
         return original(*args, **kwargs)
 
     monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", contar)
-    [evaluado] = pipeline.evaluate(fitting).candidates
+    [evaluado] = [
+        c
+        for c in pipeline.evaluate(fitting).candidates
+        if c.fitted.selection.family == "classical"
+    ]
 
     assert calculos == [1]
     assert evaluado.walk_forward.valor_agregado == esperado.valor_agregado
@@ -1148,6 +1199,10 @@ def _seed_run_args(tmp_path: Path) -> list[str]:
         "28",
         "--workers",
         "2",
+        # Con esta semilla unos SKU entregan las dos familias y otros solo
+        # LightGBM, y estos salen con la regla de dos familias (ADR-023).
+        "--seed",
+        "16",
     ]
 
 
@@ -1190,7 +1245,13 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     assert handoff.run_id_m2 == report["run_id"]
     assert handoff.fallos == ()
     candidates = {(c.sku, c.familia) for c in handoff.candidatos}
-    assert len(candidates) == report["units"]["L2"]["completed"] > 0
+    skus = {sku for sku, _ in candidates}
+    assert candidates == {(sku, f) for sku in skus for f in ("classical", "ml")}
+    # Cada SKU excluido entrego una sola unidad L2 y no llega a M3.
+    excluded = {e["sku_id"]: e["code"] for e in report["exclusions"]}
+    assert skus and excluded and skus.isdisjoint(excluded)
+    assert set(excluded.values()) == {ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS}
+    assert len(candidates) == report["units"]["L2"]["completed"] - len(excluded)
     for candidate in handoff.candidatos:
         instanciar(candidate)
     assert [c["candidato_id"] for c in run["candidates"]] == [
@@ -1209,7 +1270,13 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     units = [json.loads(line) for line in (run_dir / "unidades.jsonl").open()]
     assert len(units) == report["units"]["L2"]["total"] + report["units"]["L3"]["total"]
     assert {u["model"] for u in units} <= {"sarima", "lightgbm"}
-    assert all(u["cpu_s"] > 0 for u in units if u["state"] == "completada")
+    # El L3 de SARIMA reusa el walk-forward del HPO: no vuelve a ajustar ni gasta CPU.
+    assert all(
+        u["cpu_s"] > 0
+        for u in units
+        if u["state"] == "completada"
+        and (u["stage"], u["family"]) != ("L3", "classical")
+    )
     assert set(run["stage_times"]) == {"L1", "L2", "L3", "L4"}
     assert run["stage_times"]["L2"]["seconds"] > 0
 
@@ -1271,14 +1338,22 @@ def test_cli_reports_isolated_unit_failures_with_exit_code_8(
     report = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert code == 8
     assert report["blocked_stage"] == "L4"
-    assert [(f["sku_id"], f["stage"]) for f in report["failures"]] == [("broken", "L2")]
+    assert [(f["sku_id"], f["stage"], f["family"]) for f in report["failures"]] == [
+        ("broken", "L2", "classical"),
+        ("broken", "L2", "ml"),
+    ]
     units = [
         json.loads(line) for line in (Path(report["run_dir"]) / "unidades.jsonl").open()
     ]
-    assert [(u["sku_id"], u["stage"], u["state"]) for u in units] == [
-        ("broken", "L2", "fallida"),
-        ("proof-sku", "L2", "completada"),
-        ("proof-sku", "L3", "completada"),
+    assert sorted(
+        (u["sku_id"], u["stage"], u["family"], u["state"]) for u in units
+    ) == [
+        ("broken", "L2", "classical", "fallida"),
+        ("broken", "L2", "ml", "fallida"),
+        ("proof-sku", "L2", "classical", "completada"),
+        ("proof-sku", "L2", "ml", "completada"),
+        ("proof-sku", "L3", "classical", "completada"),
+        ("proof-sku", "L3", "ml", "completada"),
     ]
 
 

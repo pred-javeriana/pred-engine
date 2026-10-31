@@ -18,6 +18,10 @@ from tests._plataforma import crear_base_plataforma
 
 pytestmark = pytest.mark.slow
 
+# 400 dias: reserva de 80 con H = 2, asi los bloques de seleccion (31 ventanas)
+# y de prueba (47) superan n_min y el veredicto puede ser EXPLORATORIO (ADR-023).
+DIAS = 400
+
 
 def ejecutar(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -39,9 +43,9 @@ def test_run_parquet_con_informes_de_los_mismos_bytes(tmp_path, origenes, ruta):
     source = tmp_path / "a.csv"
     pd.DataFrame(
         {
-            "sku_id": ["SKU"] * 220,
-            "timestamp": pd.date_range("2024-01-01", periods=220),
-            "demand_qty": [20 + (i % 19) * 0.5 for i in range(220)],
+            "sku_id": ["SKU"] * DIAS,
+            "timestamp": pd.date_range("2024-01-01", periods=DIAS),
+            "demand_qty": [20 + (i % 19) * 0.5 for i in range(DIAS)],
             "lead_time_days": 3,
         }
     ).to_csv(source, index=False)
@@ -92,8 +96,10 @@ def test_run_parquet_con_informes_de_los_mismos_bytes(tmp_path, origenes, ruta):
         str(db),
         "--run-id",
         "compartida",
+        # La serie es smooth: ML y DL cumplen la regla de dos familias.
         "--families",
         "ml",
+        "dl",
         "--trials",
         "1",
         "--min-train",

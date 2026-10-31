@@ -48,15 +48,18 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
    admitido como unidad: HPO (TPE + ASHA sobre walk-forward), ajuste final en la
    historia admisible y pronóstico de los días reservados. El HPO solo elige
    configuraciones que ajustan en todas las ventanas, y un pronóstico final
-   degenerado (regla #3) hace fallar su unidad (ADR-020). L3 vuelve a evaluar cada
-   candidato con walk-forward causal.
+   degenerado (regla #3) hace fallar su unidad (ADR-020). Al cerrar L2, un SKU
+   con una sola familia evaluable sale de la competencia con
+   `eligibility.fewer_than_two_families` (ADR-023) y queda en `exclusions`, sea
+   cual sea el número de familias enrutadas.
+   L3 vuelve a evaluar cada candidato con walk-forward causal.
 
 ## Opciones de M2
 
 | Opción | Por defecto | Efecto |
 | --- | --- | --- |
-| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. |
-| `--no-foundation` | apagada | Corre sin la familia `foundation`, igual que `--families classical ml dl`; para equipos sin el extra `foundation` o con poca memoria. No se combina con `--families`. |
+| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. Con una sola familia ningún SKU compite en M3: la regla de dos familias excluye cada SKU que entrega su candidato y M3 juzga `FALLO_TECNICO` al que no lo entrega. Si ninguna unidad falla, la corrida termina en L2 con código 1 y sus causas. |
+| `--no-foundation` | apagada | Corre sin la familia `foundation`, igual que `--families classical ml dl`; para equipos sin el extra `foundation` o con poca memoria. Los SKU `lumpy` quedan con la familia clásica sola y no compiten en M3. No se combina con `--families`. |
 | `--trials` | presupuesto por perfil | Trials de HPO por estudio; con presupuestos chicos algunos SKU pueden quedar sin trial completo. |
 | `--workers` | núcleos - 1 | Procesos para las unidades de L2 y L3 y para los pronósticos por SKU de L4. |
 | `--min-train`, `--horizon`, `--step`, `--seasonality`, `--metric` | 40, 7, 7, 7, rmse | Ventanas walk-forward del HPO y de L3. |
@@ -152,7 +155,9 @@ unidades.
   reconstruyen desde su manifiesto sin reentrenar, los interrumpidos continúan
   desde su último checkpoint y solo los que faltan arrancan de cero. L3 y el
   pronóstico inicial de M2 se reconstruyen. Las ventanas M3 ya confirmadas se
-  leen de SQLite y no se recalculan.
+  leen de SQLite y no se recalculan. Una unidad L2 fallida se repite; si el
+  reintento cambia qué SKU excluye la regla de dos familias, M3 conserva las
+  exclusiones de la procedencia durable de su protocolo.
 - Un estudio en estado `fallida` no se reabre (2.9); su unidad vuelve a fallar
   con ese motivo.
 - Una evaluación M3 PUBLICADA es inmutable. Repetir el mismo comando después
@@ -198,11 +203,12 @@ al número de núcleos menos uno.
 
 - Con la semilla Kaggle la política no enruta DL: DL solo aplica a SKU
   `smooth` y `erratic`.
-- Con `--no-foundation`, la política 2.2 enruta los SKU `lumpy`
-  solo a la familia clásica. Si esa
-  unidad falla, el SKU queda sin candidato: 2 de 110 con la semilla Kaggle
-  (`100::syn009` y `105::syn005`). Elegir el siguiente trial elegible cuando
-  el ganador falla en L2 es una decisión pendiente (ADR-020).
+- Con `--no-foundation`, la política 2.2 enruta los SKU `lumpy` solo a la
+  familia clásica, así que ningún SKU `lumpy` compite en M3. Si su unidad
+  clásica entrega candidato, el SKU sale con
+  `eligibility.fewer_than_two_families`. Si falla, el SKU queda sin candidato
+  y M3 lo juzga `FALLO_TECNICO`. Elegir el siguiente trial elegible cuando el
+  ganador falla en L2 es una decisión pendiente (ADR-020).
 - La corrida actual ejecuta L4/M3 con ventanas reservadas, recuperación y
   publicación en la base central. La interfaz visual M4 no forma parte de
   esta ruta.

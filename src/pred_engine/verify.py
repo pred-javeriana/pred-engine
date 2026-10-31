@@ -1,7 +1,8 @@
 """Offline integration proof: ``python -m pred_engine.verify``.
 
 Exit 0 means the wiring checks passed, NOT that four-stage PRED is finished.
-The proof uses real ingestion, bounded SARIMA HPO, fitting and walk-forward.
+The proof uses real ingestion, bounded SARIMA and LightGBM HPO, fitting and
+walk-forward. Two families keep the SKU past the two-family rule (ADR-023).
 It never injects a pretend L4 validator or downloads foundation weights.
 """
 
@@ -18,6 +19,7 @@ import pandas as pd
 
 from pred_engine.cli import diagnose_pipeline
 from pred_engine.comun.modelos import ClassifiedObservation
+from pred_engine.comun.modelos.modelos_machine_learning.lgbm import fabrica_ml
 from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.ingesta.pipeline import run_classify_csv, run_verify_parquet
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
@@ -28,6 +30,11 @@ from pred_engine.optimizacion.optimizadores.modelos_clasicos import (
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.estrategia import (
     ClassicalSelectionStrategy,
     PresupuestoClasico,
+)
+from pred_engine.optimizacion.optimizadores.modelos_machine_learning import (
+    EspacioML,
+    MLSelectionStrategy,
+    PresupuestoHPO,
 )
 from pred_engine.optimizacion.router import (
     TOPOLOGICAL_PROFILES,
@@ -80,11 +87,34 @@ def verification_pipeline() -> Pipeline:
             seed=17,
         ),
     )
+    registry.register(
+        "ml",
+        MLSelectionStrategy(
+            espacio=EspacioML(
+                lags_min=3,
+                lags_max=3,
+                n_estimators_min=5,
+                n_estimators_max=5,
+                max_depth_min=2,
+                max_depth_max=2,
+                m=1,
+            ),
+            presupuestos={
+                profile: PresupuestoHPO(1, ReglasPoda(habilitar_poda_semantica=False))
+                for profile in TOPOLOGICAL_PROFILES
+            },
+            min_train=16,
+            horizonte=2,
+            paso=3,
+            metrica_objetivo="mae",
+            seed=17,
+        ),
+    )
     return Pipeline(
-        SelectionRouter(ConfiguredTopologyPolicy(("classical",)), registry),
+        SelectionRouter(ConfiguredTopologyPolicy(("classical", "ml")), registry),
         settings,
-        factories={"classical": fabrica_sarima},
-        m2_settings={"families": ["classical"], "trials": 1, "seed": 17},
+        factories={"classical": fabrica_sarima, "ml": fabrica_ml},
+        m2_settings={"families": ["classical", "ml"], "trials": 1, "seed": 17},
     )
 
 
@@ -133,14 +163,17 @@ def verify_pipeline(root: Path) -> dict[str, object]:
     # Narrowing for static readers; the runtime requirement above works under -O.
     if ingestion is None or fitting is None or evaluation is None:
         raise RuntimeError("Missing evidence")
-    _require(len(fitting.candidates) == 1, "The representative SKU must be fitted")
+    _require(
+        [c.selection.family for c in fitting.candidates] == ["classical", "ml"],
+        "The representative SKU must be fitted by both families",
+    )
     _require(
         fitting.reserve.reserved_days == 7 and len(fitting.candidates[0].series) == 28,
         "L2 must only see the history before the 20% chronological reserve",
     )
     _require(
-        evaluation.candidates[0].walk_forward.n_ventanas_evaluadas == 4,
-        "Expected all four causal windows",
+        [c.walk_forward.n_ventanas_evaluadas for c in evaluation.candidates] == [4, 4],
+        "Expected all four causal windows for each family",
     )
 
     # Baseline entry points remain usable without orchestration.

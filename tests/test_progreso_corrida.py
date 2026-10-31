@@ -15,9 +15,12 @@ from pred_engine.cli import main
 from tests._plataforma import crear_base_plataforma
 from tests._series import serie_ar_estacional
 
+# Dos familias por SKU, por la regla de dos familias (ADR-023). Con la semilla 15
+# el HPO de SARIMA completa su ensayo en los dos SKU.
 _ARGS = [
     "--trials", "1", "--min-train", "40", "--horizon", "2", "--step", "14",
-    "--metric", "mae", "--seed", "15", "--families", "classical", "--workers", "2",
+    "--metric", "mae", "--seed", "15", "--families", "classical", "ml",
+    "--workers", "2",
 ]  # fmt: skip
 
 
@@ -110,7 +113,11 @@ def test_m3_anuncia_su_plan_y_cada_sku_guardado_en_el_progreso(
     m3 = [e for e in _eventos(Path(resumen["run_dir"])) if e.get("stage") == "L4"]
 
     # Mismo formato que M2: una unidad por SKU x candidato, con familia y modelo.
-    esperadas = {("sku-a", "classical", "sarima"), ("sku-b", "classical", "sarima")}
+    esperadas = {
+        (sku, familia, modelo)
+        for sku in ("sku-a", "sku-b")
+        for familia, modelo in (("classical", "sarima"), ("ml", "lightgbm"))
+    }
     orden = [e["event"] for e in m3]
     assert (orden[0], orden[1], orden[-1]) == (
         "stage_started",
@@ -255,4 +262,5 @@ def test_reintento_reparado_conserva_la_publicacion_con_fallo_tecnico(
     assert codigo == 0
     assert nueva["failures"] == []
     assert nueva["m3"]["run_id_m3"] != fallida["m3"]["run_id_m3"]
-    assert leer_exportaciones(nueva) == [48, 2, 16]
+    # Dos SKU por dos familias: 24 dias reservados y 4 ventanas de 2 dias cada uno.
+    assert leer_exportaciones(nueva) == [96, 4, 32]

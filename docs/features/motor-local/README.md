@@ -47,7 +47,7 @@ regla exige todos los niveles, así una carpeta nueva no evita la corrida.
 | --- | --- | --- | --- | --- |
 | ninguno | `docs/**`, `**/*.md`, `tests/**`, `.github/**` y archivos de repositorio | ninguna | siempre | 0 |
 | `humo` | M0 (`aumentacion/`), telemetría, `verify.py`, `comun/llm/`, `Makefile` | la corrida de CI: `tests/fixtures/semilla_inventario.csv` con M0 `mbb-directo` (8 SKU) | salida 0 u 8, telemetría y `verificar_corrida.py` | 30 s |
-| `muestra22` | el resto de `src/pred_engine/` (L1-L4), `pyproject.toml`, `uv.lock`, `.python-version` | `timing22.csv`: 22 productos reales, `--datos-reales` y ajustes por defecto, con las cuatro familias | salida 0 u 8, `verificar_corrida.py --datos-reales` y un veredicto por producto | 33 min |
+| `muestra22` | el resto de `src/pred_engine/` (L1-L4), `pyproject.toml`, `uv.lock`, `.python-version` | `timing22.csv`: 22 productos reales, `--datos-reales` y ajustes por defecto, con las cuatro familias | salida 0 u 8, `verificar_corrida.py --datos-reales` y un veredicto por producto, salvo los que salen al cerrar L2 con una sola familia evaluable (`eligibility.fewer_than_two_families`), que el recibo lista en `excluidos_tras_l2` | 33 min |
 | `plataforma` | `forecasting/persistencia_evidencia/` (junto con `muestra22`) | `tests/test_integracion_motor.py` de pred-platform con este motor | pytest termina sin fallas ni pruebas omitidas | 16 s |
 
 La corrida de los 3.703 productos sigue siendo manual.

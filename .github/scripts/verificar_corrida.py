@@ -13,6 +13,7 @@ import argparse
 import json
 import sqlite3
 import xml.etree.ElementTree as ET
+from collections import Counter
 from contextlib import closing
 from datetime import date
 from pathlib import Path
@@ -20,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
 from pred_engine.comun.modelos.manifiesto_candidatos import ContextoParticion
 from pred_engine.forecasting.adaptador_candidatos import validar_manifiesto
 from pred_engine.forecasting.persistencia_evidencia import VERSION_ESQUEMA_M3
@@ -183,10 +185,33 @@ def verificar(run_dir: Path, db_path: Path, datos_reales: bool = False) -> list[
         len({c.sku for c in handoff.candidatos}) > 1,
         "candidatos.json: los candidatos cubren un solo SKU",
     )
+    with (run_dir / "unidades.jsonl").open() as archivo:
+        traza = [json.loads(linea) for linea in archivo]
+    # Un SKU con una sola familia evaluable sale al cerrar L2 (ADR-023): su unidad
+    # completa no deja candidato, y nada mas puede faltar.
+    una_familia = {
+        e["sku_id"]
+        for e in resumen["exclusions"]
+        if e.get("code") == ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
+    }
+    for sku in sorted(una_familia):
+        estados = Counter(
+            u["state"] for u in traza if u["stage"] == "L2" and u["sku_id"] == sku
+        )
+        exigir(
+            estados["completada"] == 1 and sum(estados.values()) >= 2,
+            f"corrida.json: {sku} excluido con {ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS} "
+            f"y unidades L2 {dict(estados)}",
+        )
     exigir(
-        len(handoff.candidatos) == unidades["L2"]["completed"],
+        not una_familia & {c.sku for c in handoff.candidatos},
+        "candidatos.json: un SKU excluido tras L2 conserva candidatos",
+    )
+    completas = unidades["L2"]["completed"] - len(una_familia)
+    exigir(
+        len(handoff.candidatos) == completas,
         f"candidatos.json: {len(handoff.candidatos)} candidatos para "
-        f"{unidades['L2']['completed']} unidades L2 completas",
+        f"{completas} unidades L2 completas de SKU que siguen tras L2",
     )
 
     pronosticos = pd.read_parquet(run_dir / "pronosticos.parquet")
@@ -212,8 +237,6 @@ def verificar(run_dir: Path, db_path: Path, datos_reales: bool = False) -> list[
         "walk_forward.parquet: sin ventanas",
     )
 
-    with (run_dir / "unidades.jsonl").open() as archivo:
-        traza = [json.loads(linea) for linea in archivo]
     total = unidades["L2"]["total"] + unidades["L3"]["total"]
     exigir(
         len(traza) == total,

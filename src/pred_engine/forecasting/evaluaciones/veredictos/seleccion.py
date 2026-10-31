@@ -1,10 +1,15 @@
-"""Regla de seleccion por categoria (3.4-A2, ADR-03-003 y ADR-03-007).
+"""Regla de seleccion por categoria (3.4-A2, ADR-03-003, ADR-03-007 y ADR-023).
 
-Por categoria (`sku_class`): mediana de r = RMSE_cand / RMSE_SN sobre el mismo
-conjunto de SKUs para todas las familias elegibles; gana la menor mediana salvo
-que no mejore a la linea base (compuerta) o empate con una familia mas simple.
-Las familias elegibles las fija la politica; que M2 entregue o no una familia
-se conoce antes de abrir la reserva, asi que excluirla no es una decision post hoc.
+Recibe solo las metricas del bloque de seleccion de la reserva: ninguna ventana
+del bloque de prueba llega aqui. Por categoria (`sku_class`): mediana de
+r = RMSE_cand / RMSE_SN sobre el mismo conjunto de SKUs para todas las familias
+elegibles; gana la menor mediana salvo que no mejore a la linea base
+(compuerta) o empate con una familia mas simple. Un SKU entra en el conjunto
+comun solo si cada familia tiene r y al menos `n_min` ventanas comunes con la
+linea base. Las familias elegibles las fija la politica; que M2 entregue o no
+una familia se conoce antes de abrir la reserva, asi que excluirla no es una
+decision post hoc. La misma regla elige el campeon previo a t* con los
+pliegues L3, como control de robustez.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from pred_engine.forecasting.evaluaciones.calculo_errores import (
     FAMILIA_LINEA_BASE,
     EvaluacionSku,
     MetricasCandidato,
+    pares_comunes,
 )
 from pred_engine.forecasting.evaluaciones.veredictos.contratos import (
     MotivoSeleccion,
@@ -29,7 +35,11 @@ _logger = get_logger(__name__)
 
 
 def representante(evaluacion: EvaluacionSku, familia: str) -> MetricasCandidato | None:
-    """Configuracion de la familia con menor RMSE en la reserva."""
+    """Configuracion de la familia con menor RMSE en el tramo evaluado.
+
+    Con el bloque de seleccion, es la instancia que representa a la familia en
+    el SKU en todo lo que sigue, tambien en el bloque de prueba.
+    """
     opciones = [
         c
         for c in evaluacion.candidatos
@@ -59,6 +69,10 @@ def seleccionar_categoria(
             razon = None if elegido is None else _razon(elegido)
             if razon is None:
                 excluidos[evaluacion.sku] = f"sin_razon_calculable:{familia}"
+                break
+            assert elegido is not None
+            if len(pares_comunes(elegido, evaluacion.linea_base)) < politica.n_min:
+                excluidos[evaluacion.sku] = f"pocas_ventanas:{familia}"
                 break
             por_familia[familia] = razon
         else:

@@ -78,7 +78,8 @@ def test_completed_units_are_restored_without_calling_selection_fit_or_evaluatio
     pipeline, request = setup_run(tmp_path, workers=workers)
     first = pipeline.run(request)
     snapshot = {p: p.read_bytes() for p in pipeline.checkpoints.root.rglob("*.json")}
-    assert len(snapshot) == 4
+    # Dos SKU por dos familias en L2 y en L3.
+    assert len(snapshot) == 8
 
     def forbidden(*args):
         raise AssertionError("una unidad exitosa no debe volver a ejecutarse")
@@ -103,7 +104,7 @@ def test_completed_units_are_restored_without_calling_selection_fit_or_evaluatio
             np.testing.assert_array_equal(x.y_train, y.y_train)
     assert [u.record for u in first.units] == [u.record for u in restored.units]
     events = [json.loads(line) for line in pipeline.progress.read_text().splitlines()]
-    assert sum(e.get("reused", False) for e in events) == 4
+    assert sum(e.get("reused", False) for e in events) == 8
 
 
 @pytest.mark.parametrize("stage", ["L2", "L3"])
@@ -131,16 +132,21 @@ def test_interruption_retains_each_committed_unit_before_the_stage_finishes(
     called = []
 
     def record(task):
-        called.append(task.request.sku_id if stage == "L2" else task.selection.sku_id)
+        called.append(
+            (task.request.sku_id, task.decision.family)
+            if stage == "L2"
+            else (task.selection.sku_id, task.selection.family)
+        )
         return original(task)
 
     monkeypatch.setattr(
         module, "_fit_unit" if stage == "L2" else "_evaluate_unit", record
     )
     resumed = pipeline.run(request)
-    assert called == ["second"]
-    assert len(resumed.evaluation.candidates) == 2
-    assert sum(u.reused for u in resumed.units) == (1 if stage == "L2" else 3)
+    # Solo se repiten las tres unidades de la etapa que no llegaron a confirmarse.
+    assert called == [("proof-sku", "ml"), ("second", "classical"), ("second", "ml")]
+    assert len(resumed.evaluation.candidates) == 4
+    assert sum(u.reused for u in resumed.units) == (1 if stage == "L2" else 5)
 
 
 def test_retry_evaluates_only_the_failed_unit_and_keeps_the_successful_evidence(
@@ -156,18 +162,20 @@ def test_retry_evaluates_only_the_failed_unit_and_keeps_the_successful_evidence(
 
     monkeypatch.setattr(module, "_evaluate_unit", fail_one)
     first = pipeline.run(request)
-    assert len(first.failures) == 1
-    assert len(list((pipeline.checkpoints.root / "L3").glob("*.json"))) == 1
+    assert len(first.failures) == 2
+    assert len(list((pipeline.checkpoints.root / "L3").glob("*.json"))) == 2
     called = []
 
     def record(task):
-        called.append(task.selection.sku_id)
+        called.append((task.selection.sku_id, task.selection.family))
         return original(task)
 
     monkeypatch.setattr(module, "_evaluate_unit", record)
     second = pipeline.run(request)
-    assert not second.failures and called == ["second"]
-    assert sum(u.reused for u in second.units) == 3
+    assert not second.failures
+    assert called == [("second", "classical"), ("second", "ml")]
+    # Las cuatro unidades L2 y las dos L3 de proof-sku se reutilizan.
+    assert sum(u.reused for u in second.units) == 6
     assert first.evaluation.units[0].record == second.evaluation.units[0].record
 
 

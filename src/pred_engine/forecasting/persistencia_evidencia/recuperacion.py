@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
+from pred_engine.comun.modelos import SkuClass
 from pred_engine.comun.modelos.manifiesto_candidatos import (
     VERSION_ESQUEMA_MANIFIESTO,
     Candidato,
@@ -51,12 +52,16 @@ def fijar_protocolo(
     n_unidades_previstas: int,
     t_star: pd.Timestamp,
     lanzamientos_tardios: Sequence[SkuExclusion],
+    exclusiones: Sequence[SkuExclusion],
+    clases: Mapping[str, SkuClass],
     ejecucion_id: int | None = None,
 ) -> None:
     """Fija protocolo y handoff antes del primer pronostico; nunca los reemplaza.
 
-    En la misma transaccion fija el corte ``t_star`` y los lanzamientos tardios
-    de M1 que uso L2, que M3 publica para M4 (``m3_cortes``).
+    En la misma transaccion fija el corte ``t_star``, los lanzamientos tardios
+    de M1 que uso L2 y las ``exclusiones`` de M2, que M3 publica para M4
+    (``m3_cortes``, ``m3_lanzamientos_tardios``, ``m3_exclusiones``). ``clases``
+    da la categoria de cada producto excluido.
     """
     canonico = json.dumps(protocolo, sort_keys=True, separators=(",", ":"))
     # La emision del handoff se conserva. Reanudar no es volver a emitirlo.
@@ -94,7 +99,15 @@ def fijar_protocolo(
                     n_unidades_previstas,
                 ),
             )
-        _fijar_corte(conn, run_id, estado, t_star, lanzamientos_tardios)
+        _fijar_corte(
+            conn,
+            run_id,
+            estado,
+            t_star,
+            lanzamientos_tardios,
+            exclusiones,
+            clases,
+        )
 
 
 def restaurar_handoff(

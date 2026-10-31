@@ -7,7 +7,8 @@ unico modelo que ajusta es la linea base Seasonal Naive (3.4-A1, paso 2).
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -16,10 +17,14 @@ from pred_engine.comun.logger import get_logger
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.comun.walkforward.metricas import mae, rmse
 from pred_engine.forecasting.adaptador_candidatos import instanciar_linea_base
+from pred_engine.forecasting.evaluaciones.calculo_errores.bloques import (
+    BloquesReserva,
+)
 from pred_engine.forecasting.evaluaciones.calculo_errores.contratos import (
     FAMILIA_LINEA_BASE,
     MODELO_LINEA_BASE,
     EntradaSku,
+    EvaluacionBloques,
     EvaluacionSku,
     Metricas,
     MetricasCandidato,
@@ -145,63 +150,152 @@ def pronosticar_linea_base(
 def evaluar_sku(
     entrada: EntradaSku, corte: ReserveCut, *, linea_base: SerieCandidato | None = None
 ) -> EvaluacionSku:
-    """Metricas de la linea base y de cada candidato, por ventana y agregadas."""
-    escala = escala_q1(entrada.historia)
-    reales = entrada.reserva.dropna()
-    if linea_base is None:
-        linea_base = pronosticar_linea_base(entrada, corte)
-    elif (
-        linea_base.candidato_id
-        != f"{entrada.sku}/{FAMILIA_LINEA_BASE}/{MODELO_LINEA_BASE}"
-        or linea_base.familia != FAMILIA_LINEA_BASE
-    ):
-        raise EvaluacionRetrospectivaError("identidad de linea base incompatible")
-    else:
-        # Valida el calendario sin volver a emitir pronosticos confirmados.
-        linea_base = pronosticar_linea_base(
-            entrada,
-            corte,
-            ventanas_planeadas={p.origen: p.fechas for p in linea_base.pronosticos},
-            confirmados=linea_base.pronosticos,
-        )
-    base, ventanas_base = _evaluar(linea_base, entrada, corte, escala, None)
-    candidatos = tuple(
-        _evaluar(serie, entrada, corte, escala, ventanas_base)[0]
-        for serie in entrada.candidatos
-    )
-    _logger.info(
-        "Evaluacion sku=%s candidatos=%d ventanas_linea_base=%d/%d",
-        entrada.sku,
-        len(candidatos),
-        base.n_ventanas_validas,
-        base.n_ventanas_totales,
-    )
-    return EvaluacionSku(
-        sku=entrada.sku,
-        sku_class=entrada.sku_class,
-        linea_base=base,
-        candidatos=candidatos,
-        n_obs_validas_reserva=int(np.isfinite(reales.to_numpy(dtype=float)).sum()),
-        reserva_toda_cero=bool(len(reales) > 0 and np.all(reales.to_numpy() == 0)),
-        n_candidatos_fallidos=entrada.n_candidatos_fallidos,
-    )
+    """Metricas de la linea base y de cada candidato en toda la reserva."""
+    return _Evaluacion(entrada, corte, linea_base).vista(entrada.reserva.index, None)
 
 
-def _evaluar(
-    serie: SerieCandidato,
+def evaluar_bloques(
     entrada: EntradaSku,
     corte: ReserveCut,
-    escala: tuple[float | None, str | None],
-    ventanas_base: dict[pd.Timestamp, _Pares] | None,
-) -> tuple[MetricasCandidato, dict[pd.Timestamp, _Pares]]:
+    bloques: BloquesReserva,
+    *,
+    linea_base: SerieCandidato | None = None,
+) -> EvaluacionBloques:
+    """Metricas en toda la reserva y en cada bloque, con una sola pasada (ADR-023)."""
+    if (bloques.t_star, bloques.dias_reserva) != (corte.t_star, corte.reserved_days):
+        raise EvaluacionRetrospectivaError("bloques de otra reserva")
+    evaluacion = _Evaluacion(entrada, corte, linea_base)
+    return EvaluacionBloques(
+        reserva=evaluacion.vista(entrada.reserva.index, None),
+        seleccion=evaluacion.vista(
+            bloques.dias("seleccion"), lambda o: bloques.bloque(o) == "seleccion"
+        ),
+        prueba=evaluacion.vista(
+            bloques.dias("prueba"), lambda o: bloques.bloque(o) == "prueba"
+        ),
+    )
+
+
+def pares_comunes(
+    candidato: MetricasCandidato, linea_base: MetricasCandidato
+) -> list[tuple[Metricas, Metricas]]:
+    """Metricas de las ventanas validas para ambos, en el orden del candidato."""
+    base = {v.origen: v.metricas for v in linea_base.por_ventana}
+    return [
+        (v.metricas, base[v.origen]) for v in candidato.por_ventana if v.origen in base
+    ]
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _Ventanas:
+    """Pronosticos de una serie ya validados contra la reserva."""
+
+    serie: SerieCandidato
+    origenes: tuple[pd.Timestamp, ...]
+    pronosticos_validos: frozenset[pd.Timestamp]
+    validas: dict[pd.Timestamp, _Pares]
+
+
+class _Evaluacion:
+    """Una pasada por los pronosticos del SKU; cada vista filtra sus ventanas."""
+
+    def __init__(
+        self,
+        entrada: EntradaSku,
+        corte: ReserveCut,
+        linea_base: SerieCandidato | None,
+    ) -> None:
+        self.entrada = entrada
+        self.escala = escala_q1(entrada.historia)
+        if linea_base is None:
+            linea_base = pronosticar_linea_base(entrada, corte)
+        elif (
+            linea_base.candidato_id
+            != f"{entrada.sku}/{FAMILIA_LINEA_BASE}/{MODELO_LINEA_BASE}"
+            or linea_base.familia != FAMILIA_LINEA_BASE
+        ):
+            raise EvaluacionRetrospectivaError("identidad de linea base incompatible")
+        else:
+            # Valida el calendario sin volver a emitir pronosticos confirmados.
+            linea_base = pronosticar_linea_base(
+                entrada,
+                corte,
+                ventanas_planeadas={p.origen: p.fechas for p in linea_base.pronosticos},
+                confirmados=linea_base.pronosticos,
+            )
+        self.base = _ventanas(linea_base, entrada, corte)
+        # La linea base se compara consigo misma: r = 1 (o no calculable).
+        self.series = tuple(
+            (ventanas, _resumen(ventanas, self.escala, self.base.validas))
+            for ventanas in (
+                self.base,
+                *(_ventanas(serie, entrada, corte) for serie in entrada.candidatos),
+            )
+        )
+        completa = self.series[0][1]
+        _logger.info(
+            "Evaluacion sku=%s candidatos=%d ventanas_linea_base=%d/%d",
+            entrada.sku,
+            len(entrada.candidatos),
+            completa.n_ventanas_validas,
+            completa.n_ventanas_totales,
+        )
+
+    def vista(
+        self,
+        dias: pd.Index,
+        en_tramo: Callable[[pd.Timestamp], bool] | None,
+    ) -> EvaluacionSku:
+        entrada = self.entrada
+        base, *candidatos = (
+            self._metricas(ventanas, completa, en_tramo)
+            for ventanas, completa in self.series
+        )
+        reales = entrada.reserva.reindex(dias).dropna()
+        return EvaluacionSku(
+            sku=entrada.sku,
+            sku_class=entrada.sku_class,
+            linea_base=base,
+            candidatos=tuple(candidatos),
+            n_obs_validas_reserva=int(np.isfinite(reales.to_numpy(dtype=float)).sum()),
+            reserva_toda_cero=bool(len(reales) > 0 and np.all(reales.to_numpy() == 0)),
+            n_candidatos_fallidos=entrada.n_candidatos_fallidos,
+        )
+
+    def _metricas(
+        self,
+        ventanas: _Ventanas,
+        completa: MetricasCandidato,
+        en_tramo: Callable[[pd.Timestamp], bool] | None,
+    ) -> MetricasCandidato:
+        if en_tramo is None:
+            return completa
+        validas = {o: p for o, p in ventanas.validas.items() if en_tramo(o)}
+        return MetricasCandidato(
+            candidato_id=completa.candidato_id,
+            familia=completa.familia,
+            modelo=completa.modelo,
+            agregadas=_agregadas(validas, self.base.validas, self.escala),
+            por_ventana=tuple(v for v in completa.por_ventana if en_tramo(v.origen)),
+            n_ventanas_totales=sum(1 for o in ventanas.origenes if en_tramo(o)),
+            n_ventanas_validas=len(validas),
+            n_pronosticos_validos=sum(
+                1 for o in ventanas.pronosticos_validos if en_tramo(o)
+            ),
+        )
+
+
+def _ventanas(
+    serie: SerieCandidato, entrada: EntradaSku, corte: ReserveCut
+) -> _Ventanas:
     validas: dict[pd.Timestamp, _Pares] = {}
-    vistos: set[pd.Timestamp] = set()
-    n_pronosticos_validos = 0
+    origenes: dict[pd.Timestamp, None] = {}
+    pronosticos_validos: set[pd.Timestamp] = set()
     for pronostico in serie.pronosticos:
         _exigir_reserva(pronostico.origen, pronostico.fechas, serie, entrada, corte)
-        if pronostico.origen in vistos:
+        if pronostico.origen in origenes:
             _rechazar(f"origen repetido {pronostico.origen.date()}", serie, entrada)
-        vistos.add(pronostico.origen)
+        origenes[pronostico.origen] = None
         y_pred = np.asarray(pronostico.valores, dtype=float)
         horizonte = len(pronostico.fechas)
         if (
@@ -210,51 +304,83 @@ def _evaluar(
             or not np.all(np.isfinite(y_pred))
         ):
             continue
-        n_pronosticos_validos += 1
+        pronosticos_validos.add(pronostico.origen)
         y_real = entrada.reserva.reindex(pronostico.fechas).to_numpy(dtype=float)
         if np.all(np.isfinite(y_real)):
             validas[pronostico.origen] = (y_real, y_pred)
+    return _Ventanas(serie, tuple(origenes), frozenset(pronosticos_validos), validas)
 
-    # La linea base se compara consigo misma: r = 1 (o no calculable).
-    base = validas if ventanas_base is None else ventanas_base
-    por_ventana = tuple(
-        MetricasVentana(
-            origen, _metricas(y_real, y_pred, escala, _comun(origen, base, y_pred))
-        )
-        for origen, (y_real, y_pred) in validas.items()
-    )
-    agregadas = None
-    if validas:
-        comunes = [o for o in validas if o in base]
-        agregadas = _metricas(
-            np.concatenate([v[0] for v in validas.values()]),
-            np.concatenate([v[1] for v in validas.values()]),
-            escala,
-            (
-                np.concatenate([validas[o][0] for o in comunes]),
-                np.concatenate([validas[o][1] for o in comunes]),
-                np.concatenate([base[o][1] for o in comunes]),
+
+def resumir_ventanas(
+    serie: SerieCandidato,
+    validas: Mapping[pd.Timestamp, tuple[np.ndarray, np.ndarray]],
+    base: Mapping[pd.Timestamp, tuple[np.ndarray, np.ndarray]],
+    escala: tuple[float | None, str | None],
+    *,
+    n_ventanas_totales: int,
+    n_pronosticos_validos: int,
+) -> MetricasCandidato:
+    """Metricas por ventana y agregadas de pares (real, pronostico) por origen.
+
+    ``base`` son los pares de la linea base; r usa solo las ventanas comunes y
+    la linea base se pasa a si misma. ``serie`` solo aporta la identidad.
+    """
+    return MetricasCandidato(
+        candidato_id=serie.candidato_id,
+        familia=serie.familia,
+        modelo=serie.modelo,
+        agregadas=_agregadas(validas, base, escala),
+        por_ventana=tuple(
+            MetricasVentana(
+                origen, _metricas(y_real, y_pred, escala, _comun(origen, base, y_pred))
             )
-            if comunes
-            else None,
-        )
-    return (
-        MetricasCandidato(
-            candidato_id=serie.candidato_id,
-            familia=serie.familia,
-            modelo=serie.modelo,
-            agregadas=agregadas,
-            por_ventana=por_ventana,
-            n_ventanas_totales=len(serie.pronosticos),
-            n_ventanas_validas=len(validas),
-            n_pronosticos_validos=n_pronosticos_validos,
+            for origen, (y_real, y_pred) in validas.items()
         ),
-        validas,
+        n_ventanas_totales=n_ventanas_totales,
+        n_ventanas_validas=len(validas),
+        n_pronosticos_validos=n_pronosticos_validos,
+    )
+
+
+def _resumen(
+    ventanas: _Ventanas,
+    escala: tuple[float | None, str | None],
+    base: dict[pd.Timestamp, _Pares],
+) -> MetricasCandidato:
+    return resumir_ventanas(
+        ventanas.serie,
+        ventanas.validas,
+        base,
+        escala,
+        n_ventanas_totales=len(ventanas.origenes),
+        n_pronosticos_validos=len(ventanas.pronosticos_validos),
+    )
+
+
+def _agregadas(
+    validas: Mapping[pd.Timestamp, _Pares],
+    base: Mapping[pd.Timestamp, _Pares],
+    escala: tuple[float | None, str | None],
+) -> Metricas | None:
+    if not validas:
+        return None
+    comunes = [o for o in validas if o in base]
+    return _metricas(
+        np.concatenate([v[0] for v in validas.values()]),
+        np.concatenate([v[1] for v in validas.values()]),
+        escala,
+        (
+            np.concatenate([validas[o][0] for o in comunes]),
+            np.concatenate([validas[o][1] for o in comunes]),
+            np.concatenate([base[o][1] for o in comunes]),
+        )
+        if comunes
+        else None,
     )
 
 
 def _comun(
-    origen: pd.Timestamp, base: dict[pd.Timestamp, _Pares], y_pred: np.ndarray
+    origen: pd.Timestamp, base: Mapping[pd.Timestamp, _Pares], y_pred: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     if origen not in base:
         return None

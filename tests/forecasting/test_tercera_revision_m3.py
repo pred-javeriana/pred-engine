@@ -68,9 +68,10 @@ def ejecutar(source, root, db, *familias):
 def test_valor_no_finito_reservado_omite_contexto_sin_contar_fallos(tmp_path):
     root, db = tmp_path / "data", crear_base_plataforma(tmp_path / "central.db")
     source = fuente(tmp_path, infinito="2024-07-20")
-    assert ejecutar(source, root, db, "ml") == 0
+    # La serie es smooth: ML y DL cumplen la regla de dos familias.
+    assert ejecutar(source, root, db, "ml", "dl") == 0
     # Un reintento identico reutiliza la publicacion en lugar de quedar a medias.
-    assert ejecutar(source, root, db, "ml") == 0
+    assert ejecutar(source, root, db, "ml", "dl") == 0
     with sqlite3.connect(db) as conn:
         assert conn.execute(
             "SELECT estado, causa_rechazo FROM m3_corridas"
@@ -91,8 +92,9 @@ def test_valor_no_finito_reservado_omite_contexto_sin_contar_fallos(tmp_path):
                 "candidato_id, origen"
             )
         }
-    # t* = 2024-06-24: 26 origenes con contexto finito, candidato y linea base, H=7.
-    assert previstas == 2 * 26 and horizonte == {7}
+    # t* = 2024-06-24: 26 origenes con contexto finito, dos candidatos y linea base,
+    # H=7.
+    assert previstas == 3 * 26 and horizonte == {7}
     exclusiones = json.loads(procedencia)["exclusiones_datos"]["SKU"]
     causas = {e["origen"]: e["causa"] for e in exclusiones}
     assert [o for o, c in causas.items() if c == "sin_datos_objetivo"] == [
@@ -155,7 +157,10 @@ def test_ejemplo_de_composicion_documentado_publica_m3(tmp_path, monkeypatch):
     codigo = bloque.split("```python\n", 1)[1].split("```", 1)[0]
     monkeypatch.chdir(tmp_path)
     crear_base_plataforma(tmp_path / "data/pred.db")
-    fuente(tmp_path).rename(tmp_path / "sales.csv")
+    # Las dos familias del ejemplo deben entregar candidato: sin ruido, SARIMA
+    # no ajusta y el unico SKU sale con la regla de dos familias (ADR-023).
+    demanda = np.round(serie_ar_estacional(220), 2)
+    fuente(tmp_path, demanda=demanda).rename(tmp_path / "sales.csv")
     espacio: dict[str, object] = {"__name__": "__main__"}
     exec(compile(codigo, str(readme), "exec"), espacio)
     assert espacio["result"].validation.audit_bundle["estado"] == "PUBLICADA"
