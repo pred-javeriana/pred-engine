@@ -32,9 +32,12 @@ principal stage.
   the limitation explicit. These diagnostic metrics are not a holdout verdict.
   SARIMA's HPO already evaluates the winning configuration on these windows:
   L3 reuses that walk-forward when HPO used the same settings as L3 (minimum
-  training, horizon, step, seasonality, metric, aggregation and trim), and
-  computes it again otherwise, for example after an HPO study is rebuilt
-  from its manifest.
+  training, horizon, step, seasonality, metric, aggregation and trim) and the
+  same model factory, and computes it again otherwise, for example after an
+  HPO study is rebuilt from its manifest or with an injected classical
+  factory. A router subclass that overrides `execute`, or a classical
+  strategy subclass that overrides `select`, keeps its selection and gives
+  no walk-forward.
 - **L4:** native M3 through `ControladorEvaluacion`: strict M2 handoff,
   complete daily reserved windows split into a selection block and a test
   block, category selection frozen on the selection block, five descriptive
