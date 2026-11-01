@@ -27,7 +27,8 @@ pred-engine run --csv ventas.csv --data-root data --db-path data/pred.db \
 El motor aplica automáticamente las migraciones M3 pendientes. Una base
 inexistente produce un error claro antes de ejecutar M0 o M2. No crea otra
 base. `--db-path` tiene prioridad sobre `PRED_DB_PATH`; sin ambos se usa
-`{data-root}/pred.db`. La plataforma pasa su ruta efectiva al proceso del motor.
+`{data-root}/pred.db`. La plataforma pasa su ruta efectiva al proceso del motor
+y declara reales los datos de todo lanzamiento (`--datos-reales`).
 
 Para datos aumentados o sintéticos se debe indicar `--datos-sinteticos`.
 `--seed-csv` activa esa condición automáticamente. El protocolo conserva el
