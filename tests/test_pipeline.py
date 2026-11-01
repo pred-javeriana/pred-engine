@@ -869,11 +869,46 @@ def test_parallel_workers_reproduce_sequential_results_in_other_processes(tmp_pa
         assert one.fitted.selection == other.fitted.selection
         np.testing.assert_array_equal(one.fitted.forecast, other.fitted.forecast)
         assert one.walk_forward.valor_agregado == other.walk_forward.valor_agregado
+    # Con el pool, el walk-forward del HPO viaja con el L3 y el candidato no
+    # guarda otra copia de sus ventanas.
+    assert all(c.fitted.walk_forward is None for c in parallel.evaluation.candidates)
     assert {u.record.pid for u in sequential.units} == {os.getpid()}
     parallel_pids = {u.record.pid for u in parallel.units}
     assert os.getpid() not in parallel_pids
     assert len(parallel_pids) >= 2
     assert summarize_run(parallel) == summarize_run(sequential)
+
+
+def test_una_interrupcion_no_espera_las_unidades_que_no_empezaron(
+    tmp_path, monkeypatch
+):
+    request = core_request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    pd.concat([source.assign(sku_id=f"core-{i}") for i in range(6)]).to_csv(
+        request.csv_path, index=False
+    )
+    progreso = tmp_path / "progreso.jsonl"
+
+    def interrumpir(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("pred_engine.pipeline.wait", interrumpir)
+    pipeline = build_pipeline(
+        EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae"),
+        families=("classical", "ml"),
+        n_trials=1,
+        seed=3,
+        workers=2,
+        progress=progreso,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        pipeline.run(request)
+
+    eventos = _eventos(progreso)
+    [plan] = [e for e in eventos if (e["event"], e.get("stage")) == ("planned", "L2")]
+    iniciadas = [e for e in eventos if e["event"] == "unit_started"]
+    # Solo corren las unidades que ya estaban en manos del pool.
+    assert len(iniciadas) < len(plan["units"]) == 12
 
 
 def _clasicos(candidatos):
@@ -1251,6 +1286,11 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     excluded = {e["sku_id"]: e["code"] for e in report["exclusions"]}
     assert skus and excluded and skus.isdisjoint(excluded)
     assert set(excluded.values()) == {ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS}
+    # Un SKU excluido no corre L3, tampoco el que sale apenas cierra su L2.
+    progress = [json.loads(line) for line in (run_dir / "progreso.jsonl").open()]
+    assert not [
+        e for e in progress if e.get("stage") == "L3" and e.get("sku_id") in excluded
+    ]
     assert len(candidates) == report["units"]["L2"]["completed"] - len(excluded)
     for candidate in handoff.candidatos:
         instanciar(candidate)
