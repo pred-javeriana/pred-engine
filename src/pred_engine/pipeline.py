@@ -49,7 +49,7 @@ from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
 from pred_engine.comun.reserva import ReserveCut
-from pred_engine.comun.walkforward import evaluar_walk_forward, identidad_fabrica
+from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
@@ -62,6 +62,9 @@ from pred_engine.ingesta.salida import (
     validate_output_contract,
 )
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degenerada
+from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
+    fabrica_sarima,
+)
 from pred_engine.optimizacion.router import SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
@@ -801,12 +804,14 @@ class Pipeline:
             "metrica_objetivo": cfg.metric,
             "agregacion": cfg.aggregation,
             "proporcion_recorte": cfg.trim,
-            "fabrica": identidad_fabrica(factory),
         }
-        # El walk-forward del HPO solo vale si se calculo con los ajustes y la
-        # fabrica de L3.
+        # El walk-forward del HPO de SARIMA solo vale con los ajustes de L3 y la
+        # misma fabrica nativa con que lo calculo el HPO: una envuelta o
+        # inyectada es otro modelo, aunque conserve su nombre, y se mide de nuevo.
         walk_forward = candidate.walk_forward
-        if walk_forward is not None and walk_forward.ajustes != ajustes_l3:
+        if walk_forward is not None and (
+            walk_forward.ajustes != ajustes_l3 or factory is not fabrica_sarima
+        ):
             walk_forward = None
         task = _EvaluationTask(
             candidate.selection,

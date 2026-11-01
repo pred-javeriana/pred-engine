@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date
+from functools import wraps
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,7 @@ from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
     EspacioClasico,
+    fabrica_sarima,
 )
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.estrategia import (
     ClassicalSelectionStrategy,
@@ -1144,6 +1146,41 @@ def test_l3_evalua_la_fabrica_inyectada_y_no_el_walk_forward_del_hpo(tmp_path):
     ]
     for ventana in evaluado.walk_forward.ventanas:
         np.testing.assert_array_equal(ventana.y_pred, np.full(2, 10.0))
+
+
+@wraps(fabrica_sarima)
+def _sarima_envuelta(configuracion, *, seed):
+    return _Constante()
+
+
+def test_l3_mide_igual_una_fabrica_envuelta_al_correr_y_al_reanudar_l2(tmp_path):
+    # Una fabrica envuelta conserva el nombre de fabrica_sarima pero es otro modelo:
+    # L3 la mide a ella, con el L2 recien ajustado y con el L2 restaurado.
+    pipeline = Pipeline(
+        _router_clasico_ml(),
+        _AJUSTES_CORE,
+        factories={**model_factories(), "classical": _sarima_envuelta},
+        checkpoints=UnitCheckpoints(tmp_path / "checkpoints", identity="prueba-v1"),
+    )
+    ingestion = pipeline.ingest(core_request_at(tmp_path))
+
+    def l3_clasico(fitting):
+        return next(
+            c.walk_forward
+            for c in pipeline.evaluate(fitting).candidates
+            if c.fitted.selection.family == "classical"
+        )
+
+    recien = l3_clasico(pipeline.fit(ingestion))
+    for checkpoint in (tmp_path / "checkpoints" / "L3").glob("*.json"):
+        checkpoint.unlink()
+    restaurado_l2 = pipeline.fit(ingestion)
+    assert all(u.reused for u in restaurado_l2.units)
+    reanudado = l3_clasico(restaurado_l2)
+
+    for ventana in recien.ventanas:
+        np.testing.assert_array_equal(ventana.y_pred, np.full(2, 10.0))
+    assert recien.valor_agregado == reanudado.valor_agregado
 
 
 def test_un_router_que_redefine_execute_sigue_eligiendo_en_l2(tmp_path):

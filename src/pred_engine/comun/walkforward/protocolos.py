@@ -26,14 +26,3 @@ class FabricaPronosticador(Protocol):
     def __call__(
         self, configuracion: Mapping[str, Any], *, seed: int
     ) -> Pronosticador: ...
-
-
-def identidad_fabrica(fabrica: FabricaPronosticador) -> str:
-    """Nombre estable de una fabrica: su modulo y su nombre calificado.
-
-    Un walk-forward calculado con una fabrica solo vale para otra con la misma
-    identidad; una fabrica envuelta o inyectada tiene otra.
-    """
-    modulo = getattr(fabrica, "__module__", None) or type(fabrica).__module__
-    nombre = getattr(fabrica, "__qualname__", None) or type(fabrica).__qualname__
-    return f"{modulo}.{nombre}"

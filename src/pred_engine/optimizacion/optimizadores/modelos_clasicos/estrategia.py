@@ -13,18 +13,16 @@ de SKU.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
 from pred_engine.comun.logger import get_logger
-from pred_engine.comun.walkforward.protocolos import identidad_fabrica
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
     EspacioClasico,
-    fabrica_sarima,
     seleccionar_configuracion_clasica,
     tendencia_sarima,
 )
@@ -102,19 +100,12 @@ class ClassicalSelectionStrategy:
     ) -> tuple[SelectionResult, ResultadoWalkForward | None]:
         """``select`` y el walk-forward completo del ganador, si el HPO lo evaluo.
 
-        El walk-forward declara en sus ajustes la fabrica que lo produjo. Una
-        subclase que redefine ``select`` conserva su seleccion, sin walk-forward.
+        El HPO lo calcula con ``fabrica_sarima``. Una subclase que redefine
+        ``select`` conserva su seleccion, sin walk-forward.
         """
         if type(self).select is not ClassicalSelectionStrategy.select:
             return self.select(request, profile), None
-        seleccion, walk_forward = self._select(request, profile)
-        if walk_forward is None:
-            return seleccion, None
-        ajustes = {
-            **(walk_forward.ajustes or {}),
-            "fabrica": identidad_fabrica(fabrica_sarima),
-        }
-        return seleccion, replace(walk_forward, ajustes=ajustes)
+        return self._select(request, profile)
 
     def _select(
         self, request: SelectionRequest, profile: TopologicalProfile
