@@ -4,6 +4,8 @@
 **Estado:** Aceptada; ADR-023 reemplaza en parte la decisión 3 y la sección
 «Límites» (bloques de selección y de prueba, BH por categoría).
 **Referencias:** ADR-03-003 a ADR-03-011 del Hub; tareas 3.0 a 3.7.
+**Enmendada (2026-11-01):** la última oración de la decisión 7 (la carga web
+no declara el origen); véase «Enmienda de 2026-11-01».
 
 ## Contexto
 
@@ -74,6 +76,21 @@ para incorporar observaciones reservadas y para emitir evidencia estadística.
   pertenece al informe de ingesta; la evidencia M3 se instala desde 0005.
 
 El Hub no se modifica como parte de esta implementación.
+
+## Enmienda de 2026-11-01: lanzamientos de la plataforma con datos reales
+
+**Cambia:** la última oración de la decisión 7, «La carga web sigue recibiendo
+solo el archivo, sin declarar que los datos sean reales». La plataforma ya no
+ofrece elegir el origen de los datos: todo lanzamiento declara los datos reales
+y pasa `--datos-reales` al motor.
+
+**Motivo:** la versión final del proyecto se ejecuta solo con datos reales, así
+que la elección por lanzamiento dejó de tener uso.
+
+**Sin cambio en el motor:** conserva `--datos-reales` y `--datos-sinteticos`.
+Un origen sintético, aumentado o sin declarar sigue sin prueba HLN-DM (decisión
+3), y el resto de la decisión 7 sigue vigente: el origen declarado de una
+ingesta no cambia entre corridas y una ausencia queda desconocida.
 
 ## Límites
 
