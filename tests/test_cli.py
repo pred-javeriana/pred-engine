@@ -368,6 +368,23 @@ def test_cli_run_reanudacion_tras_interrupcion_conserva_identidad(
     assert corrida["evaluation"] == {"aggregation": "media_recortada", "trim": 0.1}
 
 
+def test_la_huella_del_codigo_no_depende_de_los_finales_de_linea(
+    tmp_path: Path,
+) -> None:
+    # Un checkout en Windows con core.autocrlf reescribe los finales de linea sin
+    # cambiar el codigo; si la huella cambiara, ninguna corrida previa se reanudaria.
+    from pred_engine.run_artifacts import huella_codigo
+
+    lf, crlf = tmp_path / "lf", tmp_path / "crlf"
+    for raiz, salto in ((lf, "\n"), (crlf, "\r\n")):
+        (raiz / "pkg").mkdir(parents=True)
+        (raiz / "pkg" / "modulo.py").write_bytes(f"a = 1{salto}b = 2{salto}".encode())
+
+    assert huella_codigo(lf) == huella_codigo(crlf)
+    (lf / "pkg" / "modulo.py").write_bytes(b"a = 1\nb = 3\n")
+    assert huella_codigo(lf) != huella_codigo(crlf)
+
+
 def test_cli_run_falla_l2_graba_ajuste_evaluacion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

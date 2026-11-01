@@ -303,3 +303,68 @@ def test_estrategia_clasica_publica_la_tendencia_en_la_configuracion():
     assert resultado.forecast_config is not None
     assert resultado.forecast_config["tendencia"] == "c"
     assert resultado.forecast_config["d"] == 0
+
+
+def test_el_hpo_clasico_entrega_el_walk_forward_completo_de_su_ganador():
+    from pred_engine.comun.modelos import ClassifiedObservation
+    from pred_engine.comun.walkforward.walk_forward import evaluar_walk_forward
+    from pred_engine.optimizacion.optimizadores.modelos_clasicos.estrategia import (
+        ClassicalSelectionStrategy,
+        PresupuestoClasico,
+    )
+    from pred_engine.optimizacion.router import TOPOLOGICAL_PROFILES, SelectionRequest
+    from pred_engine.pipeline import EvaluationSettings
+
+    serie = _serie_estacional()
+    fechas = pd.date_range("2024-01-01", periods=len(serie), freq="D")
+    solicitud = SelectionRequest(
+        sku_id="S1",
+        sku_class="smooth",
+        series=tuple(
+            ClassifiedObservation(
+                sku_id="S1",
+                sku_class="smooth",
+                timestamp=fecha,
+                demand_qty=float(valor),
+                lead_time_days=3,
+            )
+            for fecha, valor in zip(fechas, serie, strict=True)
+        ),
+    )
+    estrategia = ClassicalSelectionStrategy(
+        espacio=_ESPACIO_MINIMO,
+        presupuestos={p: PresupuestoClasico(n_trials=3) for p in TOPOLOGICAL_PROFILES},
+        min_train=40,
+    )
+
+    seleccion, walk_forward = estrategia.select_with_walk_forward(
+        solicitud, "dense_stable"
+    )
+
+    # Lo que calcula hoy L3 para la configuracion ganadora (pipeline._evaluate_unit).
+    cfg = EvaluationSettings(40)
+    assert seleccion.forecast_config is not None
+    esperado = evaluar_walk_forward(
+        serie,
+        fabrica_sarima,
+        seleccion.forecast_config,
+        min_train=cfg.min_train,
+        horizonte=cfg.horizon,
+        paso=cfg.step,
+        metrica_objetivo=cfg.metric,
+        estacionalidad=cfg.seasonality,
+        agregacion=cfg.aggregation,
+        proporcion_recorte=cfg.trim,
+        seed=seleccion.forecast_seed,
+        tolerar_fallos=False,
+        identificador="S1",
+    )
+    assert walk_forward is not None and walk_forward.completo
+    assert walk_forward.valor_agregado == esperado.valor_agregado
+    assert len(walk_forward.ventanas) == len(esperado.ventanas)
+    for obtenida, calculada in zip(
+        walk_forward.ventanas, esperado.ventanas, strict=True
+    ):
+        assert obtenida.ventana == calculada.ventana
+        np.testing.assert_array_equal(obtenida.y_pred, calculada.y_pred)
+        assert dict(obtenida.metricas) == dict(calculada.metricas)
