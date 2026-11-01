@@ -30,6 +30,11 @@ principal stage.
 - **L3:** causal walk-forward evaluation on the same admissible history used
   by HPO. Each window has a new fit. `selection_scope="same_history"` makes
   the limitation explicit. These diagnostic metrics are not a holdout verdict.
+  SARIMA's HPO already evaluates the winning configuration on these windows:
+  L3 reuses that walk-forward when HPO used the same settings as L3 (minimum
+  training, horizon, step, seasonality, metric, aggregation and trim), and
+  computes it again otherwise, for example after an HPO study is rebuilt
+  from its manifest.
 - **L4:** native M3 through `ControladorEvaluacion`: strict M2 handoff,
   complete daily reserved windows split into a selection block and a test
   block, category selection frozen on the selection block, five descriptive
@@ -37,8 +42,12 @@ principal stage.
   confirmation on the test block, and durable publication to the central
   platform database.
 
-L2/L3 retain independent process units with `workers > 1`. A unit failure
-preserves the rest of its stage; no successful unit means a stage error.
+L2/L3 retain independent process units with `workers > 1`. Both stages share
+one pool: the L3 units of a SKU are sent as soon as all its L2 units finish and
+the two-family rule keeps the SKU, so L3 fills the workers that the last L2
+units leave idle. A failure or an interruption cancels the units that have not
+started. A unit failure preserves the rest of its stage; no successful unit
+means a stage error.
 L4 forecasts each SKU in a pool of `procesos` processes; the main process
 stays the only SQLite writer and confirms the units in SKU order.
 M3 records forecast failures per origin without substituting zeros.

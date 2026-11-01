@@ -223,7 +223,10 @@ While a run executes, `pred-engine run` appends one JSON line per event to
 `run_started` (with the attempt number), `stage_started`/`stage_finished`, `planned` (the
 SKU × family units of a stage, still pending), `excluded`, `unit_started`/`unit_finished` (written
 by the worker process at the instant they happen, with state, seconds and error) and
-`run_finished` (written after `corrida.json`). Repeating a run with the same `run_id` resumes it:
+`run_finished` (written after `corrida.json`). M3 adds `planned` for L4 (one unit per candidate)
+and one L4 `unit_finished` per candidate once its SKU is stored in the central database. With more
+than one worker, a SKU's L3 units start as soon as all its L2 units finish, so their unit events
+can come before the `stage_started` and `planned` events of L3. Repeating a run with the same `run_id` resumes it:
 the stream keeps earlier attempts and the stored HPO studies are reused. The platform follows this
 file to show tasks moving from pending to running to done.
 

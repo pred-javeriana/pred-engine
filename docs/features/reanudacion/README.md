@@ -17,7 +17,9 @@ El callback se ejecuta dentro del proceso que realizó la unidad, por lo que tam
 una unidad que termina mientras el padre espera el resultado de otra.
 
 L2 conserva selección, historia admisible y pronóstico de la reserva; L3 conserva la evaluación
-Walk-Forward, sus ventanas, métricas y pronósticos originales. No guarda objetos de modelos ni
+Walk-Forward, sus ventanas, métricas y pronósticos originales. El checkpoint de L2 no guarda el
+walk-forward que el HPO de SARIMA entrega a L3: si se restaura L2 sin su L3, L3 lo calcula de
+nuevo con el mismo resultado. No guarda objetos de modelos ni
 usa pickle para el checkpoint. El codec solo reconstruye tipos permitidos explícitamente.
 Fallos y resultados incompletos no crean checkpoints reutilizables.
 
