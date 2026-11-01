@@ -64,8 +64,9 @@ def iniciar_proceso_del_pool() -> None:
 
     Si el padre muere sin cerrar el pool (por ejemplo, lo mata el sistema por
     falta de memoria), sus hijos quedarian esperando tareas para siempre con su
-    memoria tomada. Una hebra del hijo espera a su padre y lo termina cuando el
-    padre deja de existir, aunque ya hubiera muerto cuando el hijo arranco.
+    memoria tomada. Un hijo cuyo padre ya murio termina antes de tomar una
+    tarea; si no, una hebra del hijo espera a su padre y lo termina cuando el
+    padre deja de existir.
     """
     fijar_una_hebra_blas()
     # Se espera al padre por su manejador, no por su pid: en Windows el pid del padre
@@ -73,6 +74,8 @@ def iniciar_proceso_del_pool() -> None:
     padre = multiprocessing.parent_process()
     if padre is None:
         return
+    if not padre.is_alive():
+        os._exit(1)
 
     def vigilar_padre() -> None:
         padre.join()

@@ -187,18 +187,22 @@ _PADRE_QUE_MUERE_AL_ARRANCAR = textwrap.dedent(
         time.sleep(120)
 
 
-    def trabajadores():
-        hijos = psutil.Process().children()
-        return [p for p in hijos if "spawn_main" in " ".join(p.cmdline())]
+    if __name__ == "__mp_main__":
+        # Cada hijo, al importar este guion y antes de su initializer, anota su pid
+        # y espera la puerta que el test abre cuando el padre ya murio.
+        Path(os.environ["PRED_TEST_ARRANCANDO"], str(os.getpid())).touch()
+        puerta = Path(os.environ["PRED_TEST_PUERTA"])
+        while not puerta.exists():
+            time.sleep(0.01)
 
 
     if __name__ == "__main__":
-        carpeta, pids = Path(sys.argv[1]), Path(sys.argv[2])
+        carpeta = Path(sys.argv[1])
+        arrancando = Path(os.environ["PRED_TEST_ARRANCANDO"])
         resultados = iterar_unidades(anotar, [str(carpeta)] * 2, procesos=2)
         threading.Thread(target=lambda: next(resultados), daemon=True).start()
-        while len(trabajadores()) < 2:
+        while len(list(arrancando.iterdir())) < 2:
             time.sleep(0.01)
-        pids.write_text(" ".join(str(p.pid) for p in trabajadores()))
         psutil.Process().kill()  # los hijos todavia estan arrancando
     """
 )
@@ -231,17 +235,26 @@ def test_los_procesos_del_pool_terminan_si_el_padre_muere(tmp_path):
 def test_los_procesos_del_pool_terminan_si_el_padre_muere_al_arrancar(tmp_path):
     guion = tmp_path / "padre.py"
     guion.write_text(_PADRE_QUE_MUERE_AL_ARRANCAR)
-    carpeta = tmp_path / "hijos"
+    carpeta, arrancando = tmp_path / "hijos", tmp_path / "arrancando"
     carpeta.mkdir()
-    pids = tmp_path / "pids.txt"
+    arrancando.mkdir()
+    puerta = tmp_path / "puerta"
+    entorno = os.environ | {
+        "PRED_TEST_ARRANCANDO": str(arrancando),
+        "PRED_TEST_PUERTA": str(puerta),
+    }
     padre = subprocess.run(
-        [sys.executable, str(guion), str(carpeta), str(pids)], timeout=120, check=False
+        [sys.executable, str(guion), str(carpeta)],
+        timeout=120,
+        check=False,
+        env=entorno,
     )
     assert padre.returncode != 0  # murio, no termino normalmente
-    hijos = [int(p) for p in pids.read_text().split()]
+    hijos = [int(p.name) for p in arrancando.iterdir()]
     assert len(hijos) == 2
-    assert not any(carpeta.iterdir())  # ninguno alcanzo a empezar una tarea
+    puerta.touch()  # los hijos siguen arrancando con el padre ya muerto
     limite = time.monotonic() + 15
     while any(_vivo(pid) for pid in hijos) and time.monotonic() < limite:
         time.sleep(0.2)
     assert not any(_vivo(pid) for pid in hijos)
+    assert not any(carpeta.iterdir())  # ninguno tomo una tarea
