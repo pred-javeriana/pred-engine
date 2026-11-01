@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 from tests._series import serie_ar_estacional
@@ -242,3 +244,54 @@ def test_un_reajuste_con_serie_vacia_invalida_el_modelo_anterior():
         modelo.fit(np.array([]))
     with pytest.raises(RuntimeError, match="fit"):
         modelo.predict(3)
+
+
+def test_el_ajuste_no_calcula_la_covarianza_de_los_parametros(monkeypatch):
+    # Nadie lee la covarianza de los parametros: calcularla solo cuesta tiempo.
+    from statsmodels.tsa.statespace.mlemodel import MLEResults
+
+    llamadas = []
+    # Las dos formas de calcularla en statsmodels: OPG (la que usa por defecto) y la
+    # numerica.
+    for metodo in ("_cov_params_opg", "_cov_params_approx"):
+        original = getattr(MLEResults, metodo)
+
+        def espia(self, *args, _metodo=metodo, _original=original, **kwargs):
+            llamadas.append(_metodo)
+            return _original(self, *args, **kwargs)
+
+        monkeypatch.setattr(MLEResults, metodo, espia)
+    SarimaForecaster(order=(1, 0, 0), seasonal_order=(1, 0, 0, 7), tendencia="c").fit(
+        serie_ar_estacional(90)
+    )
+    assert llamadas == []
+
+
+def test_el_ajuste_da_los_mismos_parametros_y_pronostico_que_con_covarianza():
+    # Referencia: el mismo SARIMAX de statsmodels con su covarianza por defecto. El
+    # pronostico tras `pronosticar` usa los parametros estimados: tambien los fija.
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+    # La serie del ajuste estacional holgado; sus ultimos dias sirven de observados.
+    historia = serie_ar_estacional(90)
+    nuevas = historia[-7:]
+    modelo = SarimaForecaster(
+        order=(1, 0, 0),
+        seasonal_order=(1, 0, 0, 7),
+        tendencia="c",
+        forzar_no_negativo=False,
+    ).fit(historia)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # como en SarimaForecaster.fit
+        referencia = SARIMAX(
+            historia,
+            order=(1, 0, 0),
+            seasonal_order=(1, 0, 0, 7),
+            trend="c",
+            enforce_stationarity=True,
+            enforce_invertibility=True,
+        ).fit(disp=False, maxiter=50)
+    np.testing.assert_array_equal(modelo.predict(7), referencia.forecast(steps=7))
+    np.testing.assert_array_equal(
+        modelo.pronosticar(nuevas, 7), referencia.extend(nuevas).forecast(steps=7)
+    )

@@ -12,7 +12,10 @@ Sin esa configuracion, la biblioteca conserva L4 bloqueada.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +31,9 @@ from pred_engine.comun.ejecucion_paralela import (
     ResultadoUnidad,
     ejecutar_unidades,
     emitir_evento,
+    enviar_unidad,
+    pool_de_unidades,
+    resultado_de,
 )
 from pred_engine.comun.errores_codigo import (
     ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
@@ -56,6 +62,9 @@ from pred_engine.ingesta.salida import (
     validate_output_contract,
 )
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degenerada
+from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
+    fabrica_sarima,
+)
 from pred_engine.optimizacion.router import SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
@@ -195,6 +204,9 @@ class FittedCandidate:
     selection: SelectionResult
     series: np.ndarray
     forecast: np.ndarray
+    # Walk-forward que el HPO ya calculo para esta configuracion: el que L3
+    # calcularia. No se guarda en el checkpoint de L2 (pesa megas).
+    walk_forward: ResultadoWalkForward | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -466,7 +478,12 @@ class _FitTask:
 
 def _fit_unit(task: _FitTask) -> FittedCandidate:
     """Unidad L2: seleccion de la familia, ajuste final y pronostico desde t*."""
-    selection = task.router.execute(task.request, task.decision)
+    # Un router que solo sabe `execute` (un envoltorio, por ejemplo) no da walk-forward.
+    ejecutar = getattr(task.router, "execute_with_walk_forward", None)
+    if ejecutar is None:
+        selection, walk_forward = task.router.execute(task.request, task.decision), None
+    else:
+        selection, walk_forward = ejecutar(task.request, task.decision)
     if selection.forecast_config is None:
         raise ValueError(f"{selection.family} must provide forecast_config for L2")
     y = np.array([obs.demand_qty for obs in task.request.series], dtype=float)
@@ -486,7 +503,7 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
             f"desde t*: {motivo} (regla #3); "
             f"configuracion={dict(selection.forecast_config)}"
         )
-    return FittedCandidate(selection, y, forecast)
+    return FittedCandidate(selection, y, forecast, walk_forward)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -496,12 +513,14 @@ class _EvaluationTask:
     factory: FabricaPronosticador
     settings: EvaluationSettings
     checkpoint: Path | None = None
+    walk_forward: ResultadoWalkForward | None = None
 
 
 def _evaluate_unit(task: _EvaluationTask) -> ResultadoWalkForward:
     """Unidad L3: modelos nuevos por ventana causal, nunca el ajuste final."""
     cfg, selection = task.settings, task.selection
-    evidence = evaluar_walk_forward(
+    # El HPO ya evaluo esta configuracion en las mismas ventanas: no se repite.
+    evidence = task.walk_forward or evaluar_walk_forward(
         task.series,
         task.factory,
         cast(Mapping[str, Any], selection.forecast_config),
@@ -523,8 +542,17 @@ def _evaluate_unit(task: _EvaluationTask) -> ResultadoWalkForward:
     return evidence
 
 
+def _without_walk_forward(
+    result: ResultadoUnidad[FittedCandidate],
+) -> ResultadoUnidad[FittedCandidate]:
+    if result.valor is None or result.valor.walk_forward is None:
+        return result
+    return replace(result, valor=replace(result.valor, walk_forward=None))
+
+
 def _persist_fit(task: _FitTask, result: ResultadoUnidad[FittedCandidate]) -> None:
-    save_result(task.checkpoint, result)
+    # El walk-forward del HPO no se guarda: L3 lo recalcula si el L2 se restaura.
+    save_result(task.checkpoint, _without_walk_forward(result))
 
 
 def _persist_evaluation(
@@ -649,6 +677,12 @@ class Pipeline:
         # Ruta del flujo de progreso (``progreso.jsonl``); None lo desactiva.
         self.progress = progress
         self.checkpoints = checkpoints
+        # Pool que comparten L2 y L3 mientras corre ``run`` (con mas de un proceso).
+        self._pool: ProcessPoolExecutor | None = None
+        # L3 enviadas apenas termino su L2, por (sku, familia), con su hora de envio.
+        self._early_l3: dict[
+            tuple[str, str], tuple[Future[ResultadoUnidad[ResultadoWalkForward]], float]
+        ] = {}
 
     def _run_units[T, R](
         self,
@@ -657,8 +691,20 @@ class Pipeline:
         labels: Sequence[EtiquetaUnidad],
         paths: Sequence[Path | None],
         persist: Callable[[T, ResultadoUnidad[R]], None],
+        *,
+        submitted: Mapping[int, tuple[Future[ResultadoUnidad[R]], float]] | None = None,
+        on_result: Callable[[int, ResultadoUnidad[R]], ResultadoUnidad[R]]
+        | None = None,
     ) -> list[ResultadoUnidad[R]]:
-        restored = [load_result(path) for path in paths]
+        """``submitted``: unidades ya enviadas al pool, por indice. Con el pool,
+        ``on_result`` recibe el indice y el resultado (restaurado o nuevo) de
+        cada unidad apenas existe, y devuelve el resultado que la etapa guarda."""
+        submitted = submitted or {}
+        # Una unidad ya enviada guarda su checkpoint al terminar: no es restaurada.
+        restored = [
+            None if i in submitted else load_result(path)
+            for i, path in enumerate(paths)
+        ]
         pending = [i for i, result in enumerate(restored) if result is None]
         for label, result in zip(labels, restored, strict=True):
             if result is not None:
@@ -676,17 +722,176 @@ class Pipeline:
                     code=None,
                     reused=True,
                 )
-        fresh = ejecutar_unidades(
-            function,
-            [tasks[i] for i in pending],
-            procesos=self.workers,
-            etiquetas=[labels[i] for i in pending],
-            progreso=self.progress,
-            al_completar=persist,
-        )
+        if self._pool is None:
+            fresh = ejecutar_unidades(
+                function,
+                [tasks[i] for i in pending],
+                procesos=self.workers,
+                etiquetas=[labels[i] for i in pending],
+                progreso=self.progress,
+                al_completar=persist,
+            )
+        else:
+            sent = {
+                i: submitted.get(i)
+                or (
+                    enviar_unidad(
+                        self._pool,
+                        function,
+                        tasks[i],
+                        labels[i],
+                        self.progress,
+                        labels[i].etapa,
+                        persist,
+                    ),
+                    time.time(),
+                )
+                for i in pending
+            }
+            if on_result is not None:
+                for i, result in enumerate(restored):
+                    if result is not None:
+                        restored[i] = on_result(i, result)
+            # Cada resultado se atiende al terminar, no en el orden de las tareas.
+            done_by_index: dict[int, ResultadoUnidad[R]] = {}
+            waiting = {future: i for i, (future, _) in sent.items()}
+
+            def collect(future: Future[ResultadoUnidad[R]]) -> None:
+                # El futuro atendido se suelta: solo queda lo que on_result guarda.
+                i = waiting.pop(future)
+                _, sent_at = sent.pop(i)
+                result = resultado_de(future, labels[i], self.progress, sent_at)
+                done_by_index[i] = result if on_result is None else on_result(i, result)
+
+            while waiting:
+                done = wait(waiting, return_when=FIRST_COMPLETED).done
+                while done:
+                    collect(done.pop())
+            fresh = [done_by_index[i] for i in pending]
         for index, result in zip(pending, fresh, strict=True):
             restored[index] = result
         return cast(list[ResultadoUnidad[R]], restored)
+
+    @contextmanager
+    def _pool_l2_l3(self) -> Iterator[None]:
+        """Un solo pool para las unidades de L2 y L3 cuando hay mas de un proceso."""
+        if self.workers == 1:
+            yield
+            return
+        with pool_de_unidades(self.workers) as pool:
+            self._pool = pool
+            try:
+                yield
+            except BaseException:
+                # Un fallo o una interrupcion no espera las unidades no iniciadas.
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
+            finally:
+                self._pool = None
+                self._early_l3.clear()
+
+    def _evaluation_task(self, candidate: FittedCandidate) -> _EvaluationTask:
+        family = candidate.selection.family
+        factory = self.factories.get(family)
+        if factory is None:
+            raise ValueError(f"No model factory for {family}")
+        cfg = self.settings
+        ajustes_l3 = {
+            "min_train": cfg.min_train,
+            "horizonte": cfg.horizon,
+            "paso": cfg.step,
+            "estacionalidad": cfg.seasonality,
+            "metrica_objetivo": cfg.metric,
+            "agregacion": cfg.aggregation,
+            "proporcion_recorte": cfg.trim,
+        }
+        # El walk-forward del HPO de SARIMA solo vale con los ajustes de L3 y la
+        # misma fabrica nativa con que lo calculo el HPO: una envuelta o
+        # inyectada es otro modelo, aunque conserve su nombre, y se mide de nuevo.
+        walk_forward = candidate.walk_forward
+        if walk_forward is not None and (
+            walk_forward.ajustes != ajustes_l3 or factory is not fabrica_sarima
+        ):
+            walk_forward = None
+        task = _EvaluationTask(
+            candidate.selection,
+            candidate.series,
+            factory,
+            cfg,
+            walk_forward=walk_forward,
+        )
+        if self.checkpoints is None:
+            return task
+        return replace(
+            task,
+            checkpoint=self.checkpoints.path(
+                "L3",
+                {
+                    "selection": task.selection.model_dump(mode="json"),
+                    "series": task.series.tolist(),
+                    "evaluation": asdict(task.settings),
+                },
+            ),
+        )
+
+    def _early_l3_by_sku(
+        self, tasks: Sequence[_FitTask]
+    ) -> Callable[
+        [int, ResultadoUnidad[FittedCandidate]], ResultadoUnidad[FittedCandidate]
+    ]:
+        """Envia el L3 de los candidatos de un SKU apenas cierra todo su L2.
+
+        Espera las demas familias del SKU para aplicar antes la regla de dos
+        familias: un SKU que sale de la competencia no corre L3. El walk-forward
+        del HPO queda solo aqui hasta que sale con su L3; L2 guarda el resultado
+        sin el, asi el proceso principal no conserva otra copia de sus ventanas.
+        """
+        expected = Counter(task.request.sku_id for task in tasks)
+        finished: dict[str, list[tuple[int, ResultadoUnidad[FittedCandidate]]]] = {}
+
+        def on_result(
+            index: int, result: ResultadoUnidad[FittedCandidate]
+        ) -> ResultadoUnidad[FittedCandidate]:
+            sku_id = tasks[index].request.sku_id
+            done = finished.setdefault(sku_id, [])
+            done.append((index, result))
+            if len(done) < expected[sku_id]:
+                return _without_walk_forward(result)
+            del finished[sku_id]
+            units = _units(
+                "L2",
+                [(tasks[i].request.sku_id, tasks[i].decision.family) for i, _ in done],
+                [r for _, r in done],
+            )
+            candidates, _ = _two_family_rule(
+                units, tuple(r.valor for _, r in done if r.valor is not None)
+            )
+            for candidate in candidates:
+                self._submit_early_l3(candidate)
+            return _without_walk_forward(result)
+
+        return on_result
+
+    def _submit_early_l3(self, candidate: FittedCandidate) -> None:
+        """Envia el L3 de un candidato, si no esta restaurado."""
+        if self._pool is None:
+            return
+        task = self._evaluation_task(candidate)
+        if load_result(task.checkpoint) is not None:
+            return
+        sku_id, family = candidate.selection.sku_id, candidate.selection.family
+        self._early_l3[(sku_id, family)] = (
+            enviar_unidad(
+                self._pool,
+                _evaluate_unit,
+                task,
+                self._label("L3", sku_id, family),
+                self.progress,
+                "L3",
+                _persist_evaluation,
+            ),
+            time.time(),
+        )
 
     def _emit(self, event: str, /, **data: Any) -> None:
         if self.progress is not None:
@@ -868,6 +1073,7 @@ class Pipeline:
             labels,
             [t.checkpoint for t in tasks],
             _persist_fit,
+            on_result=self._early_l3_by_sku(tasks),
         )
         units = _units(
             "L2",
@@ -904,43 +1110,24 @@ class Pipeline:
             and any(u.failed for u in fitting.units)
         ):
             raise ValueError("L3 requires fitted candidates")
-        tasks: list[_EvaluationTask] = []
-        for candidate in fitting.candidates:
-            family = candidate.selection.family
-            factory = self.factories.get(family)
-            if factory is None:
-                raise ValueError(f"No model factory for {family}")
-            tasks.append(
-                _EvaluationTask(
-                    candidate.selection, candidate.series, factory, self.settings
-                )
-            )
+        tasks = [self._evaluation_task(c) for c in fitting.candidates]
         labels = [
             self._label("L3", c.selection.sku_id, c.selection.family)
             for c in fitting.candidates
         ]
-        if self.checkpoints is not None:
-            tasks = [
-                replace(
-                    task,
-                    checkpoint=self.checkpoints.path(
-                        "L3",
-                        {
-                            "selection": task.selection.model_dump(mode="json"),
-                            "series": task.series.tolist(),
-                            "evaluation": asdict(task.settings),
-                        },
-                    ),
-                )
-                for task in tasks
-            ]
         self._plan("L3", labels)
+        early = {
+            i: self._early_l3.pop(key)
+            for i, c in enumerate(fitting.candidates)
+            if (key := (c.selection.sku_id, c.selection.family)) in self._early_l3
+        }
         results = self._run_units(
             _evaluate_unit,
             tasks,
             labels,
             [t.checkpoint for t in tasks],
             _persist_evaluation,
+            submitted=early,
         )
         units = _units(
             "L3",
@@ -995,44 +1182,52 @@ class Pipeline:
             self.validate,
         )
         value: Any = request
-        for index, operation in enumerate(operations):
-            current = executions[index]
-            if current.definition.id == "L4" and self.validator is None:
+        # L2 y L3 comparten un pool, que se cierra antes de M3 o si la corrida falla.
+        with ExitStack() as pool:
+            for index, operation in enumerate(operations):
+                current = executions[index]
+                if current.definition.id == "L2":
+                    pool.enter_context(self._pool_l2_l3())
+                elif current.definition.id == "L4":
+                    pool.close()
+                if current.definition.id == "L4" and self.validator is None:
+                    executions[index] = replace(
+                        current,
+                        state="blocked",
+                        message=current.definition.capability,
+                    )
+                    return PipelineResult(tuple(executions))
+                current = replace(current, started_at=time.time())
+                self._emit("stage_started", stage=current.definition.id)
+                try:
+                    value = operation(value)
+                except Exception as exc:
+                    executions[index] = replace(
+                        current,
+                        state="failed",
+                        message=str(exc),
+                        finished_at=time.time(),
+                    )
+                    self._emit(
+                        "stage_finished",
+                        stage=current.definition.id,
+                        state="failed",
+                        message=str(exc),
+                        code=codigo_de(exc, etapa=str(current.definition.id)),
+                    )
+                    raise PipelineExecutionError(
+                        current.definition.id,
+                        PipelineResult(tuple(executions)),
+                        str(exc),
+                    ) from exc
                 executions[index] = replace(
                     current,
-                    state="blocked",
-                    message=current.definition.capability,
-                )
-                return PipelineResult(tuple(executions))
-            current = replace(current, started_at=time.time())
-            self._emit("stage_started", stage=current.definition.id)
-            try:
-                value = operation(value)
-            except Exception as exc:
-                executions[index] = replace(
-                    current,
-                    state="failed",
-                    message=str(exc),
+                    state="completed",
+                    output=value,
+                    message=_stage_message(value),
                     finished_at=time.time(),
                 )
                 self._emit(
-                    "stage_finished",
-                    stage=current.definition.id,
-                    state="failed",
-                    message=str(exc),
-                    code=codigo_de(exc, etapa=str(current.definition.id)),
+                    "stage_finished", stage=current.definition.id, state="completed"
                 )
-                raise PipelineExecutionError(
-                    current.definition.id,
-                    PipelineResult(tuple(executions)),
-                    str(exc),
-                ) from exc
-            executions[index] = replace(
-                current,
-                state="completed",
-                output=value,
-                message=_stage_message(value),
-                finished_at=time.time(),
-            )
-            self._emit("stage_finished", stage=current.definition.id, state="completed")
-        return PipelineResult(tuple(executions))
+            return PipelineResult(tuple(executions))

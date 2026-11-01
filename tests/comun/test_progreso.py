@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,16 @@ def _mata_al_proceso(x: int) -> int:
     if x == 1:
         os._exit(7)  # el hijo muere sin devolver nada
     return x
+
+
+def _la_primera_espera_la_senal(tarea: tuple[int, str]) -> int:
+    indice, senal = tarea
+    limite = time.monotonic() + 30
+    while indice == 0 and not Path(senal).exists():
+        if time.monotonic() > limite:
+            raise TimeoutError("la senal no llego")
+        time.sleep(0.01)
+    return indice
 
 
 def _eventos(ruta: Path) -> list[dict[str, Any]]:
@@ -114,6 +126,34 @@ def test_una_unidad_fallida_anota_su_error_y_las_demas_siguen(tmp_path: Path) ->
         ("SKU-2", "completada"),
     ]
     assert fines[1]["error"] == "ValueError: tres no vale"
+
+
+def test_el_fin_de_una_unidad_se_escribe_mientras_otra_sigue_corriendo(
+    tmp_path: Path,
+) -> None:
+    ruta, senal = tmp_path / "progreso.jsonl", tmp_path / "senal"
+    corrida = threading.Thread(
+        target=ejecutar_unidades,
+        args=(_la_primera_espera_la_senal, [(0, str(senal)), (1, str(senal))]),
+        kwargs={"procesos": 2, "etiquetas": _etiquetas(2), "progreso": ruta},
+    )
+
+    def terminadas() -> set[str]:
+        lineas = ruta.read_text(encoding="utf-8").splitlines() if ruta.exists() else []
+        eventos = [json.loads(linea) for linea in lineas if linea.endswith("}")]
+        return {e["sku_id"] for e in eventos if e["event"] == "unit_finished"}
+
+    corrida.start()
+    try:
+        limite = time.monotonic() + 20
+        while "SKU-1" not in terminadas() and time.monotonic() < limite:
+            time.sleep(0.05)
+        # SKU-1 ya termino y esta escrito aunque SKU-0, antes en la lista, siga.
+        assert terminadas() == {"SKU-1"}
+    finally:
+        senal.touch()
+        corrida.join(timeout=30)
+    assert terminadas() == {"SKU-0", "SKU-1"}
 
 
 def test_en_paralelo_cada_hijo_anota_su_unidad(tmp_path: Path) -> None:

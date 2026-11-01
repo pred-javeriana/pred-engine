@@ -52,7 +52,8 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
    con una sola familia evaluable sale de la competencia con
    `eligibility.fewer_than_two_families` (ADR-023) y queda en `exclusions`, sea
    cual sea el número de familias enrutadas.
-   L3 vuelve a evaluar cada candidato con walk-forward causal.
+   L3 evalúa cada candidato con walk-forward causal; para SARIMA reutiliza el
+   del HPO cuando vale (ver Paralelismo).
 
 ## Opciones de M2
 
@@ -99,6 +100,15 @@ los procesos distintos, la concurrencia máxima observada y la aceleración
 (tiempo de cómputo sumado dividido por el tiempo de pared del tramo). Los
 procesos se crean con `spawn` y BLAS de una hebra, así que cada unidad usa un
 núcleo.
+
+L2 y L3 comparten un solo pool. Las unidades L3 de un SKU salen apenas
+terminan todas sus unidades L2 y la regla de dos familias lo conserva, así que
+ocupan los procesos que dejan libres las últimas unidades L2. Por eso sus
+eventos en `progreso.jsonl` pueden llegar antes del `stage_started` y del
+`planned` de L3. El L3 de SARIMA reutiliza el walk-forward que su HPO ya
+calculó para la configuración ganadora, si el HPO usó los mismos ajustes que
+L3 y L3 usa la misma fábrica nativa de SARIMA; si no, lo calcula de nuevo. Un fallo o una interrupción cancela las
+unidades que no empezaron.
 
 En L4 (evaluación de M3), cada SKU es una unidad del mismo tipo de pool: un
 proceso ajusta sus candidatos, genera sus pronósticos y su línea base, y

@@ -2,22 +2,37 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import math
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date
+from functools import wraps
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from pred_engine import pipeline as pipeline_module
 from pred_engine.cli import diagnose_pipeline, main
+from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
 from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
 from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.comun.reserva import ReserveCut
+from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
+from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
+    EspacioClasico,
+    fabrica_sarima,
+)
+from pred_engine.optimizacion.optimizadores.modelos_clasicos.estrategia import (
+    ClassicalSelectionStrategy,
+    PresupuestoClasico,
+)
 from pred_engine.optimizacion.optimizadores.modelos_deep_learning.espacio_dl import (
     EspacioDL,
 )
@@ -56,6 +71,7 @@ from pred_engine.pipeline_setup import (
     build_pipeline,
     model_factories,
 )
+from pred_engine.unit_checkpoints import UnitCheckpoints
 from pred_engine.verify import (
     representative_csv,
     verification_pipeline,
@@ -64,6 +80,9 @@ from pred_engine.verify import (
 from tests._dobles import PipelineFalso
 from tests._plataforma import crear_base_plataforma
 from tests._series import serie_ar_estacional
+
+# La unidad L2 original, antes de que un test la reemplace con monkeypatch.
+_L2_REAL = pipeline_module._fit_unit
 
 
 def request_at(root: Path) -> PipelineInput:
@@ -298,9 +317,8 @@ def test_l3_causal_window_error_preserves_fitting(tmp_path, monkeypatch):
     def broken_walk_forward(*args, **kwargs):
         raise ValueError("ventana causal imposible")
 
-    monkeypatch.setattr(
-        "pred_engine.pipeline.evaluar_walk_forward", broken_walk_forward
-    )
+    # La unidad L3 entera: SARIMA ya no recalcula su walk-forward (usa el del HPO).
+    monkeypatch.setattr("pred_engine.pipeline._evaluate_unit", broken_walk_forward)
     pipeline = verification_pipeline()
     with pytest.raises(PipelineExecutionError, match="ventana causal") as raised:
         pipeline.run(request_at(tmp_path))
@@ -862,11 +880,391 @@ def test_parallel_workers_reproduce_sequential_results_in_other_processes(tmp_pa
         assert one.fitted.selection == other.fitted.selection
         np.testing.assert_array_equal(one.fitted.forecast, other.fitted.forecast)
         assert one.walk_forward.valor_agregado == other.walk_forward.valor_agregado
+    # Con el pool, el walk-forward del HPO viaja con el L3 y el candidato no
+    # guarda otra copia de sus ventanas.
+    assert all(c.fitted.walk_forward is None for c in parallel.evaluation.candidates)
     assert {u.record.pid for u in sequential.units} == {os.getpid()}
     parallel_pids = {u.record.pid for u in parallel.units}
     assert os.getpid() not in parallel_pids
     assert len(parallel_pids) >= 2
     assert summarize_run(parallel) == summarize_run(sequential)
+
+
+def test_una_interrupcion_no_espera_las_unidades_que_no_empezaron(
+    tmp_path, monkeypatch
+):
+    request = core_request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    pd.concat([source.assign(sku_id=f"core-{i}") for i in range(6)]).to_csv(
+        request.csv_path, index=False
+    )
+    progreso = tmp_path / "progreso.jsonl"
+
+    def interrumpir(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("pred_engine.pipeline.wait", interrumpir)
+    pipeline = build_pipeline(
+        EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae"),
+        families=("classical", "ml"),
+        n_trials=1,
+        seed=3,
+        workers=2,
+        progress=progreso,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        pipeline.run(request)
+
+    eventos = _eventos(progreso)
+    [plan] = [e for e in eventos if (e["event"], e.get("stage")) == ("planned", "L2")]
+    iniciadas = [e for e in eventos if e["event"] == "unit_started"]
+    # Solo corren las unidades que ya estaban en manos del pool.
+    assert len(iniciadas) < len(plan["units"]) == 12
+
+
+def _clasicos(candidatos):
+    """Los candidatos de la familia clasica (SARIMA) de una corrida."""
+    return [c for c in candidatos if c.selection.family == "classical"]
+
+
+def _l2_retenido(task):
+    """L2 real; el de ``core-sku`` espera la senal del test (de modulo para spawn)."""
+    if task.request.sku_id == "core-sku":
+        senal = Path(os.environ["PRED_TEST_SENAL_L2"])
+        limite = time.monotonic() + 120
+        while not senal.exists():
+            if time.monotonic() > limite:
+                raise TimeoutError("el L2 retenido no fue liberado")
+            time.sleep(0.02)
+    return _L2_REAL(task)
+
+
+def _eventos(progreso: Path) -> list[dict]:
+    """Lineas completas de ``progreso.jsonl`` (la ultima puede estar escribiendose)."""
+    texto = progreso.read_text(encoding="utf-8") if progreso.exists() else ""
+    return [json.loads(linea) for linea in texto.split("\n")[:-1]]
+
+
+def _ocurrio(progreso: Path, evento: str, etapa: str, sku: str) -> bool:
+    return any(
+        (e["event"], e.get("stage"), e.get("sku_id")) == (evento, etapa, sku)
+        for e in _eventos(progreso)
+    )
+
+
+def _correr_con_l2_retenido(tmp_path, monkeypatch, hasta, **opciones):
+    """Dos SKU y dos familias; los L2 de core-sku esperan a que ocurra ``hasta``.
+
+    Con 3 procesos, las dos unidades retenidas dejan uno libre para core-b. Devuelve
+    el resultado de la corrida y su flujo de progreso completo.
+    """
+    request = core_request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    second = source.assign(sku_id="core-b", demand_qty=source["demand_qty"] * 1.5)
+    pd.concat([source, second]).to_csv(request.csv_path, index=False)
+    senal = tmp_path / "soltar-l2"
+    monkeypatch.setenv("PRED_TEST_SENAL_L2", str(senal))
+    monkeypatch.setattr("pred_engine.pipeline._fit_unit", _l2_retenido)
+    progreso = tmp_path / "progreso.jsonl"
+    pipeline = build_pipeline(
+        EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae"),
+        families=("ml", "dl"),
+        n_trials=1,
+        seed=3,
+        workers=3,
+        progress=progreso,
+        **opciones,
+    )
+    with ThreadPoolExecutor(max_workers=1) as hilo:
+        corrida = hilo.submit(pipeline.run, request)
+        try:
+            limite = time.monotonic() + 60
+            while not _ocurrio(progreso, *hasta):
+                assert time.monotonic() < limite, f"{hasta} espero a todo L2"
+                time.sleep(0.05)
+            assert not _ocurrio(progreso, "unit_finished", "L2", "core-sku")
+        finally:
+            senal.touch()
+        return corrida.result(timeout=120), _eventos(progreso)
+
+
+def test_el_l3_de_una_unidad_empieza_antes_de_que_termine_todo_l2(
+    tmp_path, monkeypatch
+):
+    result, _ = _correr_con_l2_retenido(
+        tmp_path, monkeypatch, ("unit_started", "L3", "core-b")
+    )
+    assert result.evaluation is not None and len(result.evaluation.candidates) == 4
+
+
+def test_con_l2_y_l3_solapados_cada_etapa_conserva_su_plan_y_sus_unidades(
+    tmp_path, monkeypatch
+):
+    # Con checkpoints, el L3 adelantado ya guardo el suyo cuando evaluate lo busca.
+    _, eventos = _correr_con_l2_retenido(
+        tmp_path,
+        monkeypatch,
+        ("unit_finished", "L3", "core-b"),
+        checkpoints=UnitCheckpoints(tmp_path / "checkpoints", identity="prueba-v1"),
+    )
+    skus = ["core-b", "core-b", "core-sku", "core-sku"]  # dos familias por SKU
+    for etapa in ("L2", "L3"):
+        [plan] = [
+            e for e in eventos if (e["event"], e.get("stage")) == ("planned", etapa)
+        ]
+        assert sorted(u["sku_id"] for u in plan["units"]) == skus
+        for evento in ("unit_started", "unit_finished"):
+            unidades = [
+                e["sku_id"]
+                for e in eventos
+                if (e["event"], e.get("stage")) == (evento, etapa)
+            ]
+            assert sorted(unidades) == skus, (evento, etapa)
+    assert not any(e.get("reused") for e in eventos)
+    etapas = [
+        (e["event"], e["stage"])
+        for e in eventos
+        if e["event"] in ("stage_started", "stage_finished")
+        and e["stage"] in ("L2", "L3")
+    ]
+    assert etapas == [
+        ("stage_started", "L2"),
+        ("stage_finished", "L2"),
+        ("stage_started", "L3"),
+        ("stage_finished", "L3"),
+    ]
+
+
+def test_l3_de_sarima_usa_el_walk_forward_del_hpo_sin_volver_a_ajustar(
+    tmp_path, monkeypatch
+):
+    settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
+    pipeline = build_pipeline(
+        settings, families=("classical", "ml"), n_trials=2, seed=3
+    )
+    fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
+    [candidato] = _clasicos(fitting.candidates)
+    # Lo que calcula L3 hoy para la configuracion ganadora.
+    esperado = evaluar_walk_forward(
+        candidato.series,
+        pipeline.factories["classical"],
+        dict(candidato.selection.forecast_config or {}),
+        min_train=settings.min_train,
+        horizonte=settings.horizon,
+        paso=settings.step,
+        metrica_objetivo=settings.metric,
+        estacionalidad=settings.seasonality,
+        agregacion=settings.aggregation,
+        proporcion_recorte=settings.trim,
+        seed=candidato.selection.forecast_seed,
+        tolerar_fallos=False,
+        identificador=candidato.selection.sku_id,
+    )
+
+    original = pipeline_module.evaluar_walk_forward
+
+    def recalcular(*args, **kwargs):
+        if args[1] is pipeline.factories["classical"]:
+            raise AssertionError("L3 de SARIMA volvio a calcular el walk-forward")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", recalcular)
+    [evaluado] = [
+        c
+        for c in pipeline.evaluate(fitting).candidates
+        if c.fitted.selection.family == "classical"
+    ]
+
+    assert evaluado.walk_forward.valor_agregado == esperado.valor_agregado
+    for obtenida, calculada in zip(
+        evaluado.walk_forward.ventanas, esperado.ventanas, strict=True
+    ):
+        np.testing.assert_array_equal(obtenida.y_pred, calculada.y_pred)
+        assert dict(obtenida.metricas) == dict(calculada.metricas)
+
+
+_AJUSTES_CORE = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
+
+
+def _router_clasico_ml(clase=SelectionRouter, estrategia=ClassicalSelectionStrategy):
+    """SARIMA (un AR(1) sin estacionalidad, que siempre ajusta) y LightGBM."""
+    comun = {
+        "min_train": _AJUSTES_CORE.min_train,
+        "horizonte": _AJUSTES_CORE.horizon,
+        "paso": _AJUSTES_CORE.step,
+        "metrica_objetivo": _AJUSTES_CORE.metric,
+        "seed": 3,
+    }
+    registro = StrategyRegistry()
+    registro.register(
+        "classical",
+        estrategia(
+            **comun,
+            espacio=EspacioClasico(
+                p_max=1, d_max=0, q_max=0, P_max=0, D_max=0, Q_max=0
+            ),
+            presupuestos={
+                p: PresupuestoClasico(n_trials=2) for p in TOPOLOGICAL_PROFILES
+            },
+        ),
+    )
+    registro.register(
+        "ml",
+        MLSelectionStrategy(
+            **comun,
+            presupuestos={p: PresupuestoHPO(n_trials=1) for p in TOPOLOGICAL_PROFILES},
+        ),
+    )
+    return clase(ConfiguredTopologyPolicy(("classical", "ml")), registro)
+
+
+class _Constante:
+    def fit(self, y):
+        return self
+
+    def predict(self, horizon):
+        return np.full(horizon, 10.0)
+
+
+def _fabrica_constante(configuracion, *, seed):
+    return _Constante()
+
+
+def test_l3_evalua_la_fabrica_inyectada_y_no_el_walk_forward_del_hpo(tmp_path):
+    # El HPO evalua SARIMA; L3 debe medir la fabrica clasica que recibe Pipeline.
+    pipeline = Pipeline(
+        _router_clasico_ml(),
+        _AJUSTES_CORE,
+        factories={**model_factories(), "classical": _fabrica_constante},
+    )
+    resultado = pipeline.run(core_request_at(tmp_path))
+
+    [evaluado] = [
+        c
+        for c in resultado.evaluation.candidates
+        if c.fitted.selection.family == "classical"
+    ]
+    for ventana in evaluado.walk_forward.ventanas:
+        np.testing.assert_array_equal(ventana.y_pred, np.full(2, 10.0))
+
+
+@wraps(fabrica_sarima)
+def _sarima_envuelta(configuracion, *, seed):
+    return _Constante()
+
+
+def test_l3_mide_igual_una_fabrica_envuelta_al_correr_y_al_reanudar_l2(tmp_path):
+    # Una fabrica envuelta conserva el nombre de fabrica_sarima pero es otro modelo:
+    # L3 la mide a ella, con el L2 recien ajustado y con el L2 restaurado.
+    pipeline = Pipeline(
+        _router_clasico_ml(),
+        _AJUSTES_CORE,
+        factories={**model_factories(), "classical": _sarima_envuelta},
+        checkpoints=UnitCheckpoints(tmp_path / "checkpoints", identity="prueba-v1"),
+    )
+    ingestion = pipeline.ingest(core_request_at(tmp_path))
+
+    def l3_clasico(fitting):
+        return next(
+            c.walk_forward
+            for c in pipeline.evaluate(fitting).candidates
+            if c.fitted.selection.family == "classical"
+        )
+
+    recien = l3_clasico(pipeline.fit(ingestion))
+    for checkpoint in (tmp_path / "checkpoints" / "L3").glob("*.json"):
+        checkpoint.unlink()
+    restaurado_l2 = pipeline.fit(ingestion)
+    assert all(u.reused for u in restaurado_l2.units)
+    reanudado = l3_clasico(restaurado_l2)
+
+    for ventana in recien.ventanas:
+        np.testing.assert_array_equal(ventana.y_pred, np.full(2, 10.0))
+    assert recien.valor_agregado == reanudado.valor_agregado
+
+
+def test_un_router_que_redefine_execute_sigue_eligiendo_en_l2(tmp_path):
+    class RouterVigilado(SelectionRouter):
+        llamadas = 0
+
+        def execute(self, request, decision):
+            RouterVigilado.llamadas += 1
+            return super().execute(request, decision)
+
+    pipeline = Pipeline(
+        _router_clasico_ml(RouterVigilado),
+        _AJUSTES_CORE,
+        factories=model_factories(),
+    )
+    fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
+
+    assert RouterVigilado.llamadas == 2  # una por familia del SKU
+    assert all(c.walk_forward is None for c in fitting.candidates)
+
+
+def test_una_estrategia_que_redefine_select_sigue_eligiendo_en_l2(tmp_path):
+    class ClasicaVigilada(ClassicalSelectionStrategy):
+        llamadas = 0
+
+        def select(self, request, profile):
+            ClasicaVigilada.llamadas += 1
+            return super().select(request, profile)
+
+    pipeline = Pipeline(
+        _router_clasico_ml(estrategia=ClasicaVigilada),
+        _AJUSTES_CORE,
+        factories=model_factories(),
+    )
+    fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
+
+    assert ClasicaVigilada.llamadas == 1
+    assert all(c.walk_forward is None for c in fitting.candidates)
+
+
+def _walk_forwards_del_hpo() -> int:
+    """Walk-forwards del HPO vivos en este proceso (solo esos llevan ajustes)."""
+    gc.collect()
+    return sum(
+        isinstance(o, ResultadoWalkForward) and o.ajustes is not None
+        for o in gc.get_objects()
+    )
+
+
+def test_el_proceso_principal_suelta_el_walk_forward_del_hpo_apenas_sale_su_l3(
+    tmp_path, monkeypatch
+):
+    request = core_request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    second = source.assign(sku_id="core-b", demand_qty=source["demand_qty"] * 1.5)
+    pd.concat([source, second]).to_csv(request.csv_path, index=False)
+    senal = tmp_path / "soltar-l2"
+    monkeypatch.setenv("PRED_TEST_SENAL_L2", str(senal))
+    monkeypatch.setattr("pred_engine.pipeline._fit_unit", _l2_retenido)
+    progreso = tmp_path / "progreso.jsonl"
+    pipeline = Pipeline(
+        _router_clasico_ml(),
+        _AJUSTES_CORE,
+        factories=model_factories(),
+        workers=3,
+        progress=progreso,
+    )
+    with ThreadPoolExecutor(max_workers=1) as hilo:
+        corrida = hilo.submit(pipeline.run, request)
+        try:
+            limite = time.monotonic() + 60
+            while not _ocurrio(progreso, "unit_finished", "L3", "core-b"):
+                assert time.monotonic() < limite, "el L3 de core-b no termino"
+                time.sleep(0.05)
+            # core-sku sigue en L2; el L3 SARIMA de core-b ya volvio al padre.
+            [futuro, _] = pipeline._early_l3[("core-b", "classical")]
+            assert futuro.result(timeout=30).valor.ajustes is not None
+            assert not _ocurrio(progreso, "unit_finished", "L2", "core-sku")
+            vivos = _walk_forwards_del_hpo()
+        finally:
+            senal.touch()
+        corrida.result(timeout=120)
+    # Solo el resultado de L3; L2 ya no guarda su copia.
+    assert vivos == 1
 
 
 def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
@@ -901,6 +1299,95 @@ def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):
         assert again.selection == original.selection
         np.testing.assert_array_equal(again.forecast, original.forecast)
     assert {p: p.read_bytes() for p in hpo.rglob("*") if p.is_file()} == snapshot
+
+
+def test_un_hpo_reanudado_sin_walk_forward_calcula_l3_como_hoy(tmp_path, monkeypatch):
+    request = core_request_at(tmp_path)
+    settings = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
+
+    def run():
+        return build_pipeline(
+            settings,
+            families=("classical", "ml"),
+            n_trials=2,
+            seed=3,
+            hpo_root=tmp_path / "hpo",
+            session="s1",
+        ).run(request)
+
+    primera = run()  # L3 usa el walk-forward que calculo el HPO
+    calculos = []
+    original = pipeline_module.evaluar_walk_forward
+
+    def contar(*args, **kwargs):
+        if args[1] is model_factories()["classical"]:
+            calculos.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", contar)
+    segunda = run()  # el estudio se rearma desde su manifiesto, sin walk-forward
+
+    assert calculos == [1]
+    [antes, despues] = [
+        next(
+            c
+            for c in corrida.evaluation.candidates
+            if c.fitted.selection.family == "classical"
+        )
+        for corrida in (primera, segunda)
+    ]
+    assert despues.walk_forward.valor_agregado == antes.walk_forward.valor_agregado
+    for nueva, previa in zip(
+        despues.walk_forward.ventanas, antes.walk_forward.ventanas, strict=True
+    ):
+        np.testing.assert_array_equal(nueva.y_pred, previa.y_pred)
+        assert dict(nueva.metricas) == dict(previa.metricas)
+
+
+def test_l3_no_reutiliza_un_walk_forward_calculado_con_otros_ajustes(
+    tmp_path, monkeypatch
+):
+    # L3 agrega con la mediana; el HPO de SARIMA, con su media recortada.
+    settings = EvaluationSettings(
+        40, horizon=2, step=14, seasonality=7, metric="mae", aggregation="mediana"
+    )
+    pipeline = build_pipeline(
+        settings, families=("classical", "ml"), n_trials=2, seed=3
+    )
+    fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
+    [candidato] = _clasicos(fitting.candidates)
+    esperado = evaluar_walk_forward(
+        candidato.series,
+        pipeline.factories["classical"],
+        dict(candidato.selection.forecast_config or {}),
+        min_train=settings.min_train,
+        horizonte=settings.horizon,
+        paso=settings.step,
+        metrica_objetivo=settings.metric,
+        estacionalidad=settings.seasonality,
+        agregacion=settings.aggregation,
+        proporcion_recorte=settings.trim,
+        seed=candidato.selection.forecast_seed,
+        tolerar_fallos=False,
+        identificador=candidato.selection.sku_id,
+    )
+    calculos = []
+    original = pipeline_module.evaluar_walk_forward
+
+    def contar(*args, **kwargs):
+        if args[1] is pipeline.factories["classical"]:
+            calculos.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("pred_engine.pipeline.evaluar_walk_forward", contar)
+    [evaluado] = [
+        c
+        for c in pipeline.evaluate(fitting).candidates
+        if c.fitted.selection.family == "classical"
+    ]
+
+    assert calculos == [1]
+    assert evaluado.walk_forward.valor_agregado == esperado.valor_agregado
 
 
 def test_hpo_persistence_requires_root_and_session_together():
@@ -994,6 +1481,11 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     excluded = {e["sku_id"]: e["code"] for e in report["exclusions"]}
     assert skus and excluded and skus.isdisjoint(excluded)
     assert set(excluded.values()) == {ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS}
+    # Un SKU excluido no corre L3, tampoco el que sale apenas cierra su L2.
+    progress = [json.loads(line) for line in (run_dir / "progreso.jsonl").open()]
+    assert not [
+        e for e in progress if e.get("stage") == "L3" and e.get("sku_id") in excluded
+    ]
     assert len(candidates) == report["units"]["L2"]["completed"] - len(excluded)
     for candidate in handoff.candidatos:
         instanciar(candidate)
@@ -1013,7 +1505,13 @@ def test_cli_runs_m0_m1_m2_from_a_seed_and_persists_a_resumable_run(tmp_path, ca
     units = [json.loads(line) for line in (run_dir / "unidades.jsonl").open()]
     assert len(units) == report["units"]["L2"]["total"] + report["units"]["L3"]["total"]
     assert {u["model"] for u in units} <= {"sarima", "lightgbm"}
-    assert all(u["cpu_s"] > 0 for u in units if u["state"] == "completada")
+    # El L3 de SARIMA reusa el walk-forward del HPO: no vuelve a ajustar ni gasta CPU.
+    assert all(
+        u["cpu_s"] > 0
+        for u in units
+        if u["state"] == "completada"
+        and (u["stage"], u["family"]) != ("L3", "classical")
+    )
     assert set(run["stage_times"]) == {"L1", "L2", "L3", "L4"}
     assert run["stage_times"]["L2"]["seconds"] > 0
 

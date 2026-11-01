@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
 from pred_engine.comun.logger import get_logger
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
@@ -69,6 +70,25 @@ class SelectionRouter:
         self, request: SelectionRequest, decision: RoutingDecision
     ) -> SelectionResult:
         """Delegacion de una decision a la estrategia registrada de su familia."""
+        return self._execute(request, decision)[0]
+
+    def execute_with_walk_forward(
+        self, request: SelectionRequest, decision: RoutingDecision
+    ) -> tuple[SelectionResult, ResultadoWalkForward | None]:
+        """``execute`` y el walk-forward del ganador si la estrategia lo entrega.
+
+        Solo viaja aparte de la seleccion: ``SelectionResult`` se compara y se
+        serializa, y este resultado no debe hacer ninguna de las dos cosas.
+        Una subclase que redefine ``execute`` conserva su seleccion, sin
+        walk-forward.
+        """
+        if type(self).execute is not SelectionRouter.execute:
+            return self.execute(request, decision), None
+        return self._execute(request, decision)
+
+    def _execute(
+        self, request: SelectionRequest, decision: RoutingDecision
+    ) -> tuple[SelectionResult, ResultadoWalkForward | None]:
         if not isinstance(request, SelectionRequest):
             raise SelectionContractError("request debe ser SelectionRequest")
         estrategia = self._registry.resolve(decision.family)
@@ -80,8 +100,13 @@ class SelectionRouter:
             decision.profile,
             self._policy.version,
         )
-        crudo = estrategia.select(request, decision.profile)
-        return self._anotar(request, decision.family, decision.profile, crudo)
+        seleccionar = getattr(estrategia, "select_with_walk_forward", None)
+        if seleccionar is None:
+            crudo, walk_forward = estrategia.select(request, decision.profile), None
+        else:
+            crudo, walk_forward = seleccionar(request, decision.profile)
+        anotada = self._anotar(request, decision.family, decision.profile, crudo)
+        return anotada, walk_forward
 
     def _anotar(
         self,

@@ -115,11 +115,20 @@ def code_fingerprint() -> str:
     Forma parte de la identidad de la corrida: con otro codigo, los estudios
     HPO persistidos no se reutilizan aunque la entrada y las opciones coincidan.
     """
-    raiz = Path(__file__).resolve().parent
+    return huella_codigo(Path(__file__).resolve().parent)
+
+
+def huella_codigo(raiz: Path) -> str:
+    """Huella de los ``.py`` bajo ``raiz``, sin contar los finales de linea.
+
+    Un checkout en Windows con ``core.autocrlf`` reescribe CRLF/LF sin cambiar el
+    codigo; si contaran, cambiar de rama y volver dejaria toda corrida previa sin poder
+    reanudarse.
+    """
     digest = hashlib.sha256()
     for ruta in sorted(raiz.rglob("*.py")):
         digest.update(ruta.relative_to(raiz).as_posix().encode("utf-8"))
-        digest.update(ruta.read_bytes())
+        digest.update(ruta.read_bytes().replace(b"\r\n", b"\n"))
     return digest.hexdigest()[:16]
 
 

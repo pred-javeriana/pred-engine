@@ -29,6 +29,8 @@ Las versiones anteriores se conservan sin cambios. La versión vigente es 11.
 `aplicar_migraciones_m3` usa el mismo `PRAGMA user_version`. El CLI aplica las
 pendientes sobre una base existente con las migraciones previas de plataforma.
 No modifica las versiones 0001 a 0004 y rechaza una versión desconocida.
+También acepta, sin aplicarla, la versión 12: una migración solo de la
+plataforma (estado `finalizo_m2` de sus tareas) que no toca tablas de M3.
 El comentario histórico del esquema inicial menciona 0002; la numeración
 vigente y su motivo se documentan en ADR-021.
 
