@@ -24,6 +24,7 @@ from pred_engine.comun.walkforward.metricas import (
 from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
     Pronosticador,
+    identidad_fabrica,
 )
 from pred_engine.comun.walkforward.semillas import derivar_semilla
 from pred_engine.comun.walkforward.ventanas import generar_ventanas
@@ -44,6 +45,7 @@ __all__ = [
     "derivar_semilla",
     "evaluar_walk_forward",
     "generar_ventanas",
+    "identidad_fabrica",
     "iterar_walk_forward",
     "mae",
     "mase",

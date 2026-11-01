@@ -70,7 +70,7 @@ class SelectionRouter:
         self, request: SelectionRequest, decision: RoutingDecision
     ) -> SelectionResult:
         """Delegacion de una decision a la estrategia registrada de su familia."""
-        return self.execute_with_walk_forward(request, decision)[0]
+        return self._execute(request, decision)[0]
 
     def execute_with_walk_forward(
         self, request: SelectionRequest, decision: RoutingDecision
@@ -79,7 +79,16 @@ class SelectionRouter:
 
         Solo viaja aparte de la seleccion: ``SelectionResult`` se compara y se
         serializa, y este resultado no debe hacer ninguna de las dos cosas.
+        Una subclase que redefine ``execute`` conserva su seleccion, sin
+        walk-forward.
         """
+        if type(self).execute is not SelectionRouter.execute:
+            return self.execute(request, decision), None
+        return self._execute(request, decision)
+
+    def _execute(
+        self, request: SelectionRequest, decision: RoutingDecision
+    ) -> tuple[SelectionResult, ResultadoWalkForward | None]:
         if not isinstance(request, SelectionRequest):
             raise SelectionContractError("request debe ser SelectionRequest")
         estrategia = self._registry.resolve(decision.family)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import math
 import os
@@ -17,11 +18,19 @@ import pytest
 
 from pred_engine import pipeline as pipeline_module
 from pred_engine.cli import diagnose_pipeline, main
+from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
 from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
 from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.comun.walkforward import evaluar_walk_forward
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
+from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
+    EspacioClasico,
+)
+from pred_engine.optimizacion.optimizadores.modelos_clasicos.estrategia import (
+    ClassicalSelectionStrategy,
+    PresupuestoClasico,
+)
 from pred_engine.optimizacion.optimizadores.modelos_deep_learning.espacio_dl import (
     EspacioDL,
 )
@@ -1070,6 +1079,155 @@ def test_l3_de_sarima_usa_el_walk_forward_del_hpo_sin_volver_a_ajustar(
     ):
         np.testing.assert_array_equal(obtenida.y_pred, calculada.y_pred)
         assert dict(obtenida.metricas) == dict(calculada.metricas)
+
+
+_AJUSTES_CORE = EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae")
+
+
+def _router_clasico_ml(clase=SelectionRouter, estrategia=ClassicalSelectionStrategy):
+    """SARIMA (un AR(1) sin estacionalidad, que siempre ajusta) y LightGBM."""
+    comun = {
+        "min_train": _AJUSTES_CORE.min_train,
+        "horizonte": _AJUSTES_CORE.horizon,
+        "paso": _AJUSTES_CORE.step,
+        "metrica_objetivo": _AJUSTES_CORE.metric,
+        "seed": 3,
+    }
+    registro = StrategyRegistry()
+    registro.register(
+        "classical",
+        estrategia(
+            **comun,
+            espacio=EspacioClasico(
+                p_max=1, d_max=0, q_max=0, P_max=0, D_max=0, Q_max=0
+            ),
+            presupuestos={
+                p: PresupuestoClasico(n_trials=2) for p in TOPOLOGICAL_PROFILES
+            },
+        ),
+    )
+    registro.register(
+        "ml",
+        MLSelectionStrategy(
+            **comun,
+            presupuestos={p: PresupuestoHPO(n_trials=1) for p in TOPOLOGICAL_PROFILES},
+        ),
+    )
+    return clase(ConfiguredTopologyPolicy(("classical", "ml")), registro)
+
+
+class _Constante:
+    def fit(self, y):
+        return self
+
+    def predict(self, horizon):
+        return np.full(horizon, 10.0)
+
+
+def _fabrica_constante(configuracion, *, seed):
+    return _Constante()
+
+
+def test_l3_evalua_la_fabrica_inyectada_y_no_el_walk_forward_del_hpo(tmp_path):
+    # El HPO evalua SARIMA; L3 debe medir la fabrica clasica que recibe Pipeline.
+    pipeline = Pipeline(
+        _router_clasico_ml(),
+        _AJUSTES_CORE,
+        factories={**model_factories(), "classical": _fabrica_constante},
+    )
+    resultado = pipeline.run(core_request_at(tmp_path))
+
+    [evaluado] = [
+        c
+        for c in resultado.evaluation.candidates
+        if c.fitted.selection.family == "classical"
+    ]
+    for ventana in evaluado.walk_forward.ventanas:
+        np.testing.assert_array_equal(ventana.y_pred, np.full(2, 10.0))
+
+
+def test_un_router_que_redefine_execute_sigue_eligiendo_en_l2(tmp_path):
+    class RouterVigilado(SelectionRouter):
+        llamadas = 0
+
+        def execute(self, request, decision):
+            RouterVigilado.llamadas += 1
+            return super().execute(request, decision)
+
+    pipeline = Pipeline(
+        _router_clasico_ml(RouterVigilado),
+        _AJUSTES_CORE,
+        factories=model_factories(),
+    )
+    fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
+
+    assert RouterVigilado.llamadas == 2  # una por familia del SKU
+    assert all(c.walk_forward is None for c in fitting.candidates)
+
+
+def test_una_estrategia_que_redefine_select_sigue_eligiendo_en_l2(tmp_path):
+    class ClasicaVigilada(ClassicalSelectionStrategy):
+        llamadas = 0
+
+        def select(self, request, profile):
+            ClasicaVigilada.llamadas += 1
+            return super().select(request, profile)
+
+    pipeline = Pipeline(
+        _router_clasico_ml(estrategia=ClasicaVigilada),
+        _AJUSTES_CORE,
+        factories=model_factories(),
+    )
+    fitting = pipeline.fit(pipeline.ingest(core_request_at(tmp_path)))
+
+    assert ClasicaVigilada.llamadas == 1
+    assert all(c.walk_forward is None for c in fitting.candidates)
+
+
+def _walk_forwards_del_hpo() -> int:
+    """Walk-forwards del HPO vivos en este proceso (solo esos llevan ajustes)."""
+    gc.collect()
+    return sum(
+        isinstance(o, ResultadoWalkForward) and o.ajustes is not None
+        for o in gc.get_objects()
+    )
+
+
+def test_el_proceso_principal_suelta_el_walk_forward_del_hpo_apenas_sale_su_l3(
+    tmp_path, monkeypatch
+):
+    request = core_request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    second = source.assign(sku_id="core-b", demand_qty=source["demand_qty"] * 1.5)
+    pd.concat([source, second]).to_csv(request.csv_path, index=False)
+    senal = tmp_path / "soltar-l2"
+    monkeypatch.setenv("PRED_TEST_SENAL_L2", str(senal))
+    monkeypatch.setattr("pred_engine.pipeline._fit_unit", _l2_retenido)
+    progreso = tmp_path / "progreso.jsonl"
+    pipeline = Pipeline(
+        _router_clasico_ml(),
+        _AJUSTES_CORE,
+        factories=model_factories(),
+        workers=3,
+        progress=progreso,
+    )
+    with ThreadPoolExecutor(max_workers=1) as hilo:
+        corrida = hilo.submit(pipeline.run, request)
+        try:
+            limite = time.monotonic() + 60
+            while not _ocurrio(progreso, "unit_finished", "L3", "core-b"):
+                assert time.monotonic() < limite, "el L3 de core-b no termino"
+                time.sleep(0.05)
+            # core-sku sigue en L2; el L3 SARIMA de core-b ya volvio al padre.
+            [futuro, _] = pipeline._early_l3[("core-b", "classical")]
+            assert futuro.result(timeout=30).valor.ajustes is not None
+            assert not _ocurrio(progreso, "unit_finished", "L2", "core-sku")
+            vivos = _walk_forwards_del_hpo()
+        finally:
+            senal.touch()
+        corrida.result(timeout=120)
+    # Solo el resultado de L3; L2 ya no guarda su copia.
+    assert vivos == 1
 
 
 def test_hpo_studies_resume_from_their_manifests_without_retraining(tmp_path):

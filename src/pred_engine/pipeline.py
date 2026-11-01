@@ -49,7 +49,7 @@ from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
 from pred_engine.comun.reserva import ReserveCut
-from pred_engine.comun.walkforward import evaluar_walk_forward
+from pred_engine.comun.walkforward import evaluar_walk_forward, identidad_fabrica
 from pred_engine.comun.walkforward.protocolos import (
     FabricaPronosticador,
 )
@@ -690,11 +690,12 @@ class Pipeline:
         persist: Callable[[T, ResultadoUnidad[R]], None],
         *,
         submitted: Mapping[int, tuple[Future[ResultadoUnidad[R]], float]] | None = None,
-        on_result: Callable[[int, ResultadoUnidad[R]], None] | None = None,
+        on_result: Callable[[int, ResultadoUnidad[R]], ResultadoUnidad[R]]
+        | None = None,
     ) -> list[ResultadoUnidad[R]]:
         """``submitted``: unidades ya enviadas al pool, por indice. Con el pool,
         ``on_result`` recibe el indice y el resultado (restaurado o nuevo) de
-        cada unidad apenas existe."""
+        cada unidad apenas existe, y devuelve el resultado que la etapa guarda."""
         submitted = submitted or {}
         # Una unidad ya enviada guarda su checkpoint al terminar: no es restaurada.
         restored = [
@@ -747,18 +748,22 @@ class Pipeline:
             if on_result is not None:
                 for i, result in enumerate(restored):
                     if result is not None:
-                        on_result(i, result)
+                        restored[i] = on_result(i, result)
             # Cada resultado se atiende al terminar, no en el orden de las tareas.
             done_by_index: dict[int, ResultadoUnidad[R]] = {}
             waiting = {future: i for i, (future, _) in sent.items()}
+
+            def collect(future: Future[ResultadoUnidad[R]]) -> None:
+                # El futuro atendido se suelta: solo queda lo que on_result guarda.
+                i = waiting.pop(future)
+                _, sent_at = sent.pop(i)
+                result = resultado_de(future, labels[i], self.progress, sent_at)
+                done_by_index[i] = result if on_result is None else on_result(i, result)
+
             while waiting:
-                done, _ = wait(waiting, return_when=FIRST_COMPLETED)
-                for future in done:
-                    i = waiting.pop(future)
-                    result = resultado_de(future, labels[i], self.progress, sent[i][1])
-                    done_by_index[i] = result
-                    if on_result is not None:
-                        on_result(i, result)
+                done = wait(waiting, return_when=FIRST_COMPLETED).done
+                while done:
+                    collect(done.pop())
             fresh = [done_by_index[i] for i in pending]
         for index, result in zip(pending, fresh, strict=True):
             restored[index] = result
@@ -796,8 +801,10 @@ class Pipeline:
             "metrica_objetivo": cfg.metric,
             "agregacion": cfg.aggregation,
             "proporcion_recorte": cfg.trim,
+            "fabrica": identidad_fabrica(factory),
         }
-        # El walk-forward del HPO solo vale si se calculo con los ajustes de L3.
+        # El walk-forward del HPO solo vale si se calculo con los ajustes y la
+        # fabrica de L3.
         walk_forward = candidate.walk_forward
         if walk_forward is not None and walk_forward.ajustes != ajustes_l3:
             walk_forward = None
@@ -824,21 +831,27 @@ class Pipeline:
 
     def _early_l3_by_sku(
         self, tasks: Sequence[_FitTask]
-    ) -> Callable[[int, ResultadoUnidad[FittedCandidate]], None]:
+    ) -> Callable[
+        [int, ResultadoUnidad[FittedCandidate]], ResultadoUnidad[FittedCandidate]
+    ]:
         """Envia el L3 de los candidatos de un SKU apenas cierra todo su L2.
 
         Espera las demas familias del SKU para aplicar antes la regla de dos
-        familias: un SKU que sale de la competencia no corre L3.
+        familias: un SKU que sale de la competencia no corre L3. El walk-forward
+        del HPO queda solo aqui hasta que sale con su L3; L2 guarda el resultado
+        sin el, asi el proceso principal no conserva otra copia de sus ventanas.
         """
         expected = Counter(task.request.sku_id for task in tasks)
         finished: dict[str, list[tuple[int, ResultadoUnidad[FittedCandidate]]]] = {}
 
-        def on_result(index: int, result: ResultadoUnidad[FittedCandidate]) -> None:
+        def on_result(
+            index: int, result: ResultadoUnidad[FittedCandidate]
+        ) -> ResultadoUnidad[FittedCandidate]:
             sku_id = tasks[index].request.sku_id
             done = finished.setdefault(sku_id, [])
             done.append((index, result))
             if len(done) < expected[sku_id]:
-                return
+                return _without_walk_forward(result)
             del finished[sku_id]
             units = _units(
                 "L2",
@@ -850,6 +863,7 @@ class Pipeline:
             )
             for candidate in candidates:
                 self._submit_early_l3(candidate)
+            return _without_walk_forward(result)
 
         return on_result
 
@@ -1056,10 +1070,6 @@ class Pipeline:
             _persist_fit,
             on_result=self._early_l3_by_sku(tasks),
         )
-        if self._pool is not None:
-            # Cada L3 ya salio con el walk-forward del HPO: el proceso principal
-            # no guarda otra copia de sus ventanas hasta M3.
-            results = [_without_walk_forward(r) for r in results]
         units = _units(
             "L2",
             [(task.request.sku_id, task.decision.family) for task in tasks],
