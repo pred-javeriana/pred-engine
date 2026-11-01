@@ -106,8 +106,8 @@ terminan todas sus unidades L2 y la regla de dos familias lo conserva, así que
 ocupan los procesos que dejan libres las últimas unidades L2. Por eso sus
 eventos en `progreso.jsonl` pueden llegar antes del `stage_started` y del
 `planned` de L3. El L3 de SARIMA reutiliza el walk-forward que su HPO ya
-calculó para la configuración ganadora, si el HPO usó los mismos ajustes y la
-misma fábrica de modelos que L3; si no, lo calcula de nuevo. Un fallo o una interrupción cancela las
+calculó para la configuración ganadora, si el HPO usó los mismos ajustes que
+L3 y L3 usa la misma fábrica nativa de SARIMA; si no, lo calcula de nuevo. Un fallo o una interrupción cancela las
 unidades que no empezaron.
 
 En L4 (evaluación de M3), cada SKU es una unidad del mismo tipo de pool: un
