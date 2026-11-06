@@ -497,9 +497,14 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
                 f"se esperaban {task.horizon} valores"
             )
     except Exception as exc:
-        raise type(exc)(
-            f"{exc}; configuracion={dict(selection.forecast_config)}"
-        ) from exc
+        try:
+            con_configuracion = type(exc)(
+                f"{exc}; configuracion={dict(selection.forecast_config)}"
+            )
+        except Exception:
+            # La clase exige otros argumentos: se conserva el error real.
+            raise exc from None
+        raise con_configuracion from exc
     # Regla #3 (ADR-020): el pronostico que recibe M3 cumple la misma regla que
     # cada ventana del HPO; uno degenerado hace fallar la unidad, no se entrega.
     degenerado, motivo = es_degenerada(forecast, y_train=y)

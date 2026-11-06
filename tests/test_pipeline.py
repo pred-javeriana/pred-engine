@@ -217,6 +217,27 @@ def test_degenerate_final_forecast_fails_its_unit_under_rule_3(tmp_path):
     assert "configuracion={'p': 1, 'd': 0, 'q': 0" in str(raised.value)
 
 
+class _ErrorConDosArgumentos(Exception):
+    def __init__(self, codigo, detalle):
+        super().__init__(f"{codigo}: {detalle}")
+
+
+class _FalloConErrorDeConstructorExigente:
+    def fit(self, y):
+        raise _ErrorConDosArgumentos("E1", "ajuste roto")
+
+
+def test_final_fit_error_with_required_args_keeps_the_real_error(tmp_path):
+    pipeline = verification_pipeline()
+    pipeline.factories["classical"] = lambda config, *, seed: (
+        _FalloConErrorDeConstructorExigente()
+    )
+    with pytest.raises(PipelineExecutionError, match="E1: ajuste roto") as raised:
+        pipeline.run(request_at(tmp_path))
+    assert raised.value.stage == "L2"
+    assert "TypeError" not in str(raised.value)
+
+
 def test_l2_rejects_missing_daily_observation(tmp_path):
     pipeline = verification_pipeline()
     ingestion = pipeline.ingest(request_at(tmp_path))
