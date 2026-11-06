@@ -95,11 +95,14 @@ validacion, metrica, reglas, semilla y persistencia. Su `payload` contiene
 `hiperparametros`, `metrica_objetivo`, `valor`, `n_ventanas`, `n_trials`,
 `n_completados`, `n_podados`, `n_fallidos`, `seed` y `estudio_hpo`, la
 referencia al estudio persistido (o `None` sin persistencia); los
-estados y motivos por trial quedan en ese estudio. El payload solo lleva datos
+estados y motivos completos por trial quedan en ese estudio y en
+`seleccion.jsonl` al terminar L2. `n_trials` cuenta todos los ensayos registrados,
+incluidos los sorteos invalidos. El payload solo lleva datos
 serializables a JSON. El SKU, clase y perfil quedan en `SelectionResult`.
 Una busqueda sin ganador completo genera `SelectionContractError`, no un
-resultado vacio. La funcion de bajo nivel conserva el estudio sin ganador para
-permitir inspeccionar los fallos.
+resultado vacio. El error conserva totales fallidos/podados, conteos por causa y
+el primer motivo de cada causa. La funcion de bajo nivel conserva el estudio sin
+ganador para permitir inspeccionar todos los fallos.
 
 RMSE es el default, como en los selectores clasico y ML: M3 elige la familia
 campeona con la razon de RMSE frente a Seasonal Naive (ADR-03-007), asi que el
@@ -122,7 +125,11 @@ asignador de recursos; no se podan epocas dentro de un ajuste.
 
 Los errores de entrenamiento quedan bajo el manejo de fallos del Walk-Forward
 compartido. El estudio conserva `completado`, `podado` y `fallido` por separado;
-no se convierten excepciones de entrenamiento en prunes artificiales.
+no se convierten excepciones de entrenamiento en prunes artificiales. La cota de
+costo registra `configuracion_invalida:_CostoAcotado(maximo=100000)` con la cota
+configurada, sin consumir `n_trials` evaluados. El motor aborta al superar
+`20 * n_trials` sorteos invalidos consecutivos; un trial evaluado reinicia el
+contador.
 
 ### Reanudacion
 

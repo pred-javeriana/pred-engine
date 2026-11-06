@@ -799,6 +799,30 @@ class _RouterFailingForOneSku:
         return self.router.execute(request, decision)
 
 
+@pytest.mark.parametrize("phase", ["fit", "predict"])
+def test_final_fit_failure_names_configuration_and_exception(tmp_path, phase):
+    class BrokenModel:
+        def fit(self, y):
+            if phase == "fit":
+                raise RuntimeError("ajuste final interrumpido")
+            return self
+
+        def predict(self, horizon):
+            raise RuntimeError("prediccion final interrumpida")
+
+    pipeline = verification_pipeline()
+    pipeline.factories = {
+        family: lambda config, *, seed: BrokenModel() for family in ("classical", "ml")
+    }
+    with pytest.raises(PipelineExecutionError) as raised:
+        pipeline.run(request_at(tmp_path))
+    assert raised.value.stage == "L2"
+    message = str(raised.value)
+    assert "RuntimeError:" in message
+    assert "configuracion=" in message
+    assert "'lags': 3" in message  # configuracion ML elegida, no el espacio
+
+
 @pytest.mark.parametrize("with_healthy", [False, True])
 def test_unrouted_lumpy_is_excluded_without_losing_other_skus(tmp_path, with_healthy):
     request = core_request_at(tmp_path)

@@ -160,7 +160,15 @@ unidades.
 ## Fallas y reanudación
 
 - Una unidad que falla (por ejemplo, un estudio sin trials completos) queda en
-  `unidades.jsonl` y en `failures`; el resto de la etapa sigue.
+  `unidades.jsonl` y en `summary.failures` de `corrida.json` cuando L2 entrega su
+  artefacto; el resto de la etapa sigue. El CLI usa el validador nativo, por lo
+  que L2 conserva las unidades aunque todas fallen y M3 decide si puede continuar.
+  En biblioteca sin validador nativo, si L2 no entrega candidatos, falla antes de
+  entregar el artefacto: `unidades.jsonl` queda vacío y no hay `summary.failures`.
+  El mensaje de etapa conserva como máximo las cinco primeras causas. Los
+  ensayos completos siguen en `hpo/`; `seleccion.jsonl` requiere que termine L2.
+- Un fallo en el ajuste final o su predicción conserva la clase de excepción y
+  agrega `configuracion=...` con la configuración elegida, no el espacio de búsqueda.
 - Repetir el mismo comando retoma la corrida: los estudios HPO terminados se
   reconstruyen desde su manifiesto sin reentrenar, los interrumpidos continúan
   desde su último checkpoint y solo los que faltan arrancan de cero. L3 y el
@@ -169,7 +177,8 @@ unidades.
   reintento cambia qué SKU excluye la regla de dos familias, M3 conserva las
   exclusiones de la procedencia durable de su protocolo.
 - Un estudio en estado `fallida` no se reabre (2.9); su unidad vuelve a fallar
-  con ese motivo.
+  con `CorridaFallidaError`, que indica ese estado, pero no repite el motivo
+  original. Los motivos originales quedan en `hpo/<estudio>/backend.jsonl`.
 - Una evaluación M3 PUBLICADA es inmutable. Repetir el mismo comando después
   de reparar una falla reutiliza esa publicación con sus FALLO_TECNICO y sale
   con código 8 aunque ningún ajuste falle ahora. Para obtener resultados

@@ -5,7 +5,7 @@ Compartidos por las tres familias (clasicos/ML/DL)
 
 from __future__ import annotations
 
-from collections import Counter
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -16,6 +16,22 @@ from pred_engine.comun.dataclasses.validacion_temporal import (
 )
 
 EstadoTrial = Literal["pendiente", "corriendo", "completado", "podado", "fallido"]
+
+
+def causa_trial(motivo: str | None) -> str:
+    """Categoria comun para contar descartes y elegir su primer motivo."""
+    if not motivo:
+        return "sin_motivo_registrado"
+    # Los registros previos anteponen ventana/valor a la causa del descarte.
+    prefijo = re.search(
+        r"\b(configuracion_invalida|ajuste_fallido|poda_semantica|escalon)\b",
+        motivo,
+    )
+    if prefijo is not None:
+        return prefijo.group(1)
+    if "asha" in motivo:
+        return "escalon"
+    return motivo.split(":", 1)[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,10 +65,15 @@ class ResultadoEstudio:
 
     @property
     def resumen_causas(self) -> str:
-        """Conteos y motivos originales para explicar un estudio sin ganador."""
-        motivos = Counter(
-            t.motivo or "sin_motivo_registrado"
-            for t in self.trials
-            if t.estado in ("fallido", "podado")
+        """Totales, conteos por causa y su primer motivo, sin volcar cada trial."""
+        motivos: dict[str, str] = {}
+        for trial in self.trials:
+            if trial.estado in ("fallido", "podado"):
+                motivos.setdefault(
+                    causa_trial(trial.motivo),
+                    trial.motivo or "sin_motivo_registrado",
+                )
+        return (
+            f"{self.n_fallidos} fallidos, {self.n_podados} podados; "
+            f"causas={dict(self.causas)}; motivos={motivos}"
         )
-        return f"causas={dict(self.causas)}; motivos={dict(motivos)}"

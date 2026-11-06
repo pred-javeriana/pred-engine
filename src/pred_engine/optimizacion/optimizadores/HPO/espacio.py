@@ -176,7 +176,11 @@ class EspacioBusqueda:
         """Nombre de la primera restriccion que descarta la configuracion."""
         for restriccion in self.restricciones:
             if not restriccion(configuracion):
-                return _etiqueta_restriccion(restriccion)
+                return (
+                    _etiqueta_restriccion(restriccion)
+                    if hasattr(restriccion, "__code__")
+                    else repr(restriccion)
+                )
         return None
 
     def es_valida(self, configuracion: Mapping[str, Any]) -> bool:

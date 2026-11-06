@@ -71,6 +71,14 @@ exigido (proxy: ventanas Walk-Forward evaluadas, igual que en 2.4). En
 de 4 series por separado. Son series sinteticas; falta validar con datos
 reales.
 
+El `payload` de `MLSelectionStrategy` contiene `hiperparametros`,
+`metrica_objetivo`, `valor`, `n_ventanas`, `n_trials`, `n_completados`, `n_podados`,
+`n_fallidos`, `seed` y `estudio_hpo` (o `None` sin persistencia). `n_trials` cuenta
+los ensayos registrados, incluidos los sorteos invalidos. Los motivos completos
+quedan en el estudio persistido y en `seleccion.jsonl` al terminar L2, no en el
+payload. Un error sin ganador conserva los totales fallidos/podados, los conteos
+por causa y solo el primer motivo de cada causa.
+
 ## Limitaciones conocidas
 
 - **Sin calendario real:** el Walk-Forward entrega `y` 1D sin timestamps; la
@@ -78,8 +86,10 @@ reales.
 - **Panel paralelo (`n_procesos > 1`) usa `spawn`:** el script que lo llame
   debe llevar `if __name__ == "__main__":` en todos los sistemas operativos
   (con `fork` LightGBM se cuelga; ver ADR-014).
-- **La restriccion de costo consume presupuesto:** una configuracion que la
-  viola se marca `fallido` (`configuracion_invalida`).
+- **La restriccion de costo no consume `n_trials`:** un sorteo que la viola
+  se registra como `fallido` con motivo `configuracion_invalida:<restriccion>`.
+  El motor vuelve a sortear; aborta al superar `20 * n_trials` sorteos invalidos
+  consecutivos. Cada trial evaluado reinicia ese contador.
 - **`seleccionar_por_panel_ml` rechaza `run_id`** (colisionaria entre SKUs);
   para persistencia por SKU usar `MLSelectionStrategy(raiz_corrida=...,
   sesion=...)`, que deriva `ml-{sku_id}-{sesion}`.

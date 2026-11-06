@@ -488,13 +488,18 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
     if selection.forecast_config is None:
         raise ValueError(f"{selection.family} must provide forecast_config for L2")
     y = np.array([obs.demand_qty for obs in task.request.series], dtype=float)
-    model = task.factory(selection.forecast_config, seed=selection.forecast_seed)
-    forecast = np.asarray(model.fit(y.copy()).predict(task.horizon), dtype=float)
-    if forecast.shape != (task.horizon,):
-        raise ValueError(
-            f"pronostico invalido para {selection.sku_id}/{selection.family}: "
-            f"se esperaban {task.horizon} valores"
-        )
+    try:
+        model = task.factory(selection.forecast_config, seed=selection.forecast_seed)
+        forecast = np.asarray(model.fit(y.copy()).predict(task.horizon), dtype=float)
+        if forecast.shape != (task.horizon,):
+            raise ValueError(
+                f"pronostico invalido para {selection.sku_id}/{selection.family}: "
+                f"se esperaban {task.horizon} valores"
+            )
+    except Exception as exc:
+        raise type(exc)(
+            f"{exc}; configuracion={dict(selection.forecast_config)}"
+        ) from exc
     # Regla #3 (ADR-020): el pronostico que recibe M3 cumple la misma regla que
     # cada ventana del HPO; uno degenerado hace fallar la unidad, no se entrega.
     degenerado, motivo = es_degenerada(forecast, y_train=y)

@@ -19,6 +19,9 @@ from pred_engine.optimizacion.optimizadores.HPO.estudio import ejecutar_estudio
 from pred_engine.optimizacion.optimizadores.HPO.registro import (
     instantanea_desde_estudio,
 )
+from pred_engine.optimizacion.optimizadores.modelos_deep_learning.espacio_dl import (
+    construir_espacio_dl,
+)
 from pred_engine.optimizacion.router import SelectionContractError, SelectionRequest
 
 
@@ -44,9 +47,9 @@ def test_solo_sorteos_invalidos_explica_la_restriccion_y_persiste(tmp_path):
     assert "limite_nivel" in str(error.value)
     ensayos = leer_ensayos(tmp_path / "invalido")
     assert len(ensayos) == 21
-    assert {t.motivo for t in ensayos} == {
-        "configuracion_invalida:HPO.test_causas.limite_nivel"
-    }
+    for trial in ensayos:
+        assert trial.motivo.startswith("configuracion_invalida:")
+        assert trial.motivo.endswith(".limite_nivel")
 
 
 def test_fallo_de_ajuste_conserva_contador_y_causa():
@@ -60,7 +63,9 @@ def test_fallo_de_ajuste_conserva_contador_y_causa():
     assert resultado.causas == {"ajuste_fallido": 2}
     assert resultado.n_fallidos == 2
     assert resultado.n_podados == 0
-    assert "ajuste_fallido" in resultado.resumen_causas
+    assert "2 fallidos, 0 podados; causas={'ajuste_fallido': 2}" in (
+        resultado.resumen_causas
+    )
     assert "RuntimeError" in resultado.resumen_causas
 
 
@@ -116,8 +121,8 @@ def test_causas_agrupa_prefijos_sin_perder_motivos():
         "configuracion_invalida:limite_nivel",
         "ventana=1 ajuste_fallido: RuntimeError: sin convergencia",
         "ventana=2 valor=1 poda_semantica:prediccion_nula",
-        "escalon=4 valor=3 umbral=1",
-        "escalon=12 valor=4 umbral=2",
+        "escalon=4 valor=3 umbral_top_1=1",
+        "escalon=12 valor=4 umbral_top_1=2",
     ]
     resultado = instantanea_desde_estudio(
         [
@@ -144,3 +149,17 @@ def test_causas_agrupa_prefijos_sin_perder_motivos():
     assert resultado.n_podados == 3
     assert "sin convergencia" in resultado.resumen_causas
     assert "prediccion_nula" in resultado.resumen_causas
+    assert "escalon=4 valor=3 umbral_top_1=1" in resultado.resumen_causas
+    assert "escalon=12" not in resultado.resumen_causas
+    assert [t.motivo for t in resultado.trials] == motivos
+
+
+def test_restriccion_dl_identifica_cota_sin_cambiar_huella():
+    espacio = construir_espacio_dl()
+    assert (
+        espacio.restriccion_violada(
+            {"lags": 14, "capas": 3, "unidades": 32, "epochs": 50}
+        )
+        == "_CostoAcotado(maximo=100000)"
+    )
+    assert espacio.descripcion_canonica()["restricciones"] == ["anon:24f248195e851562"]
