@@ -66,11 +66,17 @@ def test_estudio_encuentra_el_optimo_conocido():
     ("n_observaciones", "estado_segundo", "ventanas_segundo", "completados", "podados"),
     [(24, "completado", 4, 2, 0), (28, "podado", 4, 1, 1)],
 )
+@pytest.mark.parametrize(
+    "usar_tpe",
+    [False, True],
+    ids=["random", "tpe_defecto"],
+)
 def test_asha_solo_poda_si_quedan_ventanas_por_evaluar(
-    n_observaciones, estado_segundo, ventanas_segundo, completados, podados
+    n_observaciones, estado_segundo, ventanas_segundo, completados, podados, usar_tpe
 ):
     # La semilla produce primero un nivel cercano a 50 y luego uno peor.
     # Con cuatro ventanas, ASHA solo podria descartar tras evaluar todas.
+    muestreador = None if usar_tpe else optuna.samplers.RandomSampler(seed=0)
     resultado = ejecutar_estudio(
         np.full(n_observaciones, 50.0),
         _espacio(),
@@ -79,7 +85,7 @@ def test_asha_solo_poda_si_quedan_ventanas_por_evaluar(
         min_train=20,
         metrica_objetivo="mae",
         estacionalidad=1,
-        muestreador=optuna.samplers.RandomSampler(seed=0),
+        muestreador=muestreador,
         reglas=ReglasPoda(min_ventanas=4),
     )
 

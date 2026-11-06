@@ -49,6 +49,12 @@ Se adopta la implementacion existente como version definitiva del Modulo
    percentil_75_de_todas_las_configs`"): comparar solo contra el mismo
    escalon es la semantica estandar de ASHA (Li et al. 2018) y evita
    penalizar a un trial joven contra uno que ya evaluo mas ventanas.
+   Ademas, aunque `DecisorASHA` calcula los escalones incluyendo
+   `n_ventanas_totales`, la regla de no podar por ASHA en la ultima ventana
+   vive en el orquestador (`estudio.py`): un trial que completa todas las
+   ventanas sin descarte semantico se registra con `estado_motor="completado"`
+   (y `motivo=None`), reteniendo `PRUNED` unicamente en el backend de Optuna
+   para no distorsionar el muestreo TPE.
 4. **Ejecucion secuencial de un proceso**, no multi-worker: se documenta
    como alcance explicito de esta version (ver Alternatives Considered),
    no como una brecha a cerrar. El registro de "quien evalua que" es

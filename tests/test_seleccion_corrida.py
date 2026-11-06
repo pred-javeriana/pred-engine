@@ -703,6 +703,31 @@ def test_una_corrida_real_deja_una_seleccion_coherente_con_sus_archivos(tmp_path
                     + (evidencia["n_fallidos"])
                     == evidencia["n_trials"]
                 )
+                assert all(
+                    t["motivo"] is None
+                    for t in entrada["trials"]
+                    if t["estado"] == "completado"
+                )
+                assert all(
+                    t["motivo"]
+                    for t in entrada["trials"]
+                    if t["estado"] != "completado"
+                )
+                assert evidencia["n_completados"] == sum(
+                    1 for t in entrada["trials"] if t["estado"] == "completado"
+                )
+                assert evidencia["n_podados"] == sum(
+                    1 for t in entrada["trials"] if t["estado"] == "podado"
+                )
+                assert evidencia["n_fallidos"] == sum(
+                    1 for t in entrada["trials"] if t["estado"] == "fallido"
+                )
+                assert all(
+                    t["estado"] == "completado"
+                    for t in entrada["trials"]
+                    if t["n_ventanas"] == fila["n_ventanas"]
+                    and not (t.get("motivo") or "").startswith("poda_semantica:")
+                )
             elif estado == "fallida":
                 assert (
                     entrada["error"]["stage"] in {"L2", "L3"}
