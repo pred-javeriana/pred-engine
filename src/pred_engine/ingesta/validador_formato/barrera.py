@@ -66,6 +66,20 @@ def _parse_timestamp(crudo: object, fila: int) -> datetime:
             column="timestamp",
             raw_value=crudo,
         )
+    if ts.tzinfo is not None:
+        _fallar(
+            "timestamp con zona horaria no admitida",
+            row_index=fila,
+            column="timestamp",
+            raw_value=crudo,
+        )
+    if ts < pd.Timestamp.min or ts > pd.Timestamp.max:
+        _fallar(
+            "timestamp fuera del rango admitido",
+            row_index=fila,
+            column="timestamp",
+            raw_value=crudo,
+        )
     python_dt = pd.Timestamp(ts).to_pydatetime()
     return python_dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -117,6 +131,13 @@ def _parse_lead(crudo: object, fila: int) -> int:
             column="lead_time_days",
             raw_value=crudo,
         )
+    if entero > np.iinfo(np.int64).max:
+        _fallar(
+            "lead_time_days fuera del rango admitido",
+            row_index=fila,
+            column="lead_time_days",
+            raw_value=crudo,
+        )
     return entero
 
 
@@ -127,6 +148,13 @@ def _validar_fila(
     lead_crudo: object,
     posicion: int,
 ) -> dict[str, object]:
+    if not isinstance(sku_crudo, str) and pd.isna(sku_crudo):
+        _fallar(
+            "sku_id vacio",
+            row_index=posicion,
+            column="sku_id",
+            raw_value=sku_crudo,
+        )
     sku = str(sku_crudo).strip()
     try:
         observacion = InventoryObservation(

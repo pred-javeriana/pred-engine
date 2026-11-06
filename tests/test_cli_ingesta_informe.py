@@ -88,6 +88,34 @@ def test_classify_con_confirmacion_conserva_ambos(tmp_path: Path) -> None:
     assert informe["deposit"]["would_overwrite"] is True
 
 
+@pytest.mark.parametrize(
+    ("timestamp", "lead"),
+    [
+        pytest.param("2026-01-01T00:00:00Z", "7", id="timestamp-z"),
+        pytest.param("1500-01-01", "7", id="timestamp-1500"),
+        pytest.param("9999-12-31", "7", id="timestamp-9999"),
+        pytest.param("2026-01-01", "1e20", id="lead-1e20"),
+    ],
+)
+def test_classify_conversion_fuera_del_contrato_sale_con_3(
+    tmp_path: Path, timestamp: str, lead: str
+) -> None:
+    csv = _csv(tmp_path / "e" / "ventas.csv")
+    with csv.open("a", encoding="utf-8") as archivo:
+        archivo.write(f"FIL-0002,{timestamp},5,{lead}\n")
+    raiz = tmp_path / "data"
+
+    codigo = cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)])
+
+    assert codigo == 3
+    informe = json.loads(
+        (raiz / "ingestas" / f"{_sha(csv)}.json").read_text(encoding="utf-8")
+    )
+    assert informe["status"] == "failed"
+    assert informe["error"]["code"] == "ingest.schema_barrier"
+    assert not (raiz / "processed" / "ventas.parquet").exists()
+
+
 def test_classify_con_una_fila_invalida_sale_con_3_y_deja_el_informe_fallido(
     tmp_path: Path,
 ) -> None:

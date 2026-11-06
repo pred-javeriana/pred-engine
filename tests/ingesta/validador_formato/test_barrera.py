@@ -31,6 +31,25 @@ def test_baseline_tipa_datetime64_y_no_negativos() -> None:
     assert marco.iloc[0]["sku_id"] == "105"
 
 
+@pytest.mark.parametrize(
+    "sku",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(pd.NA, id="pd-na"),
+    ],
+)
+def test_sku_nulo_se_rechaza_como_vacio(sku: object) -> None:
+    marco = _ok().astype(object)
+    marco.loc[0, "sku_id"] = sku
+
+    with pytest.raises(SchemaBarrierError, match="sku_id vacio") as captured:
+        validate_aligned_frame(marco)
+
+    assert (captured.value.row_index, captured.value.column) == (0, "sku_id")
+    assert pd.isna(captured.value.raw_value)
+
+
 def test_fail_fast_demanda_negativa() -> None:
     with pytest.raises(SchemaBarrierError, match="negativa") as captured:
         validate_aligned_frame(_ok(demand_qty="-3"))
