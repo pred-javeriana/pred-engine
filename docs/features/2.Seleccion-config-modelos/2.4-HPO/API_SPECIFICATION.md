@@ -54,6 +54,9 @@ in valores`. El padre debe declararse antes en `EspacioBusqueda.parametros`.
 | `factor_reduccion` | `3` | Retiene el mejor `1/factor_reduccion` por escalon |
 | `habilitar_poda_semantica` | `True` | Activa `es_degenerada` |
 
+- `n_podados`: trials cerrados por ASHA antes de su ultima ventana o descartados por la regla #3 en cualquier ventana, incluida la ultima.
+- `n_completados`: trials que evaluaron todas las ventanas sin descarte de la regla #3.
+
 ### `es_degenerada(y_pred, y_train, tol=1e-9) -> (bool, str | None)`
 
 Regla de seguridad #3. Detecta: prediccion no finita, demanda negativa,
@@ -71,6 +74,14 @@ Algoritmo puro, sin Optuna.
 Compara solo contra competidores del **mismo escalon** (ver ADR-013 para la
 diferencia con la redaccion literal de Notion sobre "percentil 75 de todas
 las configuraciones").
+
+Aunque `escalones()` incluye `n_ventanas_totales` y `decidir()` puede indicar
+poda en ese escalon, la regla de "no se poda en la ultima ventana" vive en el
+llamador (`estudio.py`). Asimismo, en `walk_forward_greedy.py` el `EjecutorGreedy`
+no decide la poda: un trial que completa todas las ventanas sin descarte
+semantico se registra con `estado_motor="completado"` (y `motivo=None`), mientras
+el backend de Optuna conserva `PRUNED` para preservar la distribucion del
+muestreo TPE.
 
 ## Contratos (`contratos.py`)
 
