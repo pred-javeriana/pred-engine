@@ -545,7 +545,7 @@ def configuracion_desde_argumentos(
 
 # Errores esperables de una corrida: se informan sin traza al operador.
 ERRORES_FASE0: tuple[type[Exception], ...] = (
-    FileNotFoundError,
+    OSError,
     ValueError,
     DivergenceRejectionExhausted,
     WormOverwriteError,

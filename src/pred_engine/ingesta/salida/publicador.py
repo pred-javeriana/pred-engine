@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pandas as pd
+import pyarrow.lib
 
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.logger import get_logger
@@ -91,7 +92,12 @@ def read_classified_publication(path: str | Path) -> ClassifiedPublication:
     if origen.suffix.lower() != ".parquet":
         raise OutputContractError("solo se verifica un artefacto .parquet")
     datos = origen.read_bytes()
-    marco = pd.read_parquet(io.BytesIO(datos), engine="pyarrow")
+    try:
+        marco = pd.read_parquet(io.BytesIO(datos), engine="pyarrow")
+    except (pyarrow.lib.ArrowInvalid, OSError) as exc:
+        raise OutputContractError(
+            "el archivo no es un Parquet legible; vuelva a importar desde el CSV"
+        ) from exc
     validate_output_contract(marco)
     metadata = leer_metadatos_parquet(datos)
     _logger.info(

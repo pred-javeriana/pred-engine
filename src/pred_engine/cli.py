@@ -415,12 +415,17 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         print(exc, file=sys.stderr)
         return 1
 
+    from pred_engine.ingesta.data import RawConflictError
     from pred_engine.ingesta.pipeline import deposit_raw_csv
 
     try:
         crudo = deposit_raw_csv(args.csv, data_root=args.data_root)
         extraido = extract_csv(crudo, data_root=args.data_root)
         artefacto = probe_headers(extraido.frame, proveedor, timeout=args.timeout)
+    except RawConflictError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 7
     except SemanticAlignmentError as exc:
         _logger.error("%s", exc)
         print("estado: rejected")
@@ -553,6 +558,12 @@ def _cmd_classify(args: argparse.Namespace) -> int:
     if (args.csv is None) == (args.parquet is None):
         print("Pase exactamente uno de --csv o --parquet", file=sys.stderr)
         return 1
+    if args.parquet is not None and args.datos_sinteticos is not None:
+        print(
+            "error: --datos-sinteticos/--datos-reales solo aplican con --csv",
+            file=sys.stderr,
+        )
+        return 1
     informe = None
     try:
         if args.csv is not None:
@@ -569,6 +580,7 @@ def _cmd_classify(args: argparse.Namespace) -> int:
             topologia = salida.result.topology
             destino = salida.result.parquet_path
         else:
+            assert args.parquet is not None
             topologia, destino = run_classify_parquet(
                 args.parquet, data_root=args.data_root
             )
@@ -860,11 +872,8 @@ def _cmd_run_con_base(
             "pred_engine": library_versions().get("pred-engine", "desconocida"),
             "code": code_fingerprint(),
         }
-        run_id = args.run_id or run_identifier(inputs["source"]["sha256"], settings)
-        runs_dir = args.runs_dir or Path(args.data_root) / "runs"
-        run_dir = Path(runs_dir) / run_id
-        fijar_identidad(run_dir, inputs["source"]["sha256"], settings)
-        progress_path = run_dir / "progreso.jsonl"
+        if type(args.workers) is not int or args.workers < 1:
+            raise ValueError("workers must be a positive integer")
         provider = _build_provider(args)[2] if args.provider is not None else None
         evaluacion = EvaluationSettings(
             min_train=args.min_train,
@@ -873,6 +882,11 @@ def _cmd_run_con_base(
             seasonality=args.seasonality,
             metric=args.metric,
         )
+        run_id = args.run_id or run_identifier(inputs["source"]["sha256"], settings)
+        runs_dir = args.runs_dir or Path(args.data_root) / "runs"
+        run_dir = Path(runs_dir) / run_id
+        fijar_identidad(run_dir, inputs["source"]["sha256"], settings)
+        progress_path = run_dir / "progreso.jsonl"
         pipeline = build_pipeline(
             evaluacion,
             families=cast(tuple[PredictorFamily, ...], tuple(args.families)),
