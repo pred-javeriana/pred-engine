@@ -509,3 +509,26 @@ def test_un_trial_que_asha_cierra_en_la_ultima_ventana_sin_valor_finito_queda_fa
     assert len(desbordados) > 0
     assert all(t.estado == "fallido" and t.motivo for t in desbordados)
     assert resultado.n_completados + resultado.n_podados + resultado.n_fallidos == 30
+
+
+def test_poda_semantica_cierra_un_trial_antes_de_min_ventanas():
+    # ADR-013: min_ventanas solo limita la poda por escalon (ASHA); la regla #3
+    # revisa cada ventana desde la primera.
+    y = _serie_objetivo()
+    resultado = ejecutar_estudio(
+        y,
+        EspacioBusqueda(parametros=(Categorico("nivel", (0.0, 50.0)),)),
+        fabrica_nivel_constante,
+        n_trials=10,
+        min_train=20,
+        estacionalidad=1,
+        seed=7,
+        reglas=ReglasPoda(min_ventanas=4),
+    )
+    nulos = [t for t in resultado.trials if t.configuracion["nivel"] == 0.0]
+    assert nulos
+    for t in nulos:
+        assert t.estado == "podado"
+        assert t.n_ventanas == 1
+        assert t.motivo is not None
+        assert t.motivo.endswith("poda_semantica:prediccion_nula")
