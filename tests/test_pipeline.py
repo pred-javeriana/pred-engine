@@ -217,6 +217,27 @@ def test_degenerate_final_forecast_fails_its_unit_under_rule_3(tmp_path):
     assert "configuracion={'p': 1, 'd': 0, 'q': 0" in str(raised.value)
 
 
+class _ErrorConDosArgumentos(Exception):
+    def __init__(self, codigo, detalle):
+        super().__init__(f"{codigo}: {detalle}")
+
+
+class _FalloConErrorDeConstructorExigente:
+    def fit(self, y):
+        raise _ErrorConDosArgumentos("E1", "ajuste roto")
+
+
+def test_final_fit_error_with_required_args_keeps_the_real_error(tmp_path):
+    pipeline = verification_pipeline()
+    pipeline.factories["classical"] = lambda config, *, seed: (
+        _FalloConErrorDeConstructorExigente()
+    )
+    with pytest.raises(PipelineExecutionError, match="E1: ajuste roto") as raised:
+        pipeline.run(request_at(tmp_path))
+    assert raised.value.stage == "L2"
+    assert "TypeError" not in str(raised.value)
+
+
 def test_l2_rejects_missing_daily_observation(tmp_path):
     pipeline = verification_pipeline()
     ingestion = pipeline.ingest(request_at(tmp_path))
@@ -797,6 +818,65 @@ class _RouterFailingForOneSku:
         if request.sku_id == "broken":
             raise RuntimeError("HPO interrumpido para este SKU")
         return self.router.execute(request, decision)
+
+
+@pytest.mark.parametrize("phase", ["fit", "predict"])
+def test_final_fit_failure_names_configuration_and_exception(tmp_path, phase):
+    class BrokenModel:
+        def fit(self, y):
+            if phase == "fit":
+                raise RuntimeError("ajuste final interrumpido")
+            return self
+
+        def predict(self, horizon):
+            raise RuntimeError("prediccion final interrumpida")
+
+    pipeline = verification_pipeline()
+    pipeline.factories = {
+        family: lambda config, *, seed: BrokenModel() for family in ("classical", "ml")
+    }
+    with pytest.raises(PipelineExecutionError) as raised:
+        pipeline.run(request_at(tmp_path))
+    assert raised.value.stage == "L2"
+    message = str(raised.value)
+    assert "RuntimeError:" in message
+    assert "configuracion=" in message
+    assert "'lags': 3" in message  # configuracion ML elegida, no el espacio
+
+
+@pytest.mark.parametrize("with_healthy", [False, True])
+def test_unrouted_lumpy_is_excluded_without_losing_other_skus(tmp_path, with_healthy):
+    request = core_request_at(tmp_path)
+    source = pd.read_csv(request.csv_path)
+    lumpy = source.assign(
+        sku_id="lumpy-only", demand_qty=np.resize([0.0, 1.0, 0.0, 100.0], len(source))
+    )
+    pd.concat([source, lumpy] if with_healthy else [lumpy]).to_csv(
+        request.csv_path, index=False
+    )
+    pipeline = build_pipeline(
+        EvaluationSettings(40, horizon=2, step=14, seasonality=7, metric="mae"),
+        families=("ml", "dl"),
+        n_trials=1,
+        seed=15,
+    )
+    ingestion = pipeline.ingest(request)
+    if not with_healthy:
+        with pytest.raises(ValueError, match="lumpy-only:.*clase 'lumpy'"):
+            pipeline.fit(ingestion)
+        return
+    fitting = pipeline.fit(ingestion)
+    assert [(c.selection.sku_id, c.selection.family) for c in fitting.candidates] == [
+        ("core-sku", "ml"),
+        ("core-sku", "dl"),
+    ]
+    assert all(unit.sku_id == "core-sku" for unit in fitting.units)
+    assert len(fitting.exclusions) == 1
+    exclusion = fitting.exclusions[0]
+    assert exclusion.sku_id == "lumpy-only"
+    assert exclusion.code == "eligibility.no_configured_family"
+    assert "no asigna ninguna familia configurada a la clase 'lumpy'" in exclusion.cause
+    assert pipeline.router.policy.version in exclusion.cause
 
 
 def test_failed_unit_is_isolated_and_short_sku_is_excluded_with_cause(tmp_path):

@@ -93,6 +93,12 @@ Un estudio por SKU, ordenado alfabeticamente. `run_id` en kwargs -> `ValueError`
 - `SelectionResult.payload`: `hiperparametros`, `metrica_objetivo`, `valor`,
   `n_ventanas`, `n_trials`, `n_completados`, `n_podados`, `n_fallidos`, `seed`,
   `estudio_hpo` (referencia al estudio persistido, o `None` sin `raiz_corrida`).
+  `n_trials` cuenta todos los ensayos registrados, incluidos los sorteos invalidos.
+  Los motivos por trial no son claves del payload: quedan en el estudio y en
+  `seleccion.jsonl` al terminar L2. Una restriccion violada se registra como
+  `configuracion_invalida:<restriccion>` y no consume `n_trials` evaluados.
+  El error sin ganador incluye totales fallidos/podados, conteos por causa y el
+  primer motivo por causa.
   `produced_by = "MLSelectionStrategy"`; el router anota `policy_version`.
 
 ### `PresupuestoHPO(n_trials, reglas=ReglasPoda())` y `PRESUPUESTO_POR_PERFIL`

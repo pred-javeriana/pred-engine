@@ -59,7 +59,7 @@ Chain" (semilla 0.1 del hub). Otras entradas posibles:
 
 | Opción | Por defecto | Efecto |
 | --- | --- | --- |
-| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento; `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. Con una sola familia ningún SKU compite en M3: la regla de dos familias excluye cada SKU que entrega su candidato y M3 juzga `FALLO_TECNICO` al que no lo entrega. Si ninguna unidad falla, la corrida termina en L2 con código 1 y sus causas. |
+| `--families` | `classical ml dl foundation` | Subconjunto de la matriz de enrutamiento. Si la política no asigna ninguna familia configurada a la clase de un SKU (por ejemplo, `lumpy` con `ml dl`), L2 excluye ese SKU con su clase y política como causa, sin perder los demás SKU. Si todos quedan excluidos, L2 termina sin resultados. `foundation` requiere el extra `foundation` y los pesos de Chronos-2. Si Chronos-2 no carga, la corrida termina con código 1 antes de L1. Con una sola familia ningún SKU compite en M3: la regla de dos familias excluye cada SKU que entrega su candidato y M3 juzga `FALLO_TECNICO` al que no lo entrega. Si ninguna unidad falla, la corrida termina en L2 con código 1 y sus causas. |
 | `--no-foundation` | apagada | Corre sin la familia `foundation`, igual que `--families classical ml dl`; para equipos sin el extra `foundation` o con poca memoria. Los SKU `lumpy` quedan con la familia clásica sola y no compiten en M3. No se combina con `--families`. |
 | `--trials` | presupuesto por perfil | Trials de HPO por estudio; con presupuestos chicos algunos SKU pueden quedar sin trial completo. |
 | `--workers` | núcleos - 1 | Procesos para las unidades de L2 y L3 y para los pronósticos por SKU de L4. |
@@ -160,7 +160,15 @@ unidades.
 ## Fallas y reanudación
 
 - Una unidad que falla (por ejemplo, un estudio sin trials completos) queda en
-  `unidades.jsonl` y en `failures`; el resto de la etapa sigue.
+  `unidades.jsonl` y en `summary.failures` de `corrida.json` cuando L2 entrega su
+  artefacto; el resto de la etapa sigue. El CLI usa el validador nativo, por lo
+  que L2 conserva las unidades aunque todas fallen y M3 decide si puede continuar.
+  En biblioteca sin validador nativo, si L2 no entrega candidatos, falla antes de
+  entregar el artefacto: `unidades.jsonl` queda vacío y no hay `summary.failures`.
+  El mensaje de etapa conserva como máximo las cinco primeras causas. Los
+  ensayos completos siguen en `hpo/`; `seleccion.jsonl` requiere que termine L2.
+- Un fallo en el ajuste final o su predicción conserva la clase de excepción y
+  agrega `configuracion=...` con la configuración elegida, no el espacio de búsqueda.
 - Repetir el mismo comando retoma la corrida: los estudios HPO terminados se
   reconstruyen desde su manifiesto sin reentrenar, los interrumpidos continúan
   desde su último checkpoint y solo los que faltan arrancan de cero. L3 y el
@@ -169,7 +177,8 @@ unidades.
   reintento cambia qué SKU excluye la regla de dos familias, M3 conserva las
   exclusiones de la procedencia durable de su protocolo.
 - Un estudio en estado `fallida` no se reabre (2.9); su unidad vuelve a fallar
-  con ese motivo.
+  con `CorridaFallidaError`, que indica ese estado, pero no repite el motivo
+  original. Los motivos originales quedan en `hpo/<estudio>/backend.jsonl`.
 - Una evaluación M3 PUBLICADA es inmutable. Repetir el mismo comando después
   de reparar una falla reutiliza esa publicación con sus FALLO_TECNICO y sale
   con código 8 aunque ningún ajuste falle ahora. Para obtener resultados

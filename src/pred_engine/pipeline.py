@@ -40,6 +40,7 @@ from pred_engine.comun.errores_codigo import (
     ELEGIBILIDAD_HUECOS,
     ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
     ELEGIBILIDAD_NO_FINITA,
+    ELEGIBILIDAD_SIN_FAMILIA,
     ELEGIBILIDAD_SIN_HISTORIA,
     ELEGIBILIDAD_SIN_RESERVA,
     codigo_de,
@@ -65,7 +66,7 @@ from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degen
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
     fabrica_sarima,
 )
-from pred_engine.optimizacion.router import SelectionRouter
+from pred_engine.optimizacion.router import RouterConfigurationError, SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
     RoutingDecision,
@@ -487,13 +488,23 @@ def _fit_unit(task: _FitTask) -> FittedCandidate:
     if selection.forecast_config is None:
         raise ValueError(f"{selection.family} must provide forecast_config for L2")
     y = np.array([obs.demand_qty for obs in task.request.series], dtype=float)
-    model = task.factory(selection.forecast_config, seed=selection.forecast_seed)
-    forecast = np.asarray(model.fit(y.copy()).predict(task.horizon), dtype=float)
-    if forecast.shape != (task.horizon,):
-        raise ValueError(
-            f"pronostico invalido para {selection.sku_id}/{selection.family}: "
-            f"se esperaban {task.horizon} valores"
-        )
+    try:
+        model = task.factory(selection.forecast_config, seed=selection.forecast_seed)
+        forecast = np.asarray(model.fit(y.copy()).predict(task.horizon), dtype=float)
+        if forecast.shape != (task.horizon,):
+            raise ValueError(
+                f"pronostico invalido para {selection.sku_id}/{selection.family}: "
+                f"se esperaban {task.horizon} valores"
+            )
+    except Exception as exc:
+        try:
+            con_configuracion = type(exc)(
+                f"{exc}; configuracion={dict(selection.forecast_config)}"
+            )
+        except Exception:
+            # La clase exige otros argumentos: se conserva el error real.
+            raise exc from None
+        raise con_configuracion from exc
     # Regla #3 (ADR-020): el pronostico que recibe M3 cumple la misma regla que
     # cada ventana del HPO; uno degenerado hace fallar la unidad, no se entrega.
     degenerado, motivo = es_degenerada(forecast, y_train=y)
@@ -1036,7 +1047,18 @@ class Pipeline:
                 sku_class=series[0].sku_class,
                 series=series,
             )
-            for decision in self.router.plan(request):
+            try:
+                decisions = self.router.plan(request)
+            except RouterConfigurationError:
+                cause = (
+                    f"la politica {self.router.policy.version!r} no asigna ninguna "
+                    f"familia configurada a la clase {request.sku_class!r}"
+                )
+                code = ELEGIBILIDAD_SIN_FAMILIA
+                exclusions.append(SkuExclusion(request.sku_id, cause, code))
+                self._emit("excluded", sku_id=request.sku_id, cause=cause, code=code)
+                continue
+            for decision in decisions:
                 factory = self.factories.get(decision.family)
                 if factory is None:
                     raise ValueError(f"No model factory for {decision.family}")
