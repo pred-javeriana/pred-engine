@@ -7,6 +7,7 @@ import pytest
 
 from pred_engine.ingesta.validador_formato import (
     SchemaBarrierError,
+    barrera,
     validate_aligned_frame,
 )
 
@@ -163,11 +164,37 @@ def test_un_nulo_en_columna_de_texto_se_rechaza_en_su_fila(
 
 
 @pytest.mark.parametrize("dtype", ["string", "str"])
-def test_una_columna_de_texto_toda_nula_se_rechaza(dtype: str) -> None:
+@pytest.mark.parametrize(
+    ("columna", "patron_error", "columna_error"),
+    [
+        ("timestamp", "timestamp invalido", "timestamp"),
+        ("demand_qty", "violacion Pydantic", None),
+        ("lead_time_days", "lead_time_days no entero", "lead_time_days"),
+    ],
+)
+def test_una_columna_de_texto_toda_nula_se_rechaza(
+    columna: str, patron_error: str, columna_error: str | None, dtype: str
+) -> None:
     marco = _marco(
         [("105", "2024-10-01", "1", "3"), ("106", "2024-10-02", "2", "4")]
     ).astype(dtype)
-    marco["timestamp"] = pd.Series([None, None], dtype=dtype)
-    with pytest.raises(SchemaBarrierError, match="timestamp invalido") as captured:
+    marco[columna] = pd.Series([None, None], dtype=dtype)
+    with pytest.raises(SchemaBarrierError, match=patron_error) as captured:
         validate_aligned_frame(marco)
-    assert (captured.value.row_index, captured.value.column) == (0, "timestamp")
+    assert (captured.value.row_index, captured.value.column) == (0, columna_error)
+
+
+def test_la_via_vectorizada_se_ejercita_con_marcos_de_solo_texto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llamada = False
+    original = barrera._validar_vectorizado
+
+    def _espia(frame: pd.DataFrame) -> pd.DataFrame:
+        nonlocal llamada
+        llamada = True
+        return original(frame)
+
+    monkeypatch.setattr(barrera, "_validar_vectorizado", _espia)
+    validate_aligned_frame(_ok())
+    assert llamada

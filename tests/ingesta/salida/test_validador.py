@@ -97,7 +97,7 @@ def test_rechaza_demand_qty_no_float() -> None:
 def test_rechaza_sku_que_queda_vacio_sin_espacios_de_python() -> None:
     marco = _clasificado_valido()
     marco["sku_id"] = pd.Series(["105", "\x1c", "105", "105"], dtype=object)
-    with pytest.raises(OutputContractError):
+    with pytest.raises(OutputContractError, match="sku_id no puede ser vacio"):
         validate_output_contract(marco)
 
 
