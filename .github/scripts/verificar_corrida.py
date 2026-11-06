@@ -25,6 +25,9 @@ from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
 from pred_engine.comun.modelos.manifiesto_candidatos import ContextoParticion
 from pred_engine.forecasting.adaptador_candidatos import validar_manifiesto
 from pred_engine.forecasting.persistencia_evidencia import VERSION_ESQUEMA_M3
+from pred_engine.forecasting.persistencia_evidencia.migraciones import (
+    VERSION_PLATAFORMA,
+)
 
 ARCHIVOS = (
     "corrida.json",
@@ -36,6 +39,15 @@ ARCHIVOS = (
     "recursos.jsonl",
     "telemetria.svg",
 )
+
+
+# La base central queda en la ultima migracion del motor (11) o, si la plataforma
+# aplico una propia que el motor solo acepta, en la de la plataforma (12).
+VERSIONES_BASE_CENTRAL = (VERSION_ESQUEMA_M3, VERSION_PLATAFORMA)
+
+
+def version_base_valida(conn: sqlite3.Connection) -> bool:
+    return conn.execute("PRAGMA user_version").fetchone()[0] in VERSIONES_BASE_CENTRAL
 
 
 def verificar(run_dir: Path, db_path: Path, datos_reales: bool = False) -> list[str]:
@@ -71,7 +83,7 @@ def verificar(run_dir: Path, db_path: Path, datos_reales: bool = False) -> list[
         return errores + [f"base central: {exc}"]
     with closing(conn):
         exigir(
-            conn.execute("PRAGMA user_version").fetchone()[0] == VERSION_ESQUEMA_M3,
+            version_base_valida(conn),
             "base central: version incompatible",
         )
         exigir(
