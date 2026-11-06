@@ -40,6 +40,7 @@ from pred_engine.comun.errores_codigo import (
     ELEGIBILIDAD_HUECOS,
     ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
     ELEGIBILIDAD_NO_FINITA,
+    ELEGIBILIDAD_SIN_FAMILIA,
     ELEGIBILIDAD_SIN_HISTORIA,
     ELEGIBILIDAD_SIN_RESERVA,
     codigo_de,
@@ -65,7 +66,7 @@ from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda, es_degen
 from pred_engine.optimizacion.optimizadores.modelos_clasicos.classical_selection import (  # noqa: E501
     fabrica_sarima,
 )
-from pred_engine.optimizacion.router import SelectionRouter
+from pred_engine.optimizacion.router import RouterConfigurationError, SelectionRouter
 from pred_engine.optimizacion.router.contratos import (
     PredictorFamily,
     RoutingDecision,
@@ -1036,7 +1037,18 @@ class Pipeline:
                 sku_class=series[0].sku_class,
                 series=series,
             )
-            for decision in self.router.plan(request):
+            try:
+                decisions = self.router.plan(request)
+            except RouterConfigurationError:
+                cause = (
+                    f"la politica {self.router.policy.version!r} no asigna ninguna "
+                    f"familia configurada a la clase {request.sku_class!r}"
+                )
+                code = ELEGIBILIDAD_SIN_FAMILIA
+                exclusions.append(SkuExclusion(request.sku_id, cause, code))
+                self._emit("excluded", sku_id=request.sku_id, cause=cause, code=code)
+                continue
+            for decision in decisions:
                 factory = self.factories.get(decision.family)
                 if factory is None:
                     raise ValueError(f"No model factory for {decision.family}")

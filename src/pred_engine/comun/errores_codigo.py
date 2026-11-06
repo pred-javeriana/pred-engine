@@ -22,6 +22,7 @@ ELEGIBILIDAD_HUECOS: Final = "eligibility.calendar_gaps"
 ELEGIBILIDAD_SIN_RESERVA: Final = "eligibility.no_reserved_observations"
 ELEGIBILIDAD_NO_FINITA: Final = "eligibility.non_finite_demand"
 ELEGIBILIDAD_HISTORIA_INSUFICIENTE: Final = "eligibility.insufficient_history"
+ELEGIBILIDAD_SIN_FAMILIA: Final = "eligibility.no_configured_family"
 # Exclusion al cerrar L2: una sola familia evaluable (ADR-023).
 ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS: Final = "eligibility.fewer_than_two_families"
 
