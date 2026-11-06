@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -220,3 +222,63 @@ def test_intervalo_a_mayor_nivel_es_mas_ancho_y_sin_prueba_no_existe() -> None:
     assert intervalo_razon(corto, base, nivel=0.95) is None
     with pytest.raises(ValueError, match="nivel"):
         intervalo_razon(campeon, base, nivel=1.0)
+
+
+def _sku_varianza_negativa():
+    """197 ventanas de un SKU real (campeon contra Seasonal Naive, horizonte 7).
+
+    La varianza de largo plazo con nucleo rectangular de a - r^2 b es negativa.
+    """
+    ruta = Path(__file__).parent / "datos" / "sku_varianza_negativa.csv"
+    with ruta.open(newline="") as f:
+        filas = list(csv.DictReader(f))
+    n = len(filas)
+    return (
+        metricas_candidato(
+            "foundation",
+            None,
+            n=n,
+            horizonte=7,
+            rmses=[float(f["rmse_campeon"]) for f in filas],
+        ),
+        metricas_candidato(
+            FAMILIA_LINEA_BASE,
+            None,
+            n=n,
+            horizonte=7,
+            rmses=[float(f["rmse_seasonal_naive"]) for f in filas],
+        ),
+    )
+
+
+def test_sku_real_con_varianza_negativa_en_r_no_publica_conjunto() -> None:
+    campeon, base = _sku_varianza_negativa()
+    a = np.square([v.metricas.rmse for v in campeon.por_ventana])
+    b = np.square([v.metricas.rmse for v in base.por_ventana])
+    assert len(a) == 197
+    u = a.mean() / b.mean()
+    assert _varianza_rectangular(a - u * b, 7) < 0
+    assert intervalo_razon(campeon, base, nivel=0.95) is None
+
+
+def test_varianza_no_positiva_en_r_no_publica_conjunto() -> None:
+    # Siete ventanas de horizonte 3: la varianza de largo plazo de a - r^2 b es
+    # negativa en r = 0,8997 y la cuadratica de Fieller aceptaria [0,99; 1,80].
+    a = [4.0, 7.0, 9.0, 2.0, 2.0, 7.0, 3.0]
+    b = [4.0, 9.0, 9.0, 9.0, 7.0, 1.0, 3.0]
+    campeon = metricas_candidato("ml", None, n=7, horizonte=3, rmses=list(np.sqrt(a)))
+    base = metricas_candidato(
+        FAMILIA_LINEA_BASE, None, n=7, horizonte=3, rmses=list(np.sqrt(b))
+    )
+    u = np.mean(a) / np.mean(b)
+    assert _varianza_rectangular(np.array(a) - u * np.array(b), 3) < 0
+    assert intervalo_razon(campeon, base, nivel=0.95) is None
+
+
+def _varianza_rectangular(d: np.ndarray, horizonte: int) -> float:
+    centradas = d - d.mean()
+    gamma = [
+        float(np.dot(centradas[k:], centradas[: len(d) - k])) / len(d)
+        for k in range(horizonte)
+    ]
+    return gamma[0] + 2 * sum(gamma[1:])

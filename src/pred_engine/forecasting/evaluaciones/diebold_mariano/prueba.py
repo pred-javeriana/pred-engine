@@ -143,6 +143,11 @@ def intervalo_razon(
     var_b = _varianza_largo_plazo(b, horizonte)
     cruzada = (var_a + var_b - _varianza_largo_plazo(a - b, horizonte)) / 2
     media_a, media_b = float(a.mean()), float(b.mean())
+    # En u = r**2 la region aceptada debe contener a r: eso exige varianza de
+    # largo plazo positiva alli, igual que el rechazo de `prueba_hln`.
+    u = media_a / media_b
+    if var_a - 2 * u * cruzada + u * u * var_b <= 0:
+        return None
     tramos = _no_positivos(
         media_b**2 - kappa * var_b,
         media_a * media_b - kappa * cruzada,
