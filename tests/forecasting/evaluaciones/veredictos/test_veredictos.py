@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import numpy as np
 import pytest
@@ -172,7 +172,7 @@ def test_fallo_tecnico_precede_a_no_evaluable() -> None:
 def test_sku_sin_instancia_usa_la_siguiente_familia_de_la_clase() -> None:
     veredictos = _unico(
         evaluacion("A", [metricas_candidato("ml", 0.5), metricas_candidato("dl", 0.9)]),
-        evaluacion("B", [metricas_candidato("dl", 0.9)]),
+        evaluacion("B", [metricas_candidato("dl", 0.9, rmses=_MEJOR)]),
     )
     assert veredictos["A"].familia_campeona == "ml"
     assert veredictos["B"].veredicto == "VALIDADO"
@@ -183,6 +183,52 @@ def test_sku_sin_instancia_usa_la_siguiente_familia_de_la_clase() -> None:
         "fallback de familia ml a dl: sin instancia de la campeona de clase"
     )
     assert "fallback" not in veredictos["A"].justificacion
+    assert veredictos["B"].diebold_mariano.causa is None
+    assert veredictos["B"].diebold_mariano.p_valor is not None
+
+
+def test_veredicto_con_instancia_es_igual_con_y_sin_respaldo() -> None:
+    eval_a = evaluacion(
+        "A",
+        [
+            metricas_candidato("ml", 0.5, rmses=_MEJOR),
+            metricas_candidato("dl", 0.9),
+        ],
+    )
+    eval_b = evaluacion("B", [metricas_candidato("dl", 0.9, rmses=_MEJOR)])
+    veredicto_sin = _unico(eval_a)["A"]
+    veredicto_con = _unico(eval_a, eval_b)["A"]
+    veredicto_con_inv = _unico(eval_b, eval_a)["A"]
+    assert replace(veredicto_con, diebold_mariano=None) == replace(
+        veredicto_sin, diebold_mariano=None
+    )
+    assert replace(veredicto_con_inv, diebold_mariano=None) == replace(
+        veredicto_sin, diebold_mariano=None
+    )
+
+
+@pytest.mark.parametrize("orden_a", [("dl", "ml"), ("ml", "dl")])
+@pytest.mark.parametrize("orden_b", [("dl", "ml"), ("ml", "dl")])
+def test_desempate_por_nombre_con_medianas_iguales_en_ambos_ordenes_de_entrada(
+    orden_a: tuple[str, str],
+    orden_b: tuple[str, str],
+) -> None:
+    candidatos_a = [
+        metricas_candidato("classical", 0.5),
+        metricas_candidato(orden_a[0], 0.8),
+        metricas_candidato(orden_a[1], 0.8),
+    ]
+    candidatos_b = [
+        metricas_candidato(orden_b[0], 0.8),
+        metricas_candidato(orden_b[1], 0.8),
+    ]
+    veredictos = _unico(evaluacion("A", candidatos_a), evaluacion("B", candidatos_b))
+    assert veredictos["B"].familia_campeona == "dl"
+    assert veredictos["B"].candidato_campeon == "S/dl"
+    assert (
+        "fallback de familia classical a dl: sin instancia de la campeona de clase"
+        in veredictos["B"].justificacion
+    )
 
 
 @pytest.mark.parametrize("segunda_disponible", [True, False])
