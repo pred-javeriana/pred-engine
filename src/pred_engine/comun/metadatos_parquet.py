@@ -84,6 +84,10 @@ def deserializar_metadatos(datos_bytes: bytes) -> ParquetMetadata:
         fraction = payload["fraction"]
         if isinstance(fraction, bool) or not isinstance(fraction, int | float):
             raise ValueError("fraction debe ser numerica")
+        if float(fraction) != RESERVE_FRACTION:
+            raise ValueError(
+                f"fraction debe ser {RESERVE_FRACTION}; recibido {fraction}"
+            )
         exclusions = payload["exclusions"]
         if not isinstance(exclusions, list):
             raise ValueError("exclusions debe ser una lista")

@@ -407,3 +407,117 @@ def test_cli_run_falla_l2_graba_ajuste_evaluacion(
     assert corrida["summary"]["complete"] is False
     etapas = {s["id"]: s["state"] for s in corrida["summary"]["stages"]}
     assert etapas["L2"] == "failed"
+
+
+def test_cli_run_configuracion_invalida_no_envenena_run_id(tmp_path: Path) -> None:
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "data"
+    run_id = "test-no-poison"
+    args = _args_run_base(raiz, db, run_id)
+
+    args_invalido = list(args)
+    args_invalido[args_invalido.index("--min-train") + 1] = "0"
+    assert cli.main(args_invalido) == 1
+    assert not (raiz / "runs" / run_id / "identidad.json").exists()
+
+    assert cli.main(args) in (0, 8)
+    assert (raiz / "runs" / run_id / "corrida.json").exists()
+
+
+def test_cli_run_workers_invalido_no_persiste_identidad(tmp_path: Path) -> None:
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "data"
+    run_id = "test-workers-invalid"
+    args = _args_run_base(raiz, db, run_id)
+    args[args.index("--workers") + 1] = "0"
+    assert cli.main(args) == 1
+    assert not (raiz / "runs" / run_id / "identidad.json").exists()
+
+
+def test_cli_verify_no_parquet_retorna_6_sin_traza(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_parquet = tmp_path / "falso.parquet"
+    fake_parquet.write_text("bytes no parquet\n", encoding="utf-8")
+    codigo = cli.main(["verify", "--parquet", str(fake_parquet)])
+    assert codigo == 6
+    err = capsys.readouterr().err
+    assert "el archivo no es un Parquet legible; vuelva a importar desde el CSV" in err
+
+
+def test_cli_verify_fraccion_distinta_0_2_retorna_6(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    parquet_path = tmp_path / "fraccion_invalida.parquet"
+    df = pd.DataFrame(
+        {
+            "sku_id": ["105"],
+            "timestamp": pd.to_datetime(["2024-10-01"]),
+            "demand_qty": [10.0],
+            "lead_time_days": [5],
+            "sku_class": ["smooth"],
+        }
+    )
+    meta = {
+        "t_star": "2024-10-01",
+        "first_reserved": "2024-10-01",
+        "last_observed": "2024-10-01",
+        "reserved_days": 1,
+        "fraction": 0.3,
+        "exclusions": [],
+    }
+    tabla = pa.Table.from_pandas(df)
+    meta_schema = {
+        **(tabla.schema.metadata or {}),
+        b"pred_engine": json.dumps(meta).encode("utf-8"),
+    }
+    pq.write_table(tabla.replace_schema_metadata(meta_schema), parquet_path)
+
+    codigo = cli.main(["verify", "--parquet", str(parquet_path)])
+    assert codigo == 6
+    err = capsys.readouterr().err
+    assert "vuelva a importar desde el CSV" in err
+
+
+def test_cli_classify_parquet_con_bandera_origen_falla(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    parquet_path = tmp_path / "panel.parquet"
+    df = pd.DataFrame(
+        {
+            "sku_id": ["105"],
+            "timestamp": pd.to_datetime(["2024-10-01"]),
+            "demand_qty": [10.0],
+            "lead_time_days": [5],
+            "sku_class": ["smooth"],
+        }
+    )
+    meta = {
+        "t_star": "2024-10-01",
+        "first_reserved": "2024-10-01",
+        "last_observed": "2024-10-01",
+        "reserved_days": 1,
+        "fraction": 0.2,
+        "exclusions": [],
+    }
+    tabla = pa.Table.from_pandas(df)
+    meta_schema = {
+        **(tabla.schema.metadata or {}),
+        b"pred_engine": json.dumps(meta).encode("utf-8"),
+    }
+    pq.write_table(tabla.replace_schema_metadata(meta_schema), parquet_path)
+
+    for bandera in ("--datos-reales", "--datos-sinteticos"):
+        codigo = cli.main(
+            [
+                "classify",
+                "--parquet",
+                str(parquet_path),
+                bandera,
+                "--data-root",
+                str(tmp_path / "data"),
+            ]
+        )
+        assert codigo == 1
+        err = capsys.readouterr().err
+        assert "error: --datos-sinteticos/--datos-reales solo aplican con --csv" in err

@@ -52,3 +52,34 @@ def test_probe_rechazado_imprime_json(
         ]
     )
     assert codigo == 0
+
+
+def test_probe_conflicto_raw_retorna_7_sin_traza(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raiz = tmp_path / "data"
+    raw_dir = raiz / "raw"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "conflicto.csv").write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n1,2024-01-01,1,1\n",
+        encoding="utf-8",
+    )
+    csv = tmp_path / "conflicto.csv"
+    csv.write_text("otro contenido\n", encoding="utf-8")
+
+    codigo = cli.main(
+        [
+            "probe",
+            "--csv",
+            str(csv),
+            "--data-root",
+            str(raiz),
+            "--provider",
+            "gemini",
+            "--api-key",
+            "test-key",
+        ]
+    )
+    assert codigo == 7
+    err = capsys.readouterr().err
+    assert "ya existe con otro contenido" in err

@@ -348,3 +348,22 @@ def test_cli_reporta_errores_sin_traza(tmp_path, capsys, argumentos, mensaje) ->
     assert codigo == 1
     assert mensaje in error
     assert "Traceback" not in error
+
+
+def test_cli_data_root_sin_permiso_retorna_1_sin_traza(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    semilla = _semilla(tmp_path)
+    ro = tmp_path / "ro"
+    ro.mkdir(mode=0o555)
+    unwritable = ro / "data"
+    try:
+        codigo = main(
+            [str(semilla), "--data-root", str(unwritable), "--minimo-filas", "0"]
+        )
+        error = capsys.readouterr().err
+        assert codigo == 1
+        assert "Permission denied" in error
+        assert "Traceback" not in error
+    finally:
+        ro.chmod(0o777)
