@@ -275,6 +275,13 @@ def test_varianza_no_positiva_en_r_no_publica_conjunto() -> None:
     assert intervalo_razon(campeon, base, nivel=0.95) is None
 
 
+def test_linea_base_con_perdida_cero_no_publica_intervalo() -> None:
+    # Un SKU intermitente cuyo naive estacional acierta en todas las ventanas.
+    campeon = metricas_candidato("ml", None, n=8, rmses=[0.5, 1.0] * 4)
+    base = metricas_candidato(FAMILIA_LINEA_BASE, None, n=8, rmses=[0.0] * 8)
+    assert intervalo_razon(campeon, base, nivel=0.95) is None
+
+
 def _varianza_rectangular(d: np.ndarray, horizonte: int) -> float:
     centradas = d - d.mean()
     gamma = [
