@@ -924,6 +924,7 @@ def _cmd_run_con_base(
             timeout=args.timeout,
             on_conflict="keep_both" if args.confirm_overwrite else "reject",
             datos_sinteticos=es_sintetico,
+            expected_source_sha256=inputs["source"]["sha256"],
         )
         sampler = (
             ResourceSampler(run_dir / "recursos.jsonl", args.telemetry_interval)
@@ -962,7 +963,11 @@ def _cmd_run_con_base(
             "parquet": str(result.ingestion.parquet_path),
             "rows": len(result.ingestion.panel),
             "skus": len(set(result.ingestion.panel["sku_id"].tolist())),
-            "sha256": sha256_file(result.ingestion.parquet_path),
+            "sha256": (
+                result.ingestion.parquet_sha256
+                if result.ingestion.parquet_sha256 is not None
+                else sha256_file(result.ingestion.parquet_path)
+            ),
         }
     try:
         files = write_run(

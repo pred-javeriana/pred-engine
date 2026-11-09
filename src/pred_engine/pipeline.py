@@ -128,6 +128,7 @@ class PipelineInput:
     # distinto con el mismo nombre; "reject" falla sin escribir nada.
     on_conflict: Literal["reject", "keep_both"] = "reject"
     datos_sinteticos: bool | None = None
+    expected_source_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if (self.csv_path is None) == (self.parquet_path is None):
@@ -942,11 +943,13 @@ class Pipeline:
         """L1: reuse current ingestion and consume its published 1.4 contract."""
         if request.parquet_path is not None:
             path = Path(request.parquet_path).expanduser().resolve()
-            return ingestion_artifact_from_publication(
+            artifact = ingestion_artifact_from_publication(
                 path,
                 read_classified_publication(path),
                 datos_sinteticos=request.datos_sinteticos,
             )
+            self._check_source(request, artifact.parquet_sha256)
+            return artifact
         salida = ingest_csv_with_report(
             cast(str | Path, request.csv_path),
             data_root=request.data_root,
@@ -958,6 +961,7 @@ class Pipeline:
         if salida.error is not None:
             raise salida.error
         assert salida.result is not None
+        self._check_source(request, salida.report.ingest_id)
         # Se usa la publicacion releida, no el artefacto de la importacion en
         # memoria: otra publicacion pudo sustituir el archivo entre ambos pasos.
         path = salida.result.parquet_path
@@ -967,6 +971,14 @@ class Pipeline:
             source_sha256=salida.report.ingest_id,
             datos_sinteticos=salida.report.source_file.datos_sinteticos,
         )
+
+    @staticmethod
+    def _check_source(request: PipelineInput, actual: str | None) -> None:
+        if (
+            request.expected_source_sha256 is not None
+            and actual != request.expected_source_sha256
+        ):
+            raise ValueError("el archivo cambio durante la corrida")
 
     def _exclusion_cause(
         self, admissible: pd.DataFrame, reserve: ReserveCut
