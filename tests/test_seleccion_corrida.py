@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -566,6 +567,45 @@ def test_un_sku_excluido_por_el_motor_no_es_ejecutable_con_su_causa(documentos):
     assert (
         corto["dl"]["estado"] == "excluida"
     )  # la matriz le deja DL, pero no se configuro
+
+
+def test_lumpy_excluido_tras_l2_conserva_el_motivo_de_cada_familia(tmp_path):
+    resultado = _resultado()
+    fitting = resultado.fitting
+    assert fitting is not None
+    causa = (
+        "menos de dos familias evaluables tras L2: evaluable foundation; "
+        "fallidas classical (selection.no_viable_trial)"
+    )
+    fitting = replace(
+        fitting,
+        exclusions=fitting.exclusions
+        + (SkuExclusion("irregular", causa, "eligibility.fewer_than_two_families"),),
+        policy=ConfiguredTopologyPolicy(("classical", "ml", "dl", "foundation")),
+    )
+    resultado = PipelineResult(_etapas(fitting, resultado.evaluation))
+
+    ruta = escribir_seleccion(resultado, tmp_path, run_id="r", hpo=tmp_path / "hpo")
+    assert ruta is not None
+    documento = next(
+        linea
+        for linea in map(json.loads, ruta.read_text().splitlines())
+        if linea["sku_id"] == "irregular"
+    )
+    familias = _familias(documento)
+
+    assert familias["classical"]["estado"] == "fallida"
+    assert familias["classical"]["error"]["code"] == "selection.no_viable_trial"
+    for familia in ("ml", "dl"):
+        assert familias[familia]["estado"] == "excluida"
+        assert familias[familia]["exclusion"]["reason_code"] == "not_in_policy_matrix"
+        assert "code" not in familias[familia]
+    assert familias["foundation"] == {
+        "family": "foundation",
+        "estado": "no_ejecutable",
+        "cause": causa,
+        "code": "eligibility.fewer_than_two_families",
+    }
 
 
 def test_la_familia_fundacional_no_tiene_ensayos_ni_contadores(documentos):
