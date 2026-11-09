@@ -397,6 +397,8 @@ def test_warm_start_inyecta_historico_sin_reevaluarlo():
     valores = {t.valor for t in resultado.trials}
     assert {1.23, 4.56} <= valores
     assert resultado.n_fallidos == 3  # solo los 3 trials NUEVOS (fabrica_rota)
+    assert resultado.n_completados == 2  # las semillas siguen en el informe
+    assert resultado.mejor is None
 
 
 def test_warm_start_con_espacio_incompatible_no_falla_el_estudio():
