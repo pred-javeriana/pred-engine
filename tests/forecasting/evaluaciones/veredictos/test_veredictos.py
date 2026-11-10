@@ -292,6 +292,80 @@ def test_instancia_campeona_fallida_no_dispara_fallback() -> None:
     assert "fallback" not in veredictos["B"].justificacion
 
 
+@pytest.mark.parametrize("pronosticos_prueba", [0, 40])
+def test_fallback_omite_familia_sin_pronosticos_de_seleccion(
+    pronosticos_prueba: int,
+) -> None:
+    def candidatos(n_ml):
+        return [
+            metricas_candidato("ml", 0.6, pronosticos_validos=n_ml),
+            metricas_candidato("dl", 0.9),
+        ]
+
+    resultado = emitir_veredictos(
+        [
+            en_bloques(
+                evaluacion("A", [metricas_candidato("classical", 0.5), *candidatos(40)])
+            ),
+            en_bloques(
+                evaluacion("B", candidatos(pronosticos_prueba)),
+                seleccion=evaluacion("B", candidatos(0)),
+            ),
+        ],
+        BLOQUES,
+        datos_sinteticos=False,
+    )
+    assert resultado.categorias[0].seleccion.familia_campeona == "classical"
+    b = next(v for v in resultado.skus if v.sku == "B")
+    assert b.familia_campeona == "dl"
+    assert b.candidato_campeon == "S/dl"
+    assert b.veredicto == ("EXPLORATORIO" if pronosticos_prueba == 0 else "VALIDADO")
+    assert b.comparacion_incompleta is (pronosticos_prueba == 0)
+
+
+@pytest.mark.parametrize("pronosticos_seleccion", [1, 40])
+def test_fallback_congelado_no_se_reelige_si_falla_en_prueba(
+    pronosticos_seleccion: int,
+) -> None:
+    def candidatos(n_ml):
+        return [
+            metricas_candidato("ml", 0.6, pronosticos_validos=n_ml),
+            metricas_candidato("dl", 0.9),
+        ]
+
+    resultado = emitir_veredictos(
+        [
+            en_bloques(
+                evaluacion("A", [metricas_candidato("classical", 0.5), *candidatos(40)])
+            ),
+            en_bloques(
+                evaluacion("B", candidatos(0)),
+                seleccion=evaluacion("B", candidatos(pronosticos_seleccion)),
+            ),
+        ],
+        BLOQUES,
+        datos_sinteticos=False,
+    )
+    b = next(v for v in resultado.skus if v.sku == "B")
+    assert b.familia_campeona == "ml"
+    assert b.candidato_campeon == "S/ml"
+    assert b.veredicto == "FALLO_TECNICO"
+    assert b.comparacion_incompleta is True
+
+
+def test_fallback_sin_pronosticos_de_seleccion_conserva_fallo_tecnico() -> None:
+    veredictos = _unico(
+        evaluacion(
+            "A", [metricas_candidato("classical", 0.5), metricas_candidato("ml", 0.6)]
+        ),
+        evaluacion("B", [metricas_candidato("ml", None, pronosticos_validos=0)]),
+    )
+    assert veredictos["B"].familia_campeona == "classical"
+    assert veredictos["B"].candidato_campeon is None
+    assert veredictos["B"].veredicto == "FALLO_TECNICO"
+    assert "fallback" not in veredictos["B"].justificacion
+
+
 def test_cada_sku_lista_todos_sus_modelos_evaluados_con_su_r() -> None:
     # B tiene su mejor r en SARIMA, aunque la categoria la gane Chronos.
     veredictos = _unico(
