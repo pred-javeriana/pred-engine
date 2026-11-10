@@ -179,12 +179,13 @@ def _veredicto_sku(
     if familia != FAMILIA_LINEA_BASE and not any(
         c.familia == familia for c in prueba.candidatos
     ):
-        # El SKU no ordena familias: se conserva el ranking de clase.
+        # Ranking y disponibilidad quedan congelados en el bloque de seleccion.
         for siguiente in sorted(
             seleccion.medianas_r, key=lambda f: (seleccion.medianas_r[f], f)
         ):
             if siguiente != familia and any(
-                c.familia == siguiente for c in prueba.candidatos
+                c.familia == siguiente and c.n_pronosticos_validos > 0
+                for c in evaluacion.seleccion.candidatos
             ):
                 fallback_desde = familia
                 familia = siguiente
