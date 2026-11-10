@@ -160,7 +160,7 @@ def test_cada_causa_de_exclusion_trae_su_codigo_y_conserva_el_texto() -> None:
 
     def codigo(serie: pd.DataFrame, motor: Any = pipeline) -> str | None:
         resultado = motor._exclusion_cause(serie, reserva)
-        return None if resultado is None else resultado[0]
+        return None if resultado is None else resultado.code
 
     assert codigo(_serie(0)) == ELEGIBILIDAD_SIN_HISTORIA
     assert codigo(_serie(10).drop(index=4)) == ELEGIBILIDAD_HUECOS
@@ -171,5 +171,6 @@ def test_cada_causa_de_exclusion_trae_su_codigo_y_conserva_el_texto() -> None:
     )
     assert codigo(_serie(10)) is None
 
-    _, causa = _pipeline(min_train=20)._exclusion_cause(_serie(10), reserva)
-    assert causa.startswith("historia admisible insuficiente: 10 dias")
+    exclusion = _pipeline(min_train=20)._exclusion_cause(_serie(10), reserva)
+    assert exclusion is not None
+    assert exclusion.cause.startswith("historia admisible insuficiente: 10 dias")

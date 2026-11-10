@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from tests.optimizacion.router.conftest import FakeStrategy
 
+from pred_engine.comun.hechos_error import hechos_de
 from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.optimizacion.optimizadores.modelos_machine_learning import (
     PRESUPUESTO_POR_PERFIL,
@@ -134,7 +135,9 @@ def test_la_serie_se_ordena_por_timestamp_antes_de_optimizar(monkeypatch):
         capturado["serie"] = serie
         return SimpleNamespace(
             seleccionada=None,
-            estudio=SimpleNamespace(resumen_causas="causas={}; motivos={}"),
+            estudio=SimpleNamespace(
+                resumen_causas="causas={}; motivos={}", hechos_busqueda=lambda: {}
+            ),
         )
 
     monkeypatch.setattr(modulo_estrategia, "seleccionar_configuracion_ml", _falso)
@@ -152,12 +155,16 @@ def test_sin_ningun_trial_completado_falla_cerrado(monkeypatch):
         lambda serie, **kw: SimpleNamespace(
             seleccionada=None,
             estudio=SimpleNamespace(
-                resumen_causas="causas={'ajuste_fallido': 5}; motivos={'sin ajuste': 5}"
+                resumen_causas=(
+                    "causas={'ajuste_fallido': 5}; motivos={'sin ajuste': 5}"
+                ),
+                hechos_busqueda=lambda: {"search": {"failed": 5, "pruned": 0}},
             ),
         ),
     )
-    with pytest.raises(SelectionContractError, match="ningun trial"):
+    with pytest.raises(SelectionContractError, match="ningun trial") as error:
         _estrategia().select(_solicitud(), "dense_stable")
+    assert hechos_de(error.value) == {"search": {"failed": 5, "pruned": 0}}
 
 
 def test_solicitud_sin_serie_falla_cerrado():

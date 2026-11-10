@@ -78,7 +78,9 @@ def _sin_ensayos(monkeypatch, modulo, nombre: str, rotos: set[str]) -> None:
         if sku_id in rotos:
             return SimpleNamespace(
                 seleccionada=None,
-                estudio=SimpleNamespace(resumen_causas="ajuste_fallido=1"),
+                estudio=SimpleNamespace(
+                    resumen_causas="ajuste_fallido=1", hechos_busqueda=lambda: {}
+                ),
             )
         return original(serie, sku_id=sku_id, **kwargs)
 
