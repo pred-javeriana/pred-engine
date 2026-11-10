@@ -56,7 +56,16 @@ def instantanea_desde_estudio(
     completados = [
         t for t in trials if t.estado == "completado" and t.valor is not None
     ]
-    mejor = min(completados, key=lambda t: t.valor, default=None)  # type: ignore[arg-type]
+    # Las semillas informan al muestreador, pero sus valores vienen de otras
+    # ventanas (ADR-020). Solo los trials de esta corrida compiten por mejor.
+    elegibles = (
+        t
+        for t, info in zip(trials, trials_backend, strict=True)
+        if t.estado == "completado"
+        and t.valor is not None
+        and not info.atributos.get("warm_start_origen")
+    )
+    mejor = min(elegibles, key=lambda t: t.valor, default=None)  # type: ignore[arg-type]
     return ResultadoEstudio(
         mejor=mejor,
         trials=tuple(trials),

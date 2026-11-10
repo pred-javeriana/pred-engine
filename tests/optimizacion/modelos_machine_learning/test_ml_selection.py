@@ -98,7 +98,8 @@ def test_la_poda_queda_auditada_con_motivo():
     assert {t.id for t in podados} <= ids_descartadas
 
 
-def test_warm_start_inyecta_trials_previos_sin_reevaluarlos():
+@pytest.mark.parametrize("reanudar", [False, True])
+def test_warm_start_inyecta_trials_previos_sin_elegirlos(tmp_path, reanudar):
     previo = InfoTrial(
         numero=0,
         estado="completado",
@@ -114,11 +115,34 @@ def test_warm_start_inyecta_trials_previos_sin_reevaluarlos():
             "reg_alpha": 1e-3,
             "reg_lambda": 1e-3,
         },
-        atributos={},
+        atributos={"trial_id": "otra-corrida"},
     )
-    resultado = seleccionar_configuracion_ml(_serie(), historico_previo=[previo], **_KW)
+    kwargs = dict(
+        _KW,
+        historico_previo=[previo],
+        raiz_corrida=tmp_path,
+        run_id="ml-warm-start",
+    )
+    resultado = seleccionar_configuracion_ml(_serie(), **kwargs)
+    if reanudar:
+        resultado = seleccionar_configuracion_ml(_serie(), **kwargs)
     assert len(resultado.estudio.trials) == _KW["n_trials"] + 1
     assert 0.123 in {t.valor for t in resultado.estudio.trials}
+    propios = [
+        t
+        for t in resultado.estudio.trials
+        if t.id != "otra-corrida" and t.estado == "completado"
+    ]
+    ganador = min(propios, key=lambda t: t.valor)
+    assert resultado.estudio.mejor == ganador
+    assert resultado.seleccionada is not None
+    assert resultado.seleccionada.valor == ganador.valor
+    assert dict(resultado.seleccionada.hiperparametros) == dict(ganador.configuracion)
+    assert resultado.seleccionada.n_ventanas == len(resultado.estudio.ventanas)
+    assert resultado.estudio.n_completados == len(propios) + 1
+    if not reanudar:
+        assert resultado.estudio.walk_forward_mejor is not None
+        assert resultado.estudio.walk_forward_mejor.valor_agregado == ganador.valor
 
 
 def test_panel_ordena_skus_y_rechaza_run_id():
