@@ -22,16 +22,19 @@ MIT licence to allow institutional publication.
 
 ```bash
 # Requires uv — https://docs.astral.sh/uv/
-uv sync --frozen --extra dev --extra foundation
+make setup   # uv sync --frozen --extra dev --extra foundation y los pesos de Chronos-2
 ```
 
 `pred-engine run` corre las cuatro familias, incluida `foundation`
 (Chronos-2), así que la instalación incluye el extra `foundation` (torch y
-chronos-forecasting). La primera corrida descarga los pesos de Chronos-2 en la
-revisión fijada a la caché de Hugging Face (`~/.cache/huggingface`, o
-`HF_HOME`). Las corridas siguientes leen los pesos de esa caché, también sin
+chronos-forecasting). `make setup` también descarga una vez los pesos de
+Chronos-2 en la revisión fijada a la caché de Hugging Face
+(`~/.cache/huggingface`, o `HF_HOME`); sin ese paso los descarga la primera
+corrida. Las corridas siguientes leen los pesos de esa caché, también sin
 red con `HF_HUB_OFFLINE=1`. En un equipo sin espacio o memoria para Chronos-2,
-instale sin `--extra foundation` y pase `--no-foundation` a `pred-engine run`.
+instale con `make setup FUNDACIONAL=no` y pase `--no-foundation` a
+`pred-engine run`. Para instalar el motor junto con la plataforma, corra
+`make setup` en pred-platform: llama a este mismo comando.
 
 ## Running tests
 
