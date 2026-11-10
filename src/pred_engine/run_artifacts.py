@@ -143,7 +143,11 @@ def run_identifier(input_sha256: str, settings: Mapping[str, Any]) -> str:
 def _contexto(fitting: FittingArtifact) -> ContextoParticion:
     """Particion de 3.1 con la que M2 optimizo; M3 la exige identica."""
     return ContextoParticion(
-        ingesta_ref_m1=sha256_file(fitting.ingestion.parquet_path),
+        ingesta_ref_m1=(
+            fitting.ingestion.parquet_sha256
+            if fitting.ingestion.parquet_sha256 is not None
+            else sha256_file(fitting.ingestion.parquet_path)
+        ),
         t_corte_reserva=fitting.reserve.t_star.date(),
         fraccion_reserva=fitting.reserve.fraction,
     )
