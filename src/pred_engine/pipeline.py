@@ -46,7 +46,7 @@ from pred_engine.comun.errores_codigo import (
     codigo_de,
 )
 from pred_engine.comun.exclusiones import SkuExclusion
-from pred_engine.comun.hechos_error import hechos_de
+from pred_engine.comun.hechos_error import hechos_de, historia
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
@@ -395,10 +395,7 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     if fitting is None:
         if ingestion is not None and ingestion.exclusions:
             summary["excluded_count"] = len(ingestion.exclusions)
-            summary["exclusions"] = [
-                {"sku_id": item.sku_id, "cause": item.cause, "code": item.code}
-                for item in ingestion.exclusions
-            ]
+            summary["exclusions"] = [item.como_dict() for item in ingestion.exclusions]
         else:
             summary["excluded_count"] = 0
             summary["exclusions"] = []
@@ -408,10 +405,7 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
     if evaluation is not None:
         summary["units"]["L3"] = _unit_counts(evaluation.units)
     summary["excluded_count"] = len(fitting.exclusions)
-    summary["exclusions"] = [
-        {"sku_id": item.sku_id, "cause": item.cause, "code": item.code}
-        for item in fitting.exclusions
-    ]
+    summary["exclusions"] = [item.como_dict() for item in fitting.exclusions]
     summary["failures"] = [
         {
             "stage": unit.stage,
@@ -984,38 +978,44 @@ class Pipeline:
 
     def _exclusion_cause(
         self, admissible: pd.DataFrame, reserve: ReserveCut
-    ) -> tuple[str, str] | None:
-        """``(codigo, causa)`` de la exclusion, o ``None`` si el SKU es elegible."""
+    ) -> SkuExclusion | None:
+        """La exclusion del SKU (sin ``sku_id``), o ``None`` si el SKU es elegible."""
         if admissible.empty:
-            return (
-                ELEGIBILIDAD_SIN_HISTORIA,
+            return SkuExclusion(
+                "",
                 "sin historia admisible: la serie comienza despues de t*",
+                ELEGIBILIDAD_SIN_HISTORIA,
             )
         timestamps = admissible["timestamp"]
         if not timestamps.diff().iloc[1:].eq(pd.Timedelta(days=1)).all():
-            return (
-                ELEGIBILIDAD_HUECOS,
+            return SkuExclusion(
+                "",
                 "calendario diario con huecos (daily grid requerido)",
+                ELEGIBILIDAD_HUECOS,
             )
         if timestamps.iloc[-1] != reserve.t_star:
-            return (
-                ELEGIBILIDAD_SIN_RESERVA,
+            return SkuExclusion(
+                "",
                 "la serie termina antes de t*: no tiene observaciones reservadas",
+                ELEGIBILIDAD_SIN_RESERVA,
             )
         if not np.isfinite(admissible["demand_qty"].to_numpy(dtype=float)).all():
-            return (
-                ELEGIBILIDAD_NO_FINITA,
+            return SkuExclusion(
+                "",
                 "demanda no finita en la historia admisible",
+                ELEGIBILIDAD_NO_FINITA,
             )
         pasos = ReglasPoda().min_ventanas - 1
         needed = (
             self.settings.min_train + self.settings.horizon + pasos * self.settings.step
         )
         if len(admissible) < needed:
-            return (
-                ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
+            return SkuExclusion(
+                "",
                 f"historia admisible insuficiente: {len(admissible)} dias, se "
                 f"requieren {needed} (min_train + horizonte + {pasos} pasos)",
+                ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
+                hechos=historia(needed, len(admissible)),
             )
         return None
 
@@ -1042,15 +1042,15 @@ class Pipeline:
             for e in exclusions_l1
         ]
         for item in exclusions:
-            self._emit("excluded", sku_id=item.sku_id, cause=item.cause, code=item.code)
+            self._emit("excluded", **item.como_dict())
         for sku_id, group in panel.groupby("sku_id", sort=True):
             ordered = group.sort_values("timestamp")
             admissible = ordered.loc[ordered["timestamp"] <= reserve.t_star]
             exclusion = self._exclusion_cause(admissible, reserve)
             if exclusion is not None:
-                code, cause = exclusion
-                exclusions.append(SkuExclusion(str(sku_id), cause, code))
-                self._emit("excluded", sku_id=str(sku_id), cause=cause, code=code)
+                exclusion = replace(exclusion, sku_id=str(sku_id))
+                exclusions.append(exclusion)
+                self._emit("excluded", **exclusion.como_dict())
                 continue
             series = tuple(
                 ClassifiedObservation(**row)
@@ -1121,7 +1121,7 @@ class Pipeline:
         )
         for item in single_family:
             exclusions.append(item)
-            self._emit("excluded", sku_id=item.sku_id, cause=item.cause, code=item.code)
+            self._emit("excluded", **item.como_dict())
         # Con unidades fallidas, M3 nativo decide: FALLO_TECNICO, la receta
         # durable de una reanudacion o ningun SKU que juzgar.
         if not candidates and not (

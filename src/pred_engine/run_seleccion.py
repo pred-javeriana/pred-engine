@@ -140,6 +140,9 @@ class _Contexto:
         self.t_star = fitting.reserve.t_star
         self.excluidos = {e.sku_id: e.cause for e in fitting.exclusions}
         self.codigos_exclusion = {e.sku_id: e.code for e in fitting.exclusions}
+        self.hechos_exclusion = {
+            e.sku_id: dict(e.hechos) for e in fitting.exclusions if e.hechos
+        }
         self.candidatos: dict[tuple[str, str], FittedCandidate] = {
             (c.selection.sku_id, c.selection.family): c for c in fitting.candidates
         }
@@ -215,6 +218,9 @@ def _familia(
         codigo = ctx.codigos_exclusion.get(sku_id)
         if codigo is not None:
             entrada_excluida["code"] = codigo
+        hechos = ctx.hechos_exclusion.get(sku_id)
+        if hechos:
+            entrada_excluida["facts"] = hechos
         return entrada_excluida
 
     candidato = ctx.candidatos.get(clave)

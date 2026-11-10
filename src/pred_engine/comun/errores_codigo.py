@@ -256,6 +256,7 @@ def codigos_conocidos() -> frozenset[str]:
             ELEGIBILIDAD_SIN_RESERVA,
             ELEGIBILIDAD_NO_FINITA,
             ELEGIBILIDAD_HISTORIA_INSUFICIENTE,
+            ELEGIBILIDAD_SIN_FAMILIA,
             ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
         }
     )

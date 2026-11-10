@@ -9,6 +9,7 @@ import pytest
 from tests.optimizacion.modelos_deep_learning.test_dl_selection import CHICO, serie
 from tests.optimizacion.router.conftest import FakeStrategy
 
+from pred_engine.comun.hechos_error import hechos_de
 from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.optimizacion.optimizadores.modelos_deep_learning import (
     DLSelectionStrategy,
@@ -120,10 +121,14 @@ def test_sin_ganador_no_devuelve_resultado_vacio(monkeypatch):
         lambda *a, **k: SimpleNamespace(
             mejor=None,
             resumen_causas="causas={'ajuste_fallido': 2, 'escalon': 1}",
+            hechos_busqueda=lambda: {"search": {"failed": 2, "pruned": 1}},
         ),
     )
-    with pytest.raises(SelectionContractError, match="ajuste_fallido.*escalon"):
+    with pytest.raises(
+        SelectionContractError, match="ajuste_fallido.*escalon"
+    ) as error:
         estrategia().select(solicitud(), "dense_stable")
+    assert hechos_de(error.value) == {"search": {"failed": 2, "pruned": 1}}
 
 
 def test_series_sin_historia_fallan_cerrado():

@@ -30,6 +30,10 @@ cual o interpretarlo.
 4. `RegistroUnidad.hechos` los lleva a `facts`, junto a `code`, en `unit_finished` y
    `stage_finished`, `unidades.jsonl`, `corrida.json` (`failures`) y `seleccion.jsonl` (`error`).
    Una unidad sin hechos conocidos no lleva el campo; el texto no cambia.
+5. Una exclusión de SKU también lleva sus hechos (`SkuExclusion.hechos`): la historia
+   insuficiente da los días exigidos y los disponibles en `excluded`, `exclusions` y
+   `no_ejecutable`. `codigos_conocidos` suma `eligibility.no_configured_family`, que el motor
+   ya emitía.
 
 ## Consequences
 
