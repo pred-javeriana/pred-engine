@@ -1,4 +1,16 @@
-.PHONY: test test-cov lint format pyright motor-local
+.PHONY: setup test test-cov lint format pyright motor-local
+
+# Instala las dependencias fijadas y deja en la cache los pesos de Chronos-2 (familia foundation),
+# asi la primera corrida no los descarga. Sin espacio o memoria para Chronos-2:
+# make setup FUNDACIONAL=no, y corra sin foundation (--no-foundation).
+FUNDACIONAL ?= si
+setup:
+ifeq ($(FUNDACIONAL),no)
+	uv sync --frozen --extra dev
+else
+	uv sync --frozen --extra dev --extra foundation
+	uv run python -c "from pred_engine.comun.modelos.modelos_fundacionales import CHRONOS2_ZERO_SHOT, cargar_pipeline; cargar_pipeline(CHRONOS2_ZERO_SHOT)"
+endif
 
 test:
 	uv run pytest -q
