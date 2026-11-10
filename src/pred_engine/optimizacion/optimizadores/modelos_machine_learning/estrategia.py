@@ -123,7 +123,8 @@ class MLSelectionStrategy:
         if seleccionada is None:
             raise NingunTrialCompletoError(
                 f"ningun trial de HPO completo para sku_id={request.sku_id!r} "
-                f"({resultado.estudio.resumen_causas})"
+                f"({resultado.estudio.resumen_causas})",
+                hechos=resultado.estudio.hechos_busqueda(),
             )
 
         _logger.info(

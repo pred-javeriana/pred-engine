@@ -78,3 +78,14 @@ def test_causa_l2_en_unidades_corrida_y_seleccion(tmp_path, monkeypatch, invalid
     assert familia["trials"][0]["motivo"].startswith(
         "configuracion_invalida:" if invalido else "ventana=1 ajuste_fallido:"
     )
+    # Los mismos hechos, en campos, en los tres archivos (contrato 11.1).
+    ejemplo = {"constraint": "limite_nivel"} if invalido else {"window": 1}
+    causas = [{"cause": causa, "count": 21 if invalido else 1, "example": ejemplo}]
+    hechos = (
+        {"failed": 21, "pruned": 0, "invalid_attempts": 21, "causes": causas}
+        if invalido
+        else {"failed": 1, "pruned": 0, "causes": causas}
+    )
+    assert fallida["facts"] == {"search": hechos}
+    assert corrida["summary"]["failures"][0]["facts"] == {"search": hechos}
+    assert familia["error"]["facts"] == {"search": hechos}

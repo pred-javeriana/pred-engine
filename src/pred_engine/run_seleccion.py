@@ -71,20 +71,27 @@ def _modelo(familia: str) -> str:
 
 def _fallo(
     unidad: UnitExecution | None, etapa: str, texto: str | None
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """``texto`` es lo que registra la unidad: ``NombreDeClase: mensaje``.
 
     ``code`` (seccion 11 del contrato) solo va si la unidad lo registro; cuando falla
-    la etapa entera no hay un tipo de excepcion al que atribuirlo.
+    la etapa entera no hay un tipo de excepcion al que atribuirlo. ``facts`` (11.1)
+    solo va si el error de la unidad conocia sus hechos.
     """
-    codigo = None
+    codigo = hechos = None
     if unidad is not None and unidad.record.error:
         texto = unidad.record.error
         etapa = unidad.stage
         codigo = unidad.record.codigo
-    fallo = {"stage": etapa, "text": texto or "La unidad fallo sin detalle."}
+        hechos = unidad.record.hechos
+    fallo: dict[str, Any] = {
+        "stage": etapa,
+        "text": texto or "La unidad fallo sin detalle.",
+    }
     if codigo is not None:
         fallo["code"] = codigo
+    if hechos:
+        fallo["facts"] = dict(hechos)
     return fallo
 
 

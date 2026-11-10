@@ -46,6 +46,7 @@ from pred_engine.comun.errores_codigo import (
     codigo_de,
 )
 from pred_engine.comun.exclusiones import SkuExclusion
+from pred_engine.comun.hechos_error import hechos_de
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.modelos import ClassifiedObservation, TopologyMetrics
 from pred_engine.comun.modelos.manifiesto_candidatos import MODELO_POR_FAMILIA
@@ -418,6 +419,7 @@ def summarize_run(result: PipelineResult) -> dict[str, Any]:
             "family": unit.family,
             "error": unit.record.error,
             "code": unit.record.codigo,
+            **({"facts": dict(unit.record.hechos)} if unit.record.hechos else {}),
         }
         for unit in result.failures
     ]
@@ -1248,6 +1250,7 @@ class Pipeline:
                         state="failed",
                         message=str(exc),
                         code=codigo_de(exc, etapa=str(current.definition.id)),
+                        **({"facts": hechos} if (hechos := hechos_de(exc)) else {}),
                     )
                     raise PipelineExecutionError(
                         current.definition.id,

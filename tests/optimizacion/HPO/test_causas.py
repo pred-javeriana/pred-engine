@@ -114,6 +114,15 @@ def test_cada_estrategia_explica_el_fallo_de_ajuste(
         getattr(modulo, clase)().select(request, "dense_stable")
     assert "causas={'ajuste_fallido': 2}" in str(error.value)
     assert "ventana=1 ajuste_fallido: RuntimeError" in str(error.value)
+    assert error.value.hechos == {
+        "search": {
+            "failed": 2,
+            "pruned": 0,
+            "causes": [
+                {"cause": "ajuste_fallido", "count": 2, "example": {"window": 1}}
+            ],
+        }
+    }
 
 
 def test_causas_agrupa_prefijos_sin_perder_motivos():

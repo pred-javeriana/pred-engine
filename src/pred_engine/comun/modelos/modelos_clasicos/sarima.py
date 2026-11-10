@@ -10,6 +10,7 @@ import numpy as np
 if TYPE_CHECKING:
     from statsmodels.tsa.statespace.sarimax import SARIMAXResultsWrapper
 
+from pred_engine.comun.hechos_error import ajuste
 from pred_engine.comun.modelos.modelos_clasicos.errores import AjusteModeloError
 from pred_engine.forecasting.base import BaseForecaster
 
@@ -46,6 +47,11 @@ class SarimaForecaster(BaseForecaster):
         self.tendencia = tendencia
         self.max_iter = max_iter
         self._resultado_ajuste: SARIMAXResultsWrapper | None = None
+
+    @property
+    def _etiqueta(self) -> str:
+        """El modelo como se nombra en errores: ``SARIMA(p, d, q)x(P, D, Q, s)``."""
+        return f"SARIMA{self.order}x{self.seasonal_order}"
 
     def fit(self, y: np.ndarray) -> SarimaForecaster:
         from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -86,7 +92,8 @@ class SarimaForecaster(BaseForecaster):
                 )
         except (np.linalg.LinAlgError, ValueError) as exc:
             raise AjusteModeloError(
-                f"SARIMA{self.order}x{self.seasonal_order} no convergio: {exc}"
+                f"{self._etiqueta} no convergio: {exc}",
+                hechos=ajuste("sin_convergencia", modelo=self._etiqueta),
             ) from exc
 
         # Los polinomios reducidos incluyen los factores estacionales: una raiz
@@ -96,9 +103,15 @@ class SarimaForecaster(BaseForecaster):
         )
         if modulo < MODULO_MINIMO_RAIZ:
             raise AjusteModeloError(
-                f"SARIMA{self.order}x{self.seasonal_order} con una raiz AR/MA de "
+                f"{self._etiqueta} con una raiz AR/MA de "
                 f"modulo {modulo:.4f} (< {MODULO_MINIMO_RAIZ}): ajuste en el borde "
-                "de la region estacionaria o invertible"
+                "de la region estacionaria o invertible",
+                hechos=ajuste(
+                    "raiz_en_borde",
+                    modelo=self._etiqueta,
+                    valor=float(modulo),
+                    limite=MODULO_MINIMO_RAIZ,
+                ),
             )
         self._resultado_ajuste = resultado
         self._fitted = True

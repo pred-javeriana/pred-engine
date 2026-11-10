@@ -260,6 +260,7 @@ def write_run(
                 else round(unit.record.cpu_s, 3),
                 "error": unit.record.error,
                 "code": unit.record.codigo,
+                **({"facts": dict(unit.record.hechos)} if unit.record.hechos else {}),
                 "reused": unit.reused,
             },
             ensure_ascii=False,

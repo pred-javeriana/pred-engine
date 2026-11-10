@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pred_engine.comun.errores_codigo import codigo_de
+from pred_engine.comun.hechos_error import hechos_de
 from pred_engine.comun.logger import get_logger
 
 _logger = get_logger(__name__)
@@ -116,7 +117,8 @@ class RegistroUnidad:
 
     ``cpu_s`` es el tiempo de CPU que consumio el proceso mientras corria la
     unidad (todas sus hebras); ``None`` si la unidad no llego a correr. ``codigo`` es
-    el codigo estable del error (seccion 11 del contrato), solo en unidades fallidas.
+    el codigo estable del error (seccion 11 del contrato), solo en unidades fallidas,
+    y ``hechos`` sus hechos en campos (11.1) cuando el error los conoce.
     """
 
     estado: EstadoUnidad
@@ -126,6 +128,7 @@ class RegistroUnidad:
     error: str | None = None
     cpu_s: float | None = None
     codigo: str | None = None
+    hechos: Mapping[str, Any] | None = None
 
     @property
     def duracion_s(self) -> float:
@@ -220,6 +223,7 @@ def _evento_fin(
         cpu_s=None if registro.cpu_s is None else round(registro.cpu_s, 3),
         error=registro.error,
         code=registro.codigo,
+        **({"facts": dict(registro.hechos)} if registro.hechos else {}),
     )
 
 
@@ -258,6 +262,7 @@ def _ejecutar_aislada[T, R](
                     estado="fallida",
                     error=describir_error(exc),
                     codigo=codigo_de(exc, etapa=etapa),
+                    hechos=hechos_de(exc),
                 )
             )
     if seguimiento:
@@ -281,6 +286,7 @@ def _correr_aislada[T, R](
             describir_error(exc),
             time.process_time() - cpu,
             codigo_de(exc, etapa=etapa),
+            hechos_de(exc),
         )
         return ResultadoUnidad(registro)
     registro = RegistroUnidad(
@@ -459,6 +465,7 @@ def resultado_de[R](
             time.time(),
             describir_error(exc),
             codigo=codigo_de(exc, etapa=None if etiqueta is None else etiqueta.etapa),
+            hechos=hechos_de(exc),
         )
         if etiqueta is not None and ruta is not None:
             # El hijo murio sin poder anotar su fin: lo anota el padre.

@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 
+from pred_engine.comun.hechos_error import ajuste
 from pred_engine.comun.modelos.modelos_fundacionales.configuracion import (
     CHRONOS2_ZERO_SHOT,
 )
@@ -88,12 +89,16 @@ class Chronos2Forecaster(BaseForecaster):
                 pipeline.pronosticar_cuantiles(contexto, horizon), dtype=float
             )
         except Exception as exc:
-            raise AjusteModeloError(f"Chronos-2 no pronostico: {exc}") from exc
+            raise AjusteModeloError(
+                f"Chronos-2 no pronostico: {exc}",
+                hechos=ajuste("pronostico_fallido", modelo="Chronos-2"),
+            ) from exc
 
         esperado = (len(pipeline.cuantiles), horizon)
         if cuantiles.shape != esperado:
             raise AjusteModeloError(
-                f"forma de cuantiles {cuantiles.shape}, se esperaba {esperado}"
+                f"forma de cuantiles {cuantiles.shape}, se esperaba {esperado}",
+                hechos=ajuste("forma_cuantiles", modelo="Chronos-2"),
             )
         return self._recortar_no_negativo(cuantiles)
 
@@ -106,7 +111,8 @@ class Chronos2Forecaster(BaseForecaster):
         objetivo = self.configuracion.cuantil_puntual
         if objetivo not in niveles:
             raise AjusteModeloError(
-                f"el modelo no emite el cuantil {objetivo} (emite {niveles})"
+                f"el modelo no emite el cuantil {objetivo} (emite {niveles})",
+                hechos=ajuste("cuantil_ausente", modelo="Chronos-2"),
             )
         return niveles.index(objetivo)
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Sequence
+from typing import Any
 
 from pred_engine.comun.dataclasses.hpo import ResultadoEstudio, Trial, causa_trial
 from pred_engine.comun.dataclasses.validacion_temporal import VentanaTemporal
@@ -49,6 +50,7 @@ def instantanea_desde_estudio(
             familia=str(t.atributos.get("familia", familia)),
             sku_id=t.atributos.get("sku_id"),
             timestamp=t.atributos.get("timestamp"),
+            hechos=_hechos(t.atributos.get("hechos")),
         )
         for t in trials_backend
     ]
@@ -83,3 +85,8 @@ def instantanea_desde_estudio(
             )
         ),
     )
+
+
+def _hechos(valor: object) -> dict[str, Any] | None:
+    """Los hechos del trial si el backend guardo un objeto; si no, ninguno."""
+    return dict(valor) if isinstance(valor, dict) and valor else None

@@ -9,6 +9,7 @@ tres formas con el mismo vocabulario.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -172,22 +173,46 @@ class EspacioBusqueda:
             "intentos (las restricciones descartan casi todo el espacio)"
         )
 
-    def restriccion_violada(self, configuracion: Mapping[str, Any]) -> str | None:
-        """Nombre de la primera restriccion que descarta la configuracion."""
+    def primera_restriccion_violada(
+        self, configuracion: Mapping[str, Any]
+    ) -> Callable[[Mapping[str, Any]], bool] | None:
+        """La primera restriccion que descarta la configuracion."""
         for restriccion in self.restricciones:
             if not restriccion(configuracion):
-                return (
-                    _etiqueta_restriccion(restriccion)
-                    if hasattr(restriccion, "__code__")
-                    else repr(restriccion)
-                )
+                return restriccion
         return None
+
+    def restriccion_violada(self, configuracion: Mapping[str, Any]) -> str | None:
+        """Nombre de la primera restriccion que descarta la configuracion."""
+        restriccion = self.primera_restriccion_violada(configuracion)
+        if restriccion is None:
+            return None
+        return (
+            _etiqueta_restriccion(restriccion)
+            if hasattr(restriccion, "__code__")
+            else repr(restriccion)
+        )
 
     def es_valida(self, configuracion: Mapping[str, Any]) -> bool:
         return self.restriccion_violada(configuracion) is None
 
     def descripcion_canonica(self) -> dict[str, Any]:
         return descripcion_canonica(self)
+
+
+def nombre_restriccion(restriccion: Callable[..., Any]) -> str | None:
+    """Nombre corto y estable de una restriccion, para los hechos de un ensayo.
+
+    Es el de la funcion sin guion bajo inicial (``orden_total_acotado``) o el de la
+    clase de un invocable en minusculas con guiones bajos (``costo_acotado``); una
+    lambda no tiene nombre. A diferencia de ``_etiqueta_restriccion``, no nombra el
+    modulo: es lo que la interfaz traduce.
+    """
+    nombre = getattr(restriccion, "__name__", None)
+    if nombre is None:
+        nombre = re.sub(r"(?<!^)(?=[A-Z])", "_", type(restriccion).__name__).lower()
+    nombre = nombre.lstrip("_")
+    return None if not nombre or "lambda" in nombre else nombre
 
 
 def _etiqueta_restriccion(restriccion: Callable[..., Any]) -> str:

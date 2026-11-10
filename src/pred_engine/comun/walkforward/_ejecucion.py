@@ -18,6 +18,7 @@ from pred_engine.comun.dataclasses.validacion_temporal import (
     ResultadoVentana,
     VentanaTemporal,
 )
+from pred_engine.comun.hechos_error import hechos_de
 from pred_engine.comun.walkforward.metricas import calcular_metricas
 from pred_engine.comun.walkforward.protocolos import FabricaPronosticador
 from pred_engine.comun.walkforward.semillas import derivar_semilla
@@ -54,12 +55,14 @@ def ejecutar_ventana(
             y_real, y_pred, y_train=y_train, estacionalidad=estacionalidad
         )
         fallo = None
+        fallo_hechos = None
     except Exception as exc:
         if not tolerar_fallos:
             raise
         y_pred = np.full(ventana.horizonte, np.nan)
         metricas = dict(_METRICAS_FALLO)
         fallo = f"{type(exc).__name__}: {exc}"
+        fallo_hechos = hechos_de(exc)
     duracion = time.perf_counter() - inicio
 
     return ResultadoVentana(
@@ -70,4 +73,5 @@ def ejecutar_ventana(
         y_pred=y_pred,
         duracion_s=duracion,
         fallo=fallo,
+        fallo_hechos=fallo_hechos,
     )

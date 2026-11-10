@@ -96,7 +96,8 @@ class DLSelectionStrategy:
         if mejor is None or mejor.valor is None:
             raise NingunTrialCompletoError(
                 f"ningun trial de HPO completo para sku_id={request.sku_id!r} "
-                f"({estudio.resumen_causas})"
+                f"({estudio.resumen_causas})",
+                hechos=estudio.hechos_busqueda(),
             )
         return SelectionResult(
             sku_id=request.sku_id,

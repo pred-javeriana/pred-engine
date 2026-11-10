@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +20,7 @@ import numpy as np
 
 from pred_engine.comun.dataclasses.hpo import ResultadoEstudio
 from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
+from pred_engine.comun.hechos_error import compactar
 from pred_engine.comun.logger import get_logger
 from pred_engine.comun.walkforward.protocolos import FabricaPronosticador
 from pred_engine.comun.walkforward.semillas import derivar_semilla
@@ -52,6 +53,7 @@ from pred_engine.optimizacion.optimizadores.HPO.espacio import (
     Flotante,
     Ordinal,
     Parametro,
+    nombre_restriccion,
 )
 from pred_engine.optimizacion.optimizadores.HPO.muestreadores import (
     construir_muestreador_tpe,
@@ -254,7 +256,10 @@ def ejecutar_estudio(
                         "configuraciones muestreadas "
                         f"({intentos_invalidos} intentos invalidos); revise "
                         "las restricciones de EspacioBusqueda; "
-                        f"{diagnostico.resumen_causas}"
+                        f"{diagnostico.resumen_causas}",
+                        hechos=diagnostico.hechos_busqueda(
+                            intentos_invalidos=intentos_invalidos
+                        ),
                     )
                 continue
             intentos_invalidos = 0
@@ -350,9 +355,13 @@ def _sugerir_configuracion(
         ):
             continue
         configuracion[parametro.nombre] = _sugerir_parametro(trial, parametro)
-    restriccion = espacio.restriccion_violada(configuracion)
+    restriccion = espacio.primera_restriccion_violada(configuracion)
     if restriccion is not None:
-        trial.set_user_attr("motivo", f"configuracion_invalida:{restriccion}")
+        trial.set_user_attr(
+            "motivo",
+            f"configuracion_invalida:{espacio.restriccion_violada(configuracion)}",
+        )
+        _anotar_hechos(trial, {"constraint": nombre_restriccion(restriccion)})
         return None
     return configuracion
 
@@ -398,6 +407,13 @@ def _correr_trial(
                 "motivo",
                 f"ventana={estado.n_evaluadas} ajuste_fallido: {estado.ultima.fallo}",
             )
+            _anotar_hechos(
+                trial,
+                {
+                    "window": estado.n_evaluadas,
+                    "fit": (estado.ultima.fallo_hechos or {}).get("fit"),
+                },
+            )
             study.tell(trial, None, estado="fallido")
             return
 
@@ -419,23 +435,33 @@ def _correr_trial(
                     estado.n_evaluadas,
                     estado.valor_parcial,
                     motivo_completo,
+                    hechos={
+                        "window": estado.n_evaluadas,
+                        "value": estado.valor_parcial,
+                        "rule": motivo_semantico,
+                    },
                 )
                 return
 
         if trial.should_prune():
             motivo_asha = pruner.motivo_de(trial.number)
+            hechos_asha = pruner.hechos_de(trial.number)
+            hechos: Mapping[str, Any] | None
             # Sin valor finito no hay completado: queda fallido, con su motivo.
             if estado.n_evaluadas == estado.n_totales and math.isfinite(
                 estado.valor_parcial
             ):
                 # El backend conserva PRUNED para no cambiar el muestreo TPE.
                 trial.set_user_attr("estado_motor", "completado")
-                motivo_completo = None
+                motivo_completo, hechos = None, None
+            elif motivo_asha:
+                motivo_completo, hechos = motivo_asha, hechos_asha
             else:
-                motivo_completo = motivo_asha or (
+                motivo_completo = (
                     f"ventana={estado.n_evaluadas} "
                     f"valor={estado.valor_parcial:.6g} asha"
                 )
+                hechos = {"window": estado.n_evaluadas, "value": estado.valor_parcial}
             ejecutor.cerrar("asha")
             _cerrar_podado_o_fallido(
                 trial,
@@ -443,8 +469,20 @@ def _correr_trial(
                 estado.n_evaluadas,
                 estado.valor_parcial,
                 motivo_completo,
+                hechos=hechos,
             )
             return
+
+
+def _anotar_hechos(trial: TrialHPO, hechos: Mapping[str, Any]) -> None:
+    """Guarda el motivo del descarte en campos (``DiscardExample``, contrato 11.1).
+
+    Viaja con el trial en el backend, de modo que un estudio reanudado conserva el
+    ejemplo de cada causa.
+    """
+    limpio = compactar(hechos)
+    if limpio:
+        trial.set_user_attr("hechos", limpio)
 
 
 def _cerrar_por_agotamiento(
@@ -466,10 +504,14 @@ def _cerrar_podado_o_fallido(
     n_evaluadas: int,
     valor_parcial: float,
     motivo: str | None,
+    *,
+    hechos: Mapping[str, Any] | None = None,
 ) -> None:
     trial.set_user_attr("n_ventanas", n_evaluadas)
     if motivo is not None:
         trial.set_user_attr("motivo", motivo)
+    if hechos:
+        _anotar_hechos(trial, hechos)
     if math.isfinite(valor_parcial):
         # No se pasa `valor_parcial` aqui: ya se reporto via `trial.report()`
         # en `_correr_trial` justo antes de esta llamada, y el backend

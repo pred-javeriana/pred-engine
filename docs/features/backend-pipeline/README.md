@@ -111,7 +111,9 @@ candidates, not just those whose L3 reevaluation completed.
 Cada exclusión y cada falla de unidad lleva un código estable (ADR-022):
 `eligibility.*` en `exclusions[].code`, y el código de la excepción en
 `failures[].code`, `unidades.jsonl`, el evento `unit_finished` y
-`seleccion.jsonl`. El texto (`cause`, `error`) sigue siendo el detalle técnico.
+`seleccion.jsonl`. El texto (`cause`, `error`) sigue siendo el detalle técnico. Junto al
+código va `facts` cuando el error conoce sus hechos (ADR-024): la búsqueda sin ensayos
+completos con cada causa y un ejemplo, el ajuste que falló o la historia que faltó.
 
 `ValidationArtifact` exposes one `SkuVerdict` per handed-off SKU and an
 `audit_bundle` with M3 identity, publication, coverage and export paths.

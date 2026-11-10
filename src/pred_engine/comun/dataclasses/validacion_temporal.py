@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -53,6 +54,8 @@ class ResultadoVentana:
     y_pred: np.ndarray
     duracion_s: float
     fallo: str | None = None
+    # Hechos del fallo (contrato 1.3.0, 11.1), p. ej. ``{"fit": {...}}``.
+    fallo_hechos: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
