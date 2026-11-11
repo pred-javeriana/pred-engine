@@ -14,6 +14,7 @@ from pred_engine.comun.dataclasses.validacion_temporal import (
     ResultadoWalkForward,
     VentanaTemporal,
 )
+from pred_engine.comun.hechos_error import Hechos, compactar
 
 EstadoTrial = Literal["pendiente", "corriendo", "completado", "podado", "fallido"]
 
@@ -46,6 +47,9 @@ class Trial:
     familia: str
     sku_id: str | None = None
     timestamp: str | None = None
+    # El motivo en campos (``DiscardExample`` del contrato 1.3.0, 11.1); ``None`` en
+    # trials completados y en los registrados antes de existir.
+    hechos: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -76,4 +80,36 @@ class ResultadoEstudio:
         return (
             f"{self.n_fallidos} fallidos, {self.n_podados} podados; "
             f"causas={dict(self.causas)}; motivos={motivos}"
+        )
+
+    def hechos_busqueda(self, *, intentos_invalidos: int | None = None) -> Hechos:
+        """``{"search": ...}`` (``SearchFacts`` del contrato 1.3.0, 11.1).
+
+        Las causas van de la mas frecuente a la menos (y por nombre si empatan); el
+        ejemplo de cada una es su primer trial descartado que registro sus hechos.
+        """
+        ejemplos: dict[str, Mapping[str, Any]] = {}
+        for trial in self.trials:
+            if trial.estado in ("fallido", "podado") and trial.hechos:
+                ejemplos.setdefault(causa_trial(trial.motivo), trial.hechos)
+        causas = sorted(self.causas.items(), key=lambda item: (-item[1], item[0]))
+        return compactar(
+            {
+                "search": {
+                    "failed": self.n_fallidos,
+                    "pruned": self.n_podados,
+                    "invalid_attempts": intentos_invalidos,
+                    "causes": [
+                        compactar(
+                            {
+                                "cause": causa,
+                                "count": cantidad,
+                                "example": ejemplos.get(causa),
+                            }
+                        )
+                        for causa, cantidad in causas
+                        if cantidad > 0
+                    ],
+                }
+            }
         )

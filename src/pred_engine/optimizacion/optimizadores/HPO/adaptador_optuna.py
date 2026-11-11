@@ -15,7 +15,7 @@ mismo motivo: son formato-Optuna por naturaleza (serializan/reconstruyen un
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -66,6 +66,7 @@ class PodadorASHAOptuna(optuna.pruners.BasePruner):
     def __init__(self, decisor: DecisorASHA) -> None:
         self._decisor = decisor
         self._motivos: dict[int, str] = {}
+        self._hechos: dict[int, Mapping[str, Any]] = {}
 
     def escalones(self) -> tuple[int, ...]:
         return self._decisor.escalones()
@@ -73,6 +74,10 @@ class PodadorASHAOptuna(optuna.pruners.BasePruner):
     def motivo_de(self, trial_number: int) -> str | None:
         """Consume (pop) el motivo de poda de un trial concreto."""
         return self._motivos.pop(trial_number, None)
+
+    def hechos_de(self, trial_number: int) -> Mapping[str, Any] | None:
+        """Consume (pop) los hechos de la poda de un trial concreto."""
+        return self._hechos.pop(trial_number, None)
 
     def prune(self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial) -> bool:
         valores_intermedios = trial.intermediate_values
@@ -102,6 +107,8 @@ class PodadorASHAOptuna(optuna.pruners.BasePruner):
         )
         if decision.podar and decision.motivo:
             self._motivos[trial.number] = decision.motivo
+            if decision.hechos:
+                self._hechos[trial.number] = decision.hechos
         return decision.podar
 
 

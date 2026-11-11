@@ -71,20 +71,27 @@ def _modelo(familia: str) -> str:
 
 def _fallo(
     unidad: UnitExecution | None, etapa: str, texto: str | None
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """``texto`` es lo que registra la unidad: ``NombreDeClase: mensaje``.
 
     ``code`` (seccion 11 del contrato) solo va si la unidad lo registro; cuando falla
-    la etapa entera no hay un tipo de excepcion al que atribuirlo.
+    la etapa entera no hay un tipo de excepcion al que atribuirlo. ``facts`` (11.1)
+    solo va si el error de la unidad conocia sus hechos.
     """
-    codigo = None
+    codigo = hechos = None
     if unidad is not None and unidad.record.error:
         texto = unidad.record.error
         etapa = unidad.stage
         codigo = unidad.record.codigo
-    fallo = {"stage": etapa, "text": texto or "La unidad fallo sin detalle."}
+        hechos = unidad.record.hechos
+    fallo: dict[str, Any] = {
+        "stage": etapa,
+        "text": texto or "La unidad fallo sin detalle.",
+    }
     if codigo is not None:
         fallo["code"] = codigo
+    if hechos:
+        fallo["facts"] = dict(hechos)
     return fallo
 
 
@@ -133,6 +140,9 @@ class _Contexto:
         self.t_star = fitting.reserve.t_star
         self.excluidos = {e.sku_id: e.cause for e in fitting.exclusions}
         self.codigos_exclusion = {e.sku_id: e.code for e in fitting.exclusions}
+        self.hechos_exclusion = {
+            e.sku_id: dict(e.hechos) for e in fitting.exclusions if e.hechos
+        }
         self.candidatos: dict[tuple[str, str], FittedCandidate] = {
             (c.selection.sku_id, c.selection.family): c for c in fitting.candidates
         }
@@ -208,6 +218,9 @@ def _familia(
         codigo = ctx.codigos_exclusion.get(sku_id)
         if codigo is not None:
             entrada_excluida["code"] = codigo
+        hechos = ctx.hechos_exclusion.get(sku_id)
+        if hechos:
+            entrada_excluida["facts"] = hechos
         return entrada_excluida
 
     candidato = ctx.candidatos.get(clave)

@@ -20,7 +20,10 @@ import pytest
 from pred_engine import pipeline as pipeline_module
 from pred_engine.cli import diagnose_pipeline, main
 from pred_engine.comun.dataclasses.validacion_temporal import ResultadoWalkForward
-from pred_engine.comun.errores_codigo import ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS
+from pred_engine.comun.errores_codigo import (
+    ELEGIBILIDAD_MENOS_DE_DOS_FAMILIAS,
+    codigos_conocidos,
+)
 from pred_engine.comun.modelos import ClassifiedObservation
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.comun.walkforward import evaluar_walk_forward
@@ -281,6 +284,26 @@ def test_l2_excludes_history_below_the_hpo_minimum_windows(tmp_path):
         "proof-sku: historia admisible insuficiente: 60 dias, se requieren 68 "
         "(min_train + horizonte + 3 pasos)"
     )
+
+
+def test_l2_history_exclusion_reports_required_and_available_days(tmp_path):
+    progress = tmp_path / "progreso.jsonl"
+    pipeline = Pipeline(
+        verification_pipeline().router,
+        EvaluationSettings(min_train=40),
+        factories={},
+        progress=progress,
+    )
+    ingestion = _panel_with_admissible_days(pipeline, tmp_path, 60)
+    with pytest.raises(ValueError, match="1 SKU excluidos"):
+        pipeline.fit(ingestion)
+    [excluded] = [
+        json.loads(line)
+        for line in progress.read_text().splitlines()
+        if json.loads(line)["event"] == "excluded"
+    ]
+    assert excluded["code"] == "eligibility.insufficient_history"
+    assert excluded["facts"] == {"history": {"required": 68, "available": 60}}
 
 
 @pytest.mark.parametrize(
@@ -875,6 +898,7 @@ def test_unrouted_lumpy_is_excluded_without_losing_other_skus(tmp_path, with_hea
     exclusion = fitting.exclusions[0]
     assert exclusion.sku_id == "lumpy-only"
     assert exclusion.code == "eligibility.no_configured_family"
+    assert exclusion.code in codigos_conocidos()
     assert "no asigna ninguna familia configurada a la clase 'lumpy'" in exclusion.cause
     assert pipeline.router.policy.version in exclusion.cause
 

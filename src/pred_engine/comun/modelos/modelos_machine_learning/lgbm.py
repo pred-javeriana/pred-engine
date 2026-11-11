@@ -19,6 +19,7 @@ import lightgbm as lgb
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
+from pred_engine.comun.hechos_error import ajuste, historia
 from pred_engine.comun.modelos.modelos_machine_learning.errores import (
     AjusteModeloError,
     SerieCortaError,
@@ -129,7 +130,8 @@ class LightGBMForecaster(BaseForecaster):
         if len(serie) < minimo:
             raise SerieCortaError(
                 f"serie de longitud {len(serie)} insuficiente: con lags="
-                f"{self.lags} se requieren al menos {minimo} observaciones"
+                f"{self.lags} se requieren al menos {minimo} observaciones",
+                hechos=historia(minimo, len(serie)),
             )
 
         X, objetivos = construir_muestras(serie, self.lags, self.estacionalidad)
@@ -141,7 +143,10 @@ class LightGBMForecaster(BaseForecaster):
                 num_boost_round=self.n_estimators,
             )
         except (lgb.basic.LightGBMError, ValueError) as exc:
-            raise AjusteModeloError(f"LightGBM no ajusto: {exc}") from exc
+            raise AjusteModeloError(
+                f"LightGBM no ajusto: {exc}",
+                hechos=ajuste("error_biblioteca", modelo="LightGBM"),
+            ) from exc
 
         self._historia = serie.copy()
         self._fitted = True

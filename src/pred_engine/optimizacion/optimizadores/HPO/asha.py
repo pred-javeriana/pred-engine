@@ -16,7 +16,9 @@ este archivo no cambia una linea -- solo se escribe un adaptador nuevo.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 
@@ -25,6 +27,9 @@ from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 class DecisionPoda:
     podar: bool
     motivo: str | None = None
+    # El motivo en campos (contrato 1.3.0, 11.1): escalon, valor, umbral y cuantos
+    # trials conserva el escalon.
+    hechos: Mapping[str, Any] | None = None
 
 
 class DecisorASHA:
@@ -86,5 +91,11 @@ class DecisorASHA:
                     f"escalon={escalon} valor={valor_propio:.6g} "
                     f"umbral_top_{corte}={umbral:.6g}"
                 ),
+                hechos={
+                    "rung": escalon,
+                    "value": valor_propio,
+                    "threshold": umbral,
+                    "keep": corte,
+                },
             )
         return DecisionPoda(podar=False)

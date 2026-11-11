@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pred_engine.comun.hechos_error import historia
+
 
 class VentanaInsuficienteError(ValueError):
     def __init__(self, *, requerido: int, disponible: int) -> None:
         self.requerido = requerido
         self.disponible = disponible
+        self.hechos = historia(requerido, disponible)
         super().__init__(
             f"se requieren al menos {requerido} observaciones, hay {disponible} "
             f"(deficit={requerido - disponible})"

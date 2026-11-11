@@ -427,7 +427,7 @@ class ControladorEvaluacion:
             for unidad in fitting.units:
                 if unidad.failed:
                     fallos_l2.setdefault(unidad.sku_id, []).append(unidad.record.error)
-            exclusiones_m2 = [asdict(e) for e in fitting.exclusions]
+            exclusiones_m2 = [_exclusion_m2(e) for e in fitting.exclusions]
         # Un SKU que salio al cerrar L2 conserva su unidad fallida en la procedencia,
         # pero no recibe veredicto: no es un FALLO_TECNICO (ADR-023).
         for exclusion in exclusiones_m2:
@@ -525,7 +525,7 @@ class ControladorEvaluacion:
                 ],
                 "run_id_m2": self.run_id_m2,
                 "ejecucion_id": ejecucion_id,
-                "exclusiones_m2": [asdict(e) for e in fitting.exclusions],
+                "exclusiones_m2": [_exclusion_m2(e) for e in fitting.exclusions],
                 "exclusiones_m3": exclusiones,
                 "exclusiones_datos": exclusiones_datos,
                 "seleccion_previa": seleccion_previa,
@@ -910,3 +910,16 @@ def _pronosticar_sku(tarea: _TareaSku) -> _PronosticosSku:
         confirmados=tarea.base_confirmada,
     )
     return _PronosticosSku(tuple(nuevas), base)
+
+
+def _exclusion_m2(exclusion: SkuExclusion) -> dict[str, Any]:
+    """Una exclusion de M2 como la guarda la procedencia de M3: SKU, causa y codigo.
+
+    Los hechos de la exclusion (contrato 1.3.0) no entran: la procedencia guardada se
+    compara al reanudar y no debe cambiar de forma.
+    """
+    return {
+        "sku_id": exclusion.sku_id,
+        "cause": exclusion.cause,
+        "code": exclusion.code,
+    }

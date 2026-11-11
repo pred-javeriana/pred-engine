@@ -225,7 +225,8 @@ While a run executes, `pred-engine run` appends one JSON line per event to
 `runs/{run_id}/progreso.jsonl` (schema `pred-engine.progreso/1`, section 18 of the contract):
 `run_started` (with the attempt number), `stage_started`/`stage_finished`, `planned` (the
 SKU × family units of a stage, still pending), `excluded`, `unit_started`/`unit_finished` (written
-by the worker process at the instant they happen, with state, seconds and error) and
+by the worker process at the instant they happen, with state, seconds, error, `code` and, when
+the error knows them, its structured `facts`, ADR-024) and
 `run_finished` (written after `corrida.json`). M3 adds `planned` for L4 (one unit per candidate)
 and one L4 `unit_finished` per candidate once its SKU is stored in the central database. With more
 than one worker, a SKU's L3 units start as soon as all its L2 units finish, so their unit events

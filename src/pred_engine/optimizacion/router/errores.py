@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pred_engine.comun.hechos_error import ErrorConHechos
+
 
 class SelectionError(ValueError):
     """Frontera 2.1/2.2: la seleccion no puede continuar."""
@@ -11,8 +13,12 @@ class SelectionContractError(SelectionError):
     """Un contrato de entrada, resultado o familia es invalido."""
 
 
-class NingunTrialCompletoError(SelectionContractError):
-    """Ningun ensayo de HPO termino para el SKU (todos fallidos o podados)."""
+class NingunTrialCompletoError(ErrorConHechos, SelectionContractError):
+    """Ningun ensayo de HPO termino para el SKU (todos fallidos o podados).
+
+    ``hechos`` lleva ``search``: ensayos fallidos y podados, y cada causa con un
+    ejemplo.
+    """
 
 
 class UnregisteredFamilyError(SelectionError):

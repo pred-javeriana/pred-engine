@@ -235,3 +235,38 @@ def test_el_codigo_viaja_desde_el_proceso_hijo(tmp_path: Path) -> None:
 
     assert resultados[0].registro.codigo == "pipeline.stage_failed"
     assert resultados[1].registro.codigo is None
+
+
+def _sin_ensayo_viable(x: int) -> int:
+    from pred_engine.optimizacion.router.errores import NingunTrialCompletoError
+
+    if x == 3:
+        raise NingunTrialCompletoError(
+            "ningun trial de HPO completo",
+            hechos={"search": {"failed": 2, "pruned": 1, "causes": []}},
+        )
+    return x
+
+
+@pytest.mark.parametrize("procesos", [1, 2], ids=["secuencial", "proceso_hijo"])
+def test_la_unidad_fallida_lleva_sus_hechos_en_el_registro_y_en_el_evento(
+    tmp_path: Path, procesos: int
+) -> None:
+    ruta = tmp_path / "progreso.jsonl"
+
+    resultados = ejecutar_unidades(
+        _sin_ensayo_viable,
+        [3, 1],
+        procesos=procesos,
+        etiquetas=_etiquetas(2),
+        progreso=ruta,
+    )
+
+    hechos = {"search": {"failed": 2, "pruned": 1, "causes": []}}
+    assert resultados[0].registro.codigo == "selection.no_viable_trial"
+    assert resultados[0].registro.hechos == hechos
+    assert resultados[1].registro.hechos is None
+    fines = {e["sku_id"]: e for e in _eventos(ruta) if e["event"] == "unit_finished"}
+    assert fines["SKU-0"]["facts"] == hechos
+    # Una unidad sin hechos conocidos no lleva el campo.
+    assert "facts" not in fines["SKU-1"]
