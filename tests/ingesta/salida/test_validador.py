@@ -130,3 +130,19 @@ def test_acepta_sku_class_de_texto_en_columna_object() -> None:
     marco = _clasificado_valido()
     marco["sku_class"] = pd.Series(["intermittent"] * 4, dtype=object)
     validate_output_contract(marco)
+
+
+@pytest.mark.parametrize(
+    ("columna", "mensaje"),
+    [
+        ("sku_id", "sku_id debe ser String"),
+        ("sku_class", "sku_class admite solo"),
+    ],
+)
+def test_rechaza_bytes_no_utf8_con_causa_del_contrato(
+    columna: str, mensaje: str
+) -> None:
+    marco = _clasificado_valido()
+    marco[columna] = pd.Series([b"\xff\xfe"] * 4, dtype=object)
+    with pytest.raises(OutputContractError, match=mensaje):
+        validate_output_contract(marco)

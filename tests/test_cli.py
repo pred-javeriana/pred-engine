@@ -273,6 +273,49 @@ def test_cli_verify_parquet_rechaza_sku_class_binaria(
         assert "violacion Pydantic en fila 0" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("columna", "mensaje"),
+    [
+        ("sku_id", "sku_id debe ser String"),
+        ("sku_class", "sku_class admite solo"),
+    ],
+)
+def test_cli_verify_parquet_bytes_no_utf8_sale_6(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    columna: str,
+    mensaje: str,
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,108,17\n"
+        "105,2024-10-04,50,17\n",
+        encoding="utf-8",
+    )
+    raiz = tmp_path / "data"
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    publicado = raiz / "processed" / "mini.parquet"
+    corte = pq.read_schema(publicado).metadata[b"pred_engine"]
+    tabla = pq.read_table(publicado)
+    # Columna binaria sin metadatos pandas: pyarrow la entrega como bytes.
+    tabla = tabla.set_column(
+        tabla.schema.get_field_index(columna),
+        pa.field(columna, pa.binary()),
+        pa.array([b"\xff\xfe"] * tabla.num_rows, type=pa.binary()),
+    ).replace_schema_metadata({b"pred_engine": corte})
+    externo = tmp_path / "externo.parquet"
+    pq.write_table(tabla, externo)
+    capsys.readouterr()
+
+    codigo = cli.main(["verify", "--parquet", str(externo)])
+
+    assert codigo == 6
+    error = capsys.readouterr().err
+    assert mensaje in error
+    assert "Traceback" not in error
+
+
 _FIXTURE_SEMILLA = Path(__file__).parent / "fixtures" / "semilla_inventario.csv"
 
 
