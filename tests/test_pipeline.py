@@ -185,6 +185,46 @@ def test_l1_error_has_no_downstream_evidence(tmp_path):
     assert diagnostic["stages"][0]["state"] == "failed"
 
 
+@pytest.mark.parametrize(
+    ("filas", "causa", "codigo"),
+    [
+        pytest.param("", "SchemaBarrierError", "ingest.schema_barrier", id="vacio"),
+        pytest.param(
+            "105,2024-10-01,5,3\n106,2024-10-01,2,3\n",
+            "HandoffPreconditionError",
+            "handoff.precondition",
+            id="un-dia",
+        ),
+    ],
+)
+def test_empty_or_single_day_input_fails_l1_with_its_typed_cause(
+    tmp_path, filas, causa, codigo
+):
+    request = request_at(tmp_path)
+    Path(request.csv_path).write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n" + filas
+    )
+    with pytest.raises(PipelineExecutionError) as raised:
+        verification_pipeline().run(request)
+    error = raised.value
+    assert error.stage == "L1"
+    assert type(error.__cause__).__name__ == causa
+    assert [s.state for s in error.result.stages] == [
+        "failed",
+        "pending",
+        "pending",
+        "pending",
+    ]
+    summary = summarize_run(error.result)
+    assert "reserve" not in summary
+    assert (summary["excluded_count"], summary["exclusions"]) == (0, [])
+    data = tmp_path / "data"
+    assert not list((data / "processed").glob("*.parquet"))
+    (informe,) = (data / "ingestas").glob("*.json")
+    report = json.loads(informe.read_text(encoding="utf-8"))
+    assert (report["status"], report["error"]["code"]) == ("failed", codigo)
+
+
 def test_l2_factory_error_preserves_real_ingestion(tmp_path):
     pipeline = verification_pipeline()
     pipeline.factories.clear()

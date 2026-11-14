@@ -8,8 +8,10 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
+from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
 from pred_engine.ingesta.data import RawConflictError, RawWritePermissionError
 from pred_engine.ingesta.informe import (
     REPORT_SCHEMA,
@@ -243,6 +245,108 @@ def test_ingesta_sin_tardios_no_escribe_campos_de_exclusion(tmp_path: Path) -> N
     ]
     releido = IngestReportFile.model_validate_json(salida.path.read_text())
     assert (releido.excluded_count, releido.exclusions) == (0, [])
+
+
+def _csv_mixto(ruta: Path, *, inicio: str = "2024-01-01") -> Path:
+    """100 dias: A admitido, T tardio (sin demanda hasta t*) y C corto.
+
+    C termina antes de t*: L1 lo conserva (L2 decide sobre su historia).
+    """
+    filas = []
+    for i, dia in enumerate(pd.date_range(inicio, periods=100)):
+        fecha = dia.date().isoformat()
+        filas.append(f"A,{fecha},{20 + i % 5},3")
+        filas.append(f"T,{fecha},{0 if i < 80 else 5},3")
+        if i < 30:
+            filas.append(f"C,{fecha},9,3")
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n" + "\n".join(filas) + "\n",
+        encoding="utf-8",
+    )
+    return ruta
+
+
+def test_ingesta_mixta_cuenta_admitidos_excluidos_y_poblacion_publicada(
+    tmp_path: Path,
+) -> None:
+    raiz = tmp_path / "d"
+    salida = ingest_csv_with_report(
+        _csv_mixto(tmp_path / "e" / "m.csv"), data_root=raiz
+    )
+
+    datos = _json(salida.path)
+    parquet = raiz / datos["published"]["parquet_path"]
+    publicado = pd.read_parquet(parquet)
+    assert datos["status"] == "accepted"
+    assert datos["source_file"]["row_count"] == datos["validation"]["rows_validated"]
+    assert datos["validation"]["rows_validated"] == 100 + 100 + 30
+    # El panel publicado no tiene las filas del tardio.
+    assert datos["validation"]["rows_daily_panel"] == 100 + 30
+    assert datos["published"]["rows"] == len(publicado) == 130
+    assert set(publicado["sku_id"]) == {"A", "C"}
+    assert datos["validation"]["n_skus"] == datos["published"]["n_skus"] == 2
+    assert {m["sku_id"] for m in datos["topology"]["metrics"]} == {"A", "C"}
+    assert datos["excluded_count"] == 1
+    assert datos["exclusions"] == [
+        {"sku_id": "T", "cause": "lanzado despues del corte"}
+    ]
+    # El informe y los metadatos del Parquet declaran el mismo corte.
+    meta = leer_metadatos_parquet(parquet)
+    assert meta.reserve.t_star.date().isoformat() == datos["reserve"]["t_star"]
+    assert meta.reserve.reserved_days == datos["reserve"]["reserved_days"] == 20
+    assert [e.sku_id for e in meta.exclusions] == ["T"]
+
+
+def test_corrimiento_de_calendario_corre_el_corte_y_conserva_la_poblacion(
+    tmp_path: Path,
+) -> None:
+    base = _json(
+        ingest_csv_with_report(
+            _csv_mixto(tmp_path / "a" / "m.csv"), data_root=tmp_path / "da"
+        ).path
+    )
+    corrida = _json(
+        ingest_csv_with_report(
+            _csv_mixto(tmp_path / "b" / "m.csv", inicio="2024-01-11"),
+            data_root=tmp_path / "db",
+        ).path
+    )
+
+    for clave in ("t_star", "first_reserved", "last_observed"):
+        assert date.fromisoformat(corrida["reserve"][clave]) == date.fromisoformat(
+            base["reserve"][clave]
+        ) + timedelta(days=10)
+    for datos in (base, corrida):
+        reserva = datos["reserve"]
+        assert reserva["reserved_days"] == 20
+        assert date.fromisoformat(reserva["first_reserved"]) == date.fromisoformat(
+            reserva["t_star"]
+        ) + timedelta(days=1)
+        assert (
+            date.fromisoformat(reserva["last_observed"])
+            - date.fromisoformat(reserva["t_star"])
+        ).days == reserva["reserved_days"]
+    assert corrida["exclusions"] == base["exclusions"]
+    assert corrida["validation"] == base["validation"]
+    assert corrida["topology"] == base["topology"]
+
+
+def test_entrada_limpia_produce_el_mismo_informe_byte_a_byte(tmp_path: Path) -> None:
+    origen = _csv(tmp_path / "e" / "v.csv")
+    informes = [
+        ingest_csv_with_report(origen, data_root=tmp_path / raiz).path
+        for raiz in ("d1", "d2")
+    ]
+
+    textos = [
+        json.dumps({**_json(ruta), "written_at": None}, indent=2) for ruta in informes
+    ]
+    assert textos[0] == textos[1]
+    assert "excluded_count" not in textos[0]
+    assert (tmp_path / "d1" / "processed" / "v.parquet").read_bytes() == (
+        tmp_path / "d2" / "processed" / "v.parquet"
+    ).read_bytes()
 
 
 def test_todos_los_skus_sin_demanda_positiva_falla_precondicion(
