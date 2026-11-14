@@ -160,44 +160,56 @@ def test_un_marco_no_textual_se_valida_fila_a_fila() -> None:
     assert marco.iloc[0]["lead_time_days"] == 4
 
 
+def _nulo_llega_como_nan(marco: pd.DataFrame, fila: int, columna: str) -> bool:
+    """Si la validacion por fila lee el nulo de ``columna`` como un ``NaN``.
+
+    Con pandas 3, ``iterrows`` entrega un ``NaN``; con pandas 2.2 (que
+    ``pyproject.toml`` admite) entrega ``None`` o ``pd.NA``.
+    """
+    _, cruda = next(marco.iloc[[fila]].iterrows())
+    return isinstance(cruda[columna], float)
+
+
 @pytest.mark.parametrize("dtype", ["string", "str"])
-@pytest.mark.parametrize(
-    ("columna", "columna_error"),
-    [
-        ("timestamp", "timestamp"),
-        # La demanda nula llega como NaN y la rechaza Pydantic, sin columna.
-        ("demand_qty", None),
-        ("lead_time_days", "lead_time_days"),
-    ],
-)
+@pytest.mark.parametrize("columna", ["timestamp", "demand_qty", "lead_time_days"])
 def test_un_nulo_en_columna_de_texto_se_rechaza_en_su_fila(
-    columna: str, columna_error: str | None, dtype: str
+    columna: str, dtype: str
 ) -> None:
     marco = _marco(
         [("105", "2024-10-01", "1", "3"), ("105", "2024-10-02", "2", "4")]
     ).astype(dtype)
     marco.loc[1, columna] = None
+    columna_error: str | None = columna
+    if columna == "demand_qty" and _nulo_llega_como_nan(marco, 1, columna):
+        # Un NaN es un float valido como texto y lo rechaza Pydantic, sin
+        # columna; None o pd.NA fallan antes como texto no numerico.
+        columna_error = None
     with pytest.raises(SchemaBarrierError) as captured:
         validate_aligned_frame(marco)
     assert (captured.value.row_index, captured.value.column) == (1, columna_error)
 
 
 @pytest.mark.parametrize("dtype", ["string", "str"])
-@pytest.mark.parametrize(
-    ("columna", "patron_error", "columna_error"),
-    [
-        ("timestamp", "timestamp invalido", "timestamp"),
-        ("demand_qty", "violacion Pydantic", None),
-        ("lead_time_days", "lead_time_days no entero", "lead_time_days"),
-    ],
-)
-def test_una_columna_de_texto_toda_nula_se_rechaza(
-    columna: str, patron_error: str, columna_error: str | None, dtype: str
-) -> None:
+@pytest.mark.parametrize("columna", ["timestamp", "demand_qty", "lead_time_days"])
+def test_una_columna_de_texto_toda_nula_se_rechaza(columna: str, dtype: str) -> None:
     marco = _marco(
         [("105", "2024-10-01", "1", "3"), ("106", "2024-10-02", "2", "4")]
     ).astype(dtype)
     marco[columna] = pd.Series([None, None], dtype=dtype)
+    nan = _nulo_llega_como_nan(marco, 0, columna)
+    patron_error, columna_error = {
+        "timestamp": ("timestamp invalido", "timestamp"),
+        # Ver la prueba anterior: el NaN lo rechaza Pydantic, sin columna.
+        "demand_qty": (
+            ("violacion Pydantic", None)
+            if nan
+            else ("demand_qty no numerica", "demand_qty")
+        ),
+        "lead_time_days": (
+            "lead_time_days no entero" if nan else "lead_time_days no numerico",
+            "lead_time_days",
+        ),
+    }[columna]
     with pytest.raises(SchemaBarrierError, match=patron_error) as captured:
         validate_aligned_frame(marco)
     assert (captured.value.row_index, captured.value.column) == (0, columna_error)
