@@ -485,6 +485,16 @@ def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
         24 if con_sku_sano else 6
     )
     assert conn.execute("SELECT estado FROM m3_corridas").fetchall() == [("PUBLICADA",)]
+    # Las dos unidades L2 fallidas de proof-sku cuentan como fallos tecnicos, y
+    # la publicacion reutilizada las sigue contando desde su procedencia durable.
+    assert resultado.validation.audit_bundle["n_fallos"] == 2
+    pipeline.factories = {
+        "classical": lambda config, *, seed: SeasonalNaiveStub(1, seed),
+        "ml": lambda config, *, seed: SeasonalNaiveStub(1, seed),
+    }
+    reutilizada = pipeline.run(request).validation
+    assert reutilizada.audit_bundle["publicada_previamente"] is True
+    assert reutilizada.audit_bundle["n_fallos"] == 2
     conn.close()
 
 

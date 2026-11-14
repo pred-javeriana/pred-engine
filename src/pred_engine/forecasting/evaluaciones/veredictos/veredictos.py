@@ -265,7 +265,10 @@ def _veredicto_sku(
         n_ventanas=n,
         cobertura=0.0 if campeon is None else campeon.cobertura,
         razon_sn=razon,
-        pierde_frente_a_linea_base=None if razon is None else razon >= 1.0,
+        # Un FALLO_TECNICO no es una perdida del modelo: queda sin informar.
+        pierde_frente_a_linea_base=None
+        if razon is None or veredicto == "FALLO_TECNICO"
+        else razon >= 1.0,
         comparacion_incompleta=comparacion_incompleta,
         metricas_campeon=agregadas,
         metricas_linea_base=prueba.linea_base.agregadas,
@@ -428,7 +431,14 @@ def _resumen(
         conteos=conteos,
         porcentajes=porcentajes,
         mediana_r=float(statistics.median(razones)) if razones else None,
-        n_adversos=sum(1 for r in razones if r >= 1.0),
+        # Los FALLO_TECNICO conservan su r, pero no cuentan como resultado adverso.
+        n_adversos=sum(
+            1
+            for s in veredictos
+            if s.veredicto != "FALLO_TECNICO"
+            and s.razon_sn is not None
+            and s.razon_sn >= 1.0
+        ),
         significancia=significancia,
         confirmacion=confirmacion,
         contendiente=contendiente,

@@ -346,7 +346,9 @@ La familia campeona se elige por categoria, pero cada SKU usa su propia
 instancia (o la de la siguiente familia del ranking si no tiene instancia de la
 campeona) y su resultado en el bloque de prueba queda visible: campeon, r,
 metricas del campeon y de SN, veredicto, prueba Diebold-Mariano con su
-intervalo de r y si pierde frente a SN. Ademas,
+intervalo de r y si pierde frente a SN. En un `FALLO_TECNICO` esa perdida queda
+sin informar y el SKU no cuenta en `n_adversos`: el fallo no es un resultado
+adverso del modelo. Ademas,
 `modelos_evaluados` lista como dato descriptivo **todos** los modelos evaluados
 en el SKU con su r, incluida Seasonal Naive (r = 1). Asi se ve, por ejemplo,
 que un SKU habria tenido mejor r con SARIMA aunque la categoria la gane

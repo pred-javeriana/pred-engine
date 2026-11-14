@@ -181,8 +181,9 @@ unidades.
   con `CorridaFallidaError`, que indica ese estado, pero no repite el motivo
   original. Los motivos originales quedan en `hpo/<estudio>/backend.jsonl`.
 - Una evaluación M3 PUBLICADA es inmutable. Repetir el mismo comando después
-  de reparar una falla reutiliza esa publicación con sus FALLO_TECNICO y sale
-  con código 8 aunque ningún ajuste falle ahora. Para obtener resultados
+  de reparar una falla reutiliza esa publicación con sus FALLO_TECNICO y los
+  fallos L2 durables de los SKU que juzgó (`m3.n_fallos`) y sale con código 8 aunque ningún ajuste
+  falle ahora. Para obtener resultados
   nuevos, use un `--run-id` nuevo.
 - Si cambia el código, cambia el `run_id`. La reanudación exige entrada,
   configuración y código compatibles. `--run-id` permite nombrar una corrida,
@@ -193,7 +194,7 @@ unidades.
 | Código | Significado |
 | --- | --- |
 | 0 | L1-L4 completas y evaluación M3 PUBLICADA. |
-| 8 | Publicación completa con al menos un fallo técnico aislado: una unidad fallida de L1-L3 en `summary.failures` (aunque su SKU haya salido al cerrar L2), un fallo de M3 (`m3.n_fallos`) o un veredicto FALLO_TECNICO, también el conservado en una publicación reutilizada. |
+| 8 | Publicación completa con al menos un fallo técnico aislado: una unidad fallida de L1-L3 en `summary.failures` (aunque su SKU haya salido al cerrar L2), un fallo técnico contado en `m3.n_fallos` (L2 de la procedencia durable de un SKU que M3 juzga, 3.2 o ventanas de M3) o un veredicto FALLO_TECNICO, también el conservado en una publicación reutilizada. |
 | 1 | Error de entrada, base, identidad, Chronos-2 que no carga o etapa sin resultados. |
 | 7 | Solo para un pipeline de biblioteca sin validador configurado; el CLI requiere base central. |
 

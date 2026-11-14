@@ -672,10 +672,22 @@ def veredictos_publicados(
 
 
 def contar_fallos(conn: sqlite3.Connection, run_id: str) -> int:
-    """Fallos locales de adaptacion y de ventanas, sin resultados adversos."""
+    """Fallos tecnicos de la corrida, sin resultados adversos.
+
+    Suma los fallos de adaptacion de 3.2, las ventanas fallidas de M3 y las
+    unidades L2 fallidas de la procedencia durable (``fallos_m2``) de los SKU que
+    M3 juzga. Esos fallos L2 cuentan aunque el reintento ya no falle: la receta
+    durable conserva su efecto. El fallo L2 de un SKU que salio al cerrar L2 no
+    cuenta: ese SKU no tiene veredicto y su exclusion queda en
+    ``m3_exclusiones``.
+    """
     return conn.execute(
         "SELECT (SELECT COUNT(*) FROM m3_fallos WHERE run_id = ?1) + "
-        "(SELECT COUNT(*) FROM m3_unidades WHERE run_id = ?1 AND estado = 'fallida')",
+        "(SELECT COUNT(*) FROM m3_unidades WHERE run_id = ?1 AND estado = 'fallida')"
+        " + (SELECT COUNT(*) FROM m3_protocolos AS p, "
+        "json_each(p.procedencia, '$.fallos_m2') AS f WHERE p.run_id = ?1 "
+        "AND json_extract(f.value, '$.sku') IN "
+        "(SELECT sku FROM m3_skus WHERE run_id = ?1))",
         (run_id,),
     ).fetchone()[0]
 

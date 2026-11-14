@@ -174,6 +174,25 @@ def test_todos_los_candidatos_fallaron_es_fallo_tecnico_aunque_haya_datos() -> N
     assert _unico(evaluacion("B", [], fallidos=2))["B"].veredicto == "FALLO_TECNICO"
 
 
+def test_fallo_tecnico_no_es_perdida_frente_a_la_linea_base_ni_adverso() -> None:
+    # Categoria adversa: Seasonal Naive es la campeona de A y de B, con r = 1.
+    resultado = _emitir(
+        evaluacion("A", [metricas_candidato("ml", 1.3)]),
+        evaluacion("B", [], fallidos=2),
+    )
+    veredictos = {v.sku: v for v in resultado.skus}
+    assert veredictos["B"].veredicto == "FALLO_TECNICO"
+    assert veredictos["B"].familia_campeona == FAMILIA_LINEA_BASE
+    # Conserva la evidencia de la linea base, sin marcarla como perdida del modelo.
+    assert veredictos["B"].razon_sn == pytest.approx(1.0)
+    assert veredictos["B"].metricas_linea_base is not None
+    assert veredictos["B"].pierde_frente_a_linea_base is None
+    assert veredictos["A"].veredicto == "EXPLORATORIO"
+    assert veredictos["A"].pierde_frente_a_linea_base is True
+    (categoria,) = resultado.categorias
+    assert categoria.n_adversos == 1
+
+
 def test_fallo_tecnico_precede_a_no_evaluable() -> None:
     veredicto = _unico(evaluacion("A", [], fallidos=1, n_obs=0))["A"]
     assert veredicto.veredicto == "FALLO_TECNICO"

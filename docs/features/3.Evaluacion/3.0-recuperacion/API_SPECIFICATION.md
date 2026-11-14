@@ -66,7 +66,10 @@ resultado: ValidationArtifact = controlador(evaluation: EvaluationArtifact)
   la corrida.
 
 `ValidationArtifact.audit_bundle` incluye `run_id_m3`, estado PUBLICADA,
-origen de datos, H, número de unidades, fallos técnicos, exclusiones de M2
+origen de datos, H, número de unidades, fallos técnicos (`n_fallos`: unidades
+L2 fallidas de la procedencia durable de los SKU que M3 juzga, fallos de
+adaptación de 3.2 y ventanas fallidas de M3; nunca resultados adversos ni el
+fallo L2 de un SKU que salió al cerrar L2), exclusiones de M2
 (`exclusiones_m2`, las de la procedencia durable), exclusiones de datos y
 rutas de exportación. Las ventanas sin contexto no se registran como fallos
 del modelo; las ventanas sin objetivos completos no se puntúan ni se rellenan

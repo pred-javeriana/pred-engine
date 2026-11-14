@@ -204,7 +204,9 @@ en `excluidos` con `pocas_ventanas:<familia>`.
 `diebold_mariano: PruebaDM`, `justificacion`, `modelos_evaluados`,
 `intervalo_r: IntervaloRazon | None` (nivel `1 - alfa_dm`, solo con p-valor) e
 `intervalo_r_fcr: IntervaloRazon | None` (nivel FCR de la categoria, solo si
-BH selecciona al SKU). Todo se calcula en el bloque de prueba.
+BH selecciona al SKU). Todo se calcula en el bloque de prueba. Un
+`FALLO_TECNICO` conserva `razon_sn` y las métricas de la línea base, pero su
+`pierde_frente_a_linea_base` es `None`: un fallo no es una pérdida del modelo.
 
 `justificacion` es texto en español que se publica tal cual: empieza por el
 veredicto y escribe los decimales con coma, por ejemplo
@@ -225,7 +227,8 @@ seleccion definitiva sigue siendo por categoria (ADR-03-003).
   el signo del estadistico), `n_mejores_by`, `n_peores_by` (Benjamini-Yekutieli)
   y `nivel_fcr = 1 - R q / m`, `None` sin selecciones.
 - `ResumenCategoria`: `sku_class`, `seleccion`, `conteos` y `porcentajes` por
-  veredicto, `mediana_r`, `n_adversos` (SKUs con `r >= 1`), `significancia`,
+  veredicto, `mediana_r`, `n_adversos` (SKUs con `r >= 1` que no son
+  `FALLO_TECNICO`), `significancia`,
   `confirmacion: ConfirmacionCategoria`, `contendiente` (la familia que la regla
   elige sin la fundacional, `None` si la fundacional no compite) y
   `seleccion_previa: SeleccionCategoria | None`.
