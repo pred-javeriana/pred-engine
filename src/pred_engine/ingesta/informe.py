@@ -25,6 +25,7 @@ from pydantic import (
 from pred_engine.comun.errores_codigo import codigo_de
 from pred_engine.comun.llm.errores import LlmProviderError, LlmTimeoutError
 from pred_engine.comun.llm.protocolo import LlmProvider
+from pred_engine.comun.logger import get_logger
 from pred_engine.comun.modelos import (
     ADI_THRESHOLD,
     CV2_THRESHOLD,
@@ -59,6 +60,8 @@ from pred_engine.ingesta.validador_formato.errores import SchemaBarrierError
 
 REPORT_SCHEMA = "pred-engine.ingesta/1"
 REPORTS_DIR = "ingestas"
+
+_logger = get_logger(__name__)
 
 IngestStatus = Literal["accepted", "rejected", "failed", "needs_confirmation"]
 _ETAPA = "L1"
@@ -422,6 +425,10 @@ def ingest_csv_with_report(
     se propagan: quedan en ``error`` y en el informe, para que el llamador decida
     como terminar. Solo ``FileNotFoundError`` del origen se propaga, porque sin
     archivo no hay hash con el que nombrar el informe.
+
+    Si esos bytes ya tienen un informe ``accepted``, un intento ``failed`` o
+    ``rejected`` no lo reemplaza: ``report`` y ``error`` traen el fallo y ``path``
+    sigue apuntando al informe aceptado, que no cambia.
     """
     layout = ensure_data_layout(data_root)
     origen = Path(csv_path).expanduser().resolve()
@@ -470,5 +477,23 @@ def ingest_csv_with_report(
     else:
         assert error is not None
         informe = _informe_fallido(fuente, deposito, error, layout.root)
-    ruta = write_ingest_report(informe, layout.root)
+    ruta = report_path(layout.root, sha256)
+    if informe.status in ("failed", "rejected") and _ya_aceptada(ruta):
+        # Un reintento fallido de los mismos bytes no borra la evidencia de la
+        # ingesta aceptada: su Parquet sigue publicado y otras corridas lo citan.
+        # El fallo vuelve al llamador en ``report`` y ``error``.
+        _logger.warning(
+            "Reintento %s (%s) de una ingesta ya aceptada: se conserva %s",
+            informe.status,
+            informe.error.code if informe.error is not None else None,
+            ruta.name,
+        )
+    else:
+        ruta = write_ingest_report(informe, layout.root)
     return ReportedIngest(report=informe, path=ruta, result=resultado, error=error)
+
+
+def _ya_aceptada(ruta: Path) -> bool:
+    if not ruta.is_file():
+        return False
+    return IngestReportFile.model_validate_json(ruta.read_text()).status == "accepted"

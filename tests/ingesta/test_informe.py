@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from pred_engine.comun.llm.errores import LlmTimeoutError
 from pred_engine.comun.metadatos_parquet import leer_metadatos_parquet
 from pred_engine.ingesta.data import RawConflictError, RawWritePermissionError
 from pred_engine.ingesta.informe import (
@@ -395,6 +396,54 @@ def test_cabeceras_rechazadas_dejan_el_informe_rechazado(tmp_path: Path) -> None
     )
     assert datos["error"]["code"] == "ingest.header_rejected"
     assert datos["quality_log"][0]["column"] == "timestamp"
+
+
+class _ProveedorSinRespuesta:
+    def complete(self, prompt: str, *, temperature: float, timeout: float) -> str:
+        raise LlmTimeoutError("el proveedor LLM no respondio")
+
+
+def test_reintento_fallido_de_los_mismos_bytes_conserva_el_informe_aceptado(
+    tmp_path: Path,
+) -> None:
+    origen = _csv(tmp_path / "e" / "v.csv")
+    raiz = tmp_path / "d"
+    aceptada = ingest_csv_with_report(origen, data_root=raiz)
+    parquet = raiz / "processed" / "v.parquet"
+    informe_aceptado = aceptada.path.read_bytes()
+    publicado = parquet.read_bytes()
+
+    reintento = ingest_csv_with_report(
+        origen,
+        data_root=raiz,
+        provider=_ProveedorSinRespuesta(),  # type: ignore[arg-type]
+    )
+
+    assert isinstance(reintento.error, LlmTimeoutError)
+    assert reintento.report.status == "failed"
+    assert reintento.report.error is not None
+    assert reintento.report.error.retryable is True
+    assert reintento.path == aceptada.path
+    assert aceptada.path.read_bytes() == informe_aceptado
+    assert parquet.read_bytes() == publicado
+    # Ningun archivo adicional: la plataforma importa ``ingestas/`` por nombre.
+    assert [p.name for p in (raiz / "ingestas").iterdir()] == [aceptada.path.name]
+
+
+def test_un_intento_fallido_previo_se_reemplaza_al_aceptar(tmp_path: Path) -> None:
+    origen = _csv(tmp_path / "e" / "v.csv")
+    raiz = tmp_path / "d"
+    fallida = ingest_csv_with_report(
+        origen,
+        data_root=raiz,
+        provider=_ProveedorSinRespuesta(),  # type: ignore[arg-type]
+    )
+    assert _json(fallida.path)["status"] == "failed"
+
+    aceptada = ingest_csv_with_report(origen, data_root=raiz)
+
+    assert aceptada.path == fallida.path
+    assert _json(aceptada.path)["status"] == "accepted"
 
 
 def test_ruta_con_proveedor_acepta_y_guarda_el_diagnostico(tmp_path: Path) -> None:

@@ -215,7 +215,10 @@ classify`/`ingest` exit with code 7 on an unconfirmed conflict.
 leaves `ingestas/<sha256>.json`, also when the ingestion is `rejected`, `failed`
 or `needs_confirmation`: source hash, deposit, header diagnostic, quality log,
 published Parquet, reserve cut t\* and the per-SKU topology metrics (ADI, CV²,
-class). `pred-engine run` also saves the metrics as `topologia.json` in the run
+class). A `failed` or `rejected` retry of bytes that already have an `accepted`
+report does not replace it: the accepted report and its Parquet stay as they
+were, the command still exits with the error code of the retry, and no other
+file is added to `ingestas/`. `pred-engine run` also saves the metrics as `topologia.json` in the run
 folder. The platform imports these files; see section 17 of the frontend-engine
 contract in `pred-docs`.
 
