@@ -125,6 +125,16 @@ def test_categoria_adversa_deja_al_sku_exploratorio_con_la_linea_base() -> None:
     assert veredicto.pierde_frente_a_linea_base is True
 
 
+def test_justificacion_exploratoria_adversa_usa_coma_decimal() -> None:
+    # La campeona de clase (ml) pierde en B: el texto publicado usa coma decimal.
+    veredicto = _unico(
+        evaluacion("A", [metricas_candidato("ml", 0.5)]),
+        evaluacion("B", [metricas_candidato("ml", 1.25)]),
+    )["B"]
+    assert veredicto.familia_campeona == "ml"
+    assert veredicto.justificacion == "EXPLORATORIO: r=1,250 ≥ 1 (resultado adverso)"
+
+
 def test_pocas_ventanas_de_prueba_es_evidencia_insuficiente() -> None:
     # La seleccion tiene 40 ventanas; el bloque de prueba, una sola.
     resultado = emitir_veredictos(

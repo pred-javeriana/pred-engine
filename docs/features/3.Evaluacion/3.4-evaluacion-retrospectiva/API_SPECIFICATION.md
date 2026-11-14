@@ -206,6 +206,13 @@ en `excluidos` con `pocas_ventanas:<familia>`.
 `intervalo_r_fcr: IntervaloRazon | None` (nivel FCR de la categoria, solo si
 BH selecciona al SKU). Todo se calcula en el bloque de prueba.
 
+`justificacion` es texto en español que se publica tal cual: empieza por el
+veredicto y escribe los decimales con coma, por ejemplo
+`EXPLORATORIO: r=1,250 ≥ 1 (resultado adverso)`. Cambiar este texto cambia la
+huella del código (`code_fingerprint`), así que en el CLI abre otra
+`codigo_version` y otra corrida; no cambia `version_politica` ni `version_metricas`, porque
+ninguna regla ni métrica cambia.
+
 `modelos_evaluados: tuple[ModeloEvaluado(candidato_id, familia, modelo,
 razon_sn), ...]` lista **todos** los modelos evaluados en el SKU con su r,
 la linea base primero (su r vale 1) y luego los candidatos en el orden

@@ -362,7 +362,8 @@ def _motivo_exploratorio(
     if razon is None:
         causas.append("r no calculable")
     elif razon >= 1.0:
-        causas.append(f"r={razon:.3f} >= 1 (resultado adverso)")
+        # Texto publicado en espanol: coma decimal (#127).
+        causas.append(f"r={razon:.3f}".replace(".", ",") + " ≥ 1 (resultado adverso)")
     if comparacion_incompleta:
         causas.append("comparacion incompleta: algun candidato fallo")
     return "; ".join(causas)
