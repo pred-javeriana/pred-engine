@@ -70,6 +70,11 @@ def test_m2_a_m3_publica_todas_las_ventanas_y_los_dos_skus(tmp_path):
     # Dos SKU por SARIMA, LightGBM y la linea base, con 6 origenes de H = 2.
     assert conn.execute("SELECT COUNT(*) FROM m3_unidades").fetchone()[0] == 36
     assert conn.execute("SELECT COUNT(*) FROM m3_pronosticos").fetchone()[0] == 72
+    # La linea base es determinista: sus unidades no registran semilla.
+    assert conn.execute(
+        "SELECT candidato_id LIKE '%/seasonal_naive/seasonal_naive', COUNT(*) "
+        "FROM m3_unidades WHERE semilla IS NULL GROUP BY 1"
+    ).fetchall() == [(1, 12)]
     base = conn.execute(
         "SELECT valor FROM m3_pronosticos "
         "WHERE candidato_id = 'proof-sku/seasonal_naive/seasonal_naive' "

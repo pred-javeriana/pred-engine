@@ -43,7 +43,7 @@ vigente y su motivo se documentan en ADR-021.
 | `m3_protocolos` | Protocolo y handoff congelados, apertura, procedencia, ejecución de plataforma y unidades previstas |
 | `m3_skus` | SKU del handoff, incluidos los que solo tienen fallos de adaptación |
 | `m3_fallos` | Fallos del adaptador con candidato, campo y causa |
-| `m3_unidades` | Marcador por candidato y origen, estado, causa, emisión, código y semilla |
+| `m3_unidades` | Marcador por candidato y origen, estado, causa, emisión, código y semilla (`NULL` en la línea base, que es determinista) |
 | `m3_pronosticos` | Fechas y valores por origen y paso; NULL cuando el pronóstico falló |
 | `m3_metricas` | MAE, RMSE, MASE, ME, razón y cobertura: por ventana en toda la reserva y agregadas del bloque de prueba |
 | `m3_categorias` | Selección en el bloque de selección, exclusiones, medianas y conteos de veredictos |
