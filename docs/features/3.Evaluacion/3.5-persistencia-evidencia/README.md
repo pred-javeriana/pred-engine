@@ -41,7 +41,7 @@ vigente y su motivo se documentan en ADR-021.
 | `m3_ingestas` | Procedencia real/sintética inmutable por identidad CSV y Parquet M1 |
 | `m3_corridas` | Identidad, referencia de ingesta fuente, corrida M2, origen de datos, estado y rechazo |
 | `m3_protocolos` | Protocolo y handoff congelados, apertura, procedencia, ejecución de plataforma y unidades previstas |
-| `m3_skus` | SKU del handoff, incluidos los que solo tienen fallos de adaptación |
+| `m3_skus` | SKU del handoff, incluidos los que solo tienen fallos de adaptación, y SKU sin ningún ajuste L2 exitoso |
 | `m3_fallos` | Fallos del adaptador con candidato, campo y causa |
 | `m3_unidades` | Marcador por candidato y origen, estado, causa, emisión, código y semilla (`NULL` en la línea base, que es determinista) |
 | `m3_pronosticos` | Fechas y valores por origen y paso; NULL cuando el pronóstico falló |
@@ -74,7 +74,7 @@ recalcularlos. Una reanudación usa las exclusiones de M2 de la procedencia
 durable. Un SKU lanzado después del corte o excluido por M2 nunca entra en
 `m3_skus`; dos disparadores por tabla lo impiden en ambos sentidos. La demanda observada se escribe con la evaluación,
 desde la misma reserva que puntuó las métricas, para el calendario completo de
-la reserva y para cada SKU del manifiesto. Cada fecha pronosticada tiene su
+la reserva y para cada SKU de `m3_skus`. Cada fecha pronosticada tiene su
 fila. `m3_campeones` es una vista sobre `m3_veredictos`: funciona también para
 corridas publicadas antes de la versión 10 y no tiene escritura propia. Las
 filas con `sku_class` NULL son la cartera completa.
@@ -108,7 +108,8 @@ La coordinación de recuperación vive en 3.0.
 
 ## Publicación y M4
 
-`publicar` exige un veredicto para cada SKU del handoff. Prepara todos los
+`publicar` exige un veredicto para cada SKU de `m3_skus`: los del handoff y
+los que fallaron en todas sus unidades L2. Prepara todos los
 Parquet y CSV en un directorio temporal y solo entonces coloca el conjunto
 completo en su destino. Lee cada tabla en orden de `rowid`, en bloques de
 10.000 filas, y mantiene abiertos un escritor Parquet y un flujo CSV por tabla.

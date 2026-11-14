@@ -193,7 +193,7 @@ unidades.
 | Código | Significado |
 | --- | --- |
 | 0 | L1-L4 completas y evaluación M3 PUBLICADA. |
-| 8 | Publicación completa con fallos técnicos aislados, actuales o conservados como FALLO_TECNICO en una publicación reutilizada. |
+| 8 | Publicación completa con al menos un fallo técnico aislado: una unidad fallida de L1-L3 en `summary.failures` (aunque su SKU haya salido al cerrar L2), un fallo de M3 (`m3.n_fallos`) o un veredicto FALLO_TECNICO, también el conservado en una publicación reutilizada. |
 | 1 | Error de entrada, base, identidad, Chronos-2 que no carga o etapa sin resultados. |
 | 7 | Solo para un pipeline de biblioteca sin validador configurado; el CLI requiere base central. |
 

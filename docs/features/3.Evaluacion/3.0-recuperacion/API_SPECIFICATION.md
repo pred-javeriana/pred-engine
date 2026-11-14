@@ -56,9 +56,12 @@ resultado: ValidationArtifact = controlador(evaluation: EvaluationArtifact)
   datos, código, versiones y referencias M1/M2. Registra antes de abrir la
   reserva si la métrica HPO no es RMSE, las exclusiones de M2 y la selección
   de robustez.
-- El resultado contiene exactamente un veredicto para cada SKU del handoff.
-  Los fallos de adaptación cuentan, aunque el SKU no tenga candidato válido.
-  Un SKU que M2 excluyó no recibe veredicto. Sin ningún SKU que juzgar y sin
+- El resultado contiene exactamente un veredicto para cada SKU del handoff y
+  para cada SKU cuyas unidades L2 fallaron todas. Los fallos de adaptación
+  cuentan, aunque el SKU no tenga candidato válido. Un SKU sin ningún ajuste L2
+  exitoso no está en el manifiesto, pero sigue a M3 y queda `FALLO_TECNICO`
+  con las causas L2 en su justificación (ADR-023, decisión 8). Un SKU que M2
+  excluyó, también al cerrar L2, no recibe veredicto. Sin ningún SKU que juzgar y sin
   protocolo durable, `ValueError` («ningun SKU llega a M3») antes de registrar
   la corrida.
 

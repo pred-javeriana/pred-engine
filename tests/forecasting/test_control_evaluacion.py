@@ -488,6 +488,130 @@ def test_todos_los_ajustes_l2_fallidos_se_publican_con_causa_y_categoria(
     conn.close()
 
 
+@dataclass(frozen=True)
+class _RechazoEn32:
+    """Router que entrega a 3.2 configuraciones incompletas de ``proof-sku``.
+
+    El ajuste L2 con una fabrica que ignora la configuracion termina bien, pero
+    3.2 rechaza cada candidato de ese SKU por un campo faltante.
+    """
+
+    interno: SelectionRouter
+    rechazar: bool
+
+    @property
+    def policy(self):
+        return self.interno.policy
+
+    def plan(self, request):
+        return self.interno.plan(request)
+
+    def execute(self, request, decision):
+        resultado = self.interno.execute(request, decision)
+        if not self.rechazar or request.sku_id != "proof-sku":
+            return resultado
+        configuracion = dict(list(resultado.forecast_config.items())[1:])
+        return resultado.model_copy(update={"forecast_config": configuracion})
+
+
+def _filas_de_sku(conn, sku):
+    """Filas publicadas de un SKU sin `run_id` ni horas de emision."""
+    filas = {}
+    for tabla in (
+        "m3_unidades",
+        "m3_pronosticos",
+        "m3_metricas",
+        "m3_veredictos",
+        "m3_intervalos_r",
+        "m3_observaciones",
+    ):
+        cursor = conn.execute(
+            f"SELECT * FROM {tabla} WHERE sku = ? ORDER BY rowid", (sku,)
+        )
+        columnas = [c[0] for c in cursor.description]
+        filas[tabla] = [
+            {
+                k: v
+                for k, v in zip(columnas, fila, strict=True)
+                if k not in ("run_id", "emitido_en")
+            }
+            for fila in cursor.fetchall()
+        ]
+    return filas
+
+
+def test_fallo_l2_total_o_parcial_y_rechazo_en_3_2_no_cambian_al_sku_exitoso(
+    tmp_path,
+):
+    class FalloL2(SeasonalNaiveStub):
+        def fit(self, y):
+            if y[0] < 50:
+                raise ValueError("causa concreta del ajuste L2")
+            return super().fit(y)
+
+    def sano(config, *, seed):
+        return SeasonalNaiveStub(1, seed)
+
+    def falla(config, *, seed):
+        return FalloL2(1, seed)
+
+    def corrida(nombre, fabricas, *, con_proof_sku=True, rechazar=False):
+        raiz = tmp_path / nombre
+        conn = _conexion(raiz)
+        pipeline, request = _caso(raiz, conn)
+        pipeline.factories = fabricas
+        pipeline.router = _RechazoEn32(pipeline.router, rechazar)
+        datos = pd.read_csv(request.csv_path)
+        segundo = datos.assign(sku_id="segundo", demand_qty=datos.demand_qty + 100)
+        (pd.concat([datos, segundo]) if con_proof_sku else segundo).to_csv(
+            request.csv_path, index=False
+        )
+        resultado = pipeline.run(request)
+        assert resultado.complete is True
+        veredictos = {v.sku_id: v.verdict for v in resultado.validation.verdicts}
+        exclusiones = [
+            (e.sku_id, e.code) for e in resultado.fitting.exclusions if e.code
+        ]
+        fallos = (
+            sorted((u.sku_id, u.family) for u in resultado.fitting.units if u.failed),
+            conn.execute(
+                "SELECT sku, codigo_error FROM m3_fallos ORDER BY candidato_id"
+            ).fetchall(),
+        )
+        filas = _filas_de_sku(conn, "segundo")
+        conn.close()
+        return veredictos, exclusiones, fallos, filas
+
+    # Las fabricas de segundo se comportan igual en todas las corridas.
+    *_, referencia = corrida(
+        "referencia", {"classical": sano, "ml": sano}, con_proof_sku=False
+    )
+    assert referencia["m3_veredictos"] and referencia["m3_unidades"]
+    # Fallo total: las dos familias de proof-sku fallan en L2.
+    total = corrida("total", {"classical": falla, "ml": falla})
+    # Fallo parcial: solo SARIMA falla; con una familia proof-sku sale al cerrar L2.
+    parcial = corrida("parcial", {"classical": falla, "ml": sano})
+    # Rechazo en 3.2: los dos ajustes L2 de proof-sku terminan bien.
+    rechazo = corrida("rechazo", {"classical": sano, "ml": sano}, rechazar=True)
+    assert total[:3] == (
+        {"proof-sku": "FALLO_TECNICO", "segundo": "EVIDENCIA_INSUFICIENTE"},
+        [],
+        ([("proof-sku", "classical"), ("proof-sku", "ml")], []),
+    )
+    assert parcial[:3] == (
+        {"segundo": "EVIDENCIA_INSUFICIENTE"},
+        [("proof-sku", "eligibility.fewer_than_two_families")],
+        ([("proof-sku", "classical")], []),
+    )
+    assert rechazo[:3] == (
+        {"proof-sku": "FALLO_TECNICO", "segundo": "EVIDENCIA_INSUFICIENTE"},
+        [],
+        ([], [("proof-sku", "campo_faltante"), ("proof-sku", "campo_faltante")]),
+    )
+    for *_, filas in (total, parcial, rechazo):
+        assert filas == referencia
+
+
 def test_candidato_l2_rechazado_por_3_2_conserva_su_veredicto_ante_otro_fallo_l2(
     tmp_path,
 ):

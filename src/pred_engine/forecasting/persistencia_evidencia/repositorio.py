@@ -436,7 +436,8 @@ def guardar_evaluacion(
     incluida la linea base, debe tener sus pronosticos confirmados. Las
     metricas por ventana cubren toda la reserva; las agregadas, la cartera y la
     evidencia de significancia y confirmacion son del bloque de prueba (ADR-023).
-    ``observaciones`` es la reserva real de cada SKU del manifiesto, la misma
+    ``observaciones`` es la reserva real de cada SKU de ``m3_skus`` (los del
+    manifiesto y los que fallaron en todas sus unidades L2), la misma
     que puntuo las metricas; M4 la muestra frente a los pronosticos, asi que
     cada fecha pronosticada necesita su fila (``valor`` NULL sin observacion).
     """
@@ -576,7 +577,8 @@ def publicar(
 ) -> dict[str, Path]:
     """SELECCIONADA -> PUBLICADA, con el Parquet derivado de SQLite (ADR-03-009).
 
-    Exige veredicto para todo SKU del manifiesto. Las unidades sin marcador no
+    Exige veredicto para todo SKU de ``m3_skus``, incluidos los que fallaron en
+    todas sus unidades L2. Las unidades sin marcador no
     pueden existir: cada pronostico referencia la suya. El estado cambia antes
     de exportar, dentro de la transaccion, para que el Parquet de m3_corridas
     diga PUBLICADA; si la exportacion falla, se revierte. Repetir reexporta en

@@ -1182,6 +1182,9 @@ class Pipeline:
     def validate(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
         """L4: native covers handoff SKUs; legacy covers evaluated SKUs.
 
+        Native coverage also includes SKUs whose L2 units all failed: they never
+        reach the manifest but M3 judges them FALLO_TECNICO (ADR-023).
+
         A reused native publication covers its frozen handoff, not the SKUs a
         later M2 retry happened to fit. A resumed one leaves out the SKUs that
         its durable provenance excluded at the end of L2.

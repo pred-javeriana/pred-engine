@@ -51,9 +51,12 @@ one pool: the L3 units of a SKU are sent as soon as all its L2 units finish and
 the two-family rule keeps the SKU, so L3 fills the workers that the last L2
 units leave idle. A failure or an interruption cancels the units that have not
 started. A unit failure preserves the rest of its stage; no successful unit
-means a stage error.
+means a stage error, except with the native validator when L2 units failed:
+L2 and L3 then hand on their artifacts even without candidates, and M3 judges
+each SKU with no successful L2 fit as FALLO_TECNICO. Only those SKUs reach M3 outside the handoff.
 L4 forecasts each SKU in a pool of `procesos` processes; the main process
-stays the only SQLite writer and confirms the units in SKU order.
+stays the only SQLite writer and confirms the units in SKU order: a SKU's
+candidate units in one transaction and its baseline in another.
 M3 records forecast failures per origin without substituting zeros.
 
 ## Composition
