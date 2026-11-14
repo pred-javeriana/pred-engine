@@ -218,6 +218,33 @@ def test_sku_sin_demanda_positiva_se_excluye_sin_detener_la_ingesta(
     ]
 
 
+def test_ingesta_sin_tardios_no_escribe_campos_de_exclusion(tmp_path: Path) -> None:
+    salida = ingest_csv_with_report(
+        _csv(tmp_path / "e" / "v.csv"), data_root=tmp_path / "d"
+    )
+
+    datos = _json(salida.path)
+    assert datos["status"] == "accepted"
+    # El mismo informe que antes de la exclusion por lanzamiento tardio.
+    assert list(datos) == [
+        "schema",
+        "written_at",
+        "ingest_id",
+        "status",
+        "source_file",
+        "deposit",
+        "header_diagnostic",
+        "validation",
+        "published",
+        "quality_log",
+        "error",
+        "reserve",
+        "topology",
+    ]
+    releido = IngestReportFile.model_validate_json(salida.path.read_text())
+    assert (releido.excluded_count, releido.exclusions) == (0, [])
+
+
 def test_todos_los_skus_sin_demanda_positiva_falla_precondicion(
     tmp_path: Path,
 ) -> None:

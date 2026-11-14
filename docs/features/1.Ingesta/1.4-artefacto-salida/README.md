@@ -8,6 +8,8 @@
    DataFrame. Rechaza el panel completo ante cualquier incumplimiento.
 3. **Preservacion del panel diario:** 1.3 solo puede anadir `sku_class`.
    Altas, bajas, reorden o mutacion transaccional detienen la persistencia.
+   La preservacion se comprueba sobre las filas de los SKU admitidos: los
+   productos tardios ya se excluyeron (punto 5) y no se publican.
 4. **Publicador Parquet** hacia `{PRED_DATA_ROOT}/processed/`. Sin CSV.
    Empaqueta t* y la lista de exclusiones en los metadatos de esquema
    `pred_engine` de PyArrow, manteniendo intacto el contrato de cinco columnas.
@@ -16,6 +18,10 @@
    antes de clasificar: calcula t* una sola vez del calendario completo y
    excluye uno a uno con causa ("lanzado despues del corte") los productos sin
    demanda positiva hasta t*. Si ningun producto es admisible, rechaza el panel.
+   La exclusion ocurre antes de exigir demanda positiva para ADI y CV² en 1.3,
+   asi que un producto sin demanda hasta t* ya no detiene la ingesta. El informe de ingesta
+   solo lleva `excluded_count` y `exclusions` cuando hay exclusiones: una
+   entrada sin productos tardios produce el mismo informe que antes.
 6. **CLI** `pred-engine verify` y cableado de 1.4 en `classify` / `ingest`.
 
 ## Como

@@ -186,7 +186,7 @@ Dataset oficial: 4862 filas, 10 SKU, todos `intermittent`.
 ### Pasos
 
 - Ejecutar el flujo canónico utilizando la implementación real integrada de 1.3.
-- Verificar el rechazo fail-closed de cualquier SKU sin demanda positiva antes de clasificación.
+- Verificar que cada SKU sin demanda positiva hasta t* se excluya con causa antes de clasificación, y que un panel sin ningún SKU admisible se rechace fail-closed.
 - Verificar la preservación del panel a través de la frontera con el clasificador.
 - Leer nuevamente el Parquet producido desde `processed/`.
 - Validar sobre el artefacto leído las cinco columnas y sus tipos persistidos.
@@ -196,7 +196,7 @@ Dataset oficial: 4862 filas, 10 SKU, todos `intermittent`.
 ### Criterios de aceptación
 
 - [ ] La prueba de integración utiliza la implementación real de `classify_daily_panel` y no el stub temporal.
-- [ ] Un SKU sin demanda positiva detiene el pipeline antes de clasificación y persistencia.
+- [ ] Un SKU sin demanda positiva hasta t* se excluye con causa ("lanzado despues del corte") antes de clasificación y no se persiste; solo un panel sin ningún SKU admisible detiene el pipeline antes de clasificación y persistencia.
 - [ ] El artefacto leído desde Parquet satisface nuevamente el contrato estricto de 1.4.
 - [ ] El flujo no duplica las implementaciones de ADI, CV² o clasificación SBC pertenecientes a 1.3.
 - [ ] El dataset de validación produce 4862 filas y 10 SKU en el artefacto final.

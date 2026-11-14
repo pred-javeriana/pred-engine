@@ -12,9 +12,15 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 from pred_engine.comun.errores_codigo import codigo_de
 from pred_engine.comun.llm.errores import LlmProviderError, LlmTimeoutError
@@ -156,6 +162,18 @@ class IngestReportFile(_Modelo):
     topology: TopologyInfo | None = None
     excluded_count: int = 0
     exclusions: list[ExclusionInfo] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _sin_exclusiones_vacias(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        # Una ingesta sin productos tardios escribe el mismo informe que antes de
+        # la exclusion por lanzamiento: sin excluded_count ni exclusions.
+        datos: dict[str, Any] = handler(self)
+        if not self.exclusions:
+            datos.pop("excluded_count", None)
+            datos.pop("exclusions", None)
+        return datos
 
 
 @dataclass(frozen=True, slots=True)
