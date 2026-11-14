@@ -113,8 +113,9 @@ unidades que no empezaron.
 En L4 (evaluación de M3), cada SKU es una unidad del mismo tipo de pool: un
 proceso ajusta sus candidatos, genera sus pronósticos y su línea base, y
 devuelve las unidades sin tocar SQLite. El proceso principal es el único
-escritor: confirma las unidades de cada SKU con sus marcadores en una sola
-transacción, en el orden de los SKU, y después lee de SQLite un SKU a la vez
+escritor: confirma las unidades de los candidatos de cada SKU con sus
+marcadores en una transacción y la línea base del SKU en otra, en el orden de
+los SKU, y después lee de SQLite un SKU a la vez
 para calcular sus métricas. Los resultados no cambian con `--workers`. La
 selección por categoría, la corrección BH y la publicación siguen en el
 proceso principal sobre toda la corrida.
