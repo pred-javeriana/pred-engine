@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import psutil
 import pytest
 
 from pred_engine import pipeline as pipeline_module
@@ -1059,11 +1060,19 @@ def test_una_interrupcion_no_espera_las_unidades_que_no_empezaron(
     with pytest.raises(KeyboardInterrupt):
         pipeline.run(request)
 
+    # El pool termina sus procesos: ninguna unidad enviada sigue en segundo
+    # plano hasta que el interprete sale (#131).
+    assert not [
+        hijo
+        for hijo in psutil.Process().children(recursive=True)
+        if "spawn_main" in " ".join(hijo.cmdline())
+    ]
     eventos = _eventos(progreso)
     [plan] = [e for e in eventos if (e["event"], e.get("stage")) == ("planned", "L2")]
     iniciadas = [e for e in eventos if e["event"] == "unit_started"]
-    # Solo corren las unidades que ya estaban en manos del pool.
-    assert len(iniciadas) < len(plan["units"]) == 12
+    assert len(plan["units"]) == 12
+    # A lo sumo la unidad que cada proceso tenia y la que esperaba en su cola.
+    assert len(iniciadas) <= 3
 
 
 def _clasicos(candidatos):

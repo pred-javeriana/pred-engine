@@ -9,6 +9,7 @@ import sys
 import textwrap
 import time
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
 import numpy  # noqa: F401  (carga OpenBLAS antes de consultar sus hilos)
@@ -286,3 +287,60 @@ def test_los_procesos_del_pool_terminan_si_el_padre_muere_al_arrancar(tmp_path):
         time.sleep(0.2)
     assert not any(_vivo(pid) for pid in hijos)
     assert not any(carpeta.iterdir())  # ninguno tomo una tarea
+
+
+_PADRE_INTERRUMPIDO = textwrap.dedent(
+    """
+    import sys
+    import time
+
+    from pred_engine.comun.ejecucion_paralela import EtiquetaUnidad, ejecutar_unidades
+
+
+    def ocupar(segundos):
+        time.sleep(segundos)
+
+
+    if __name__ == "__main__":
+        etiquetas = [EtiquetaUnidad("L2", f"sku-{i}", "ml", "m") for i in range(20)]
+        ejecutar_unidades(
+            ocupar, [0.5] * 20, procesos=2, etiquetas=etiquetas, progreso=sys.argv[1]
+        )
+    """
+)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT a un grupo es de POSIX")
+def test_sigint_al_grupo_detiene_el_pool_sin_empezar_otras_unidades(tmp_path):
+    # #131: con 2 procesos, a lo sumo una unidad por proceso empieza tras SIGINT.
+    import json
+    import signal
+
+    guion, progreso = tmp_path / "padre.py", tmp_path / "progreso.jsonl"
+    guion.write_text(_PADRE_INTERRUMPIDO)
+    padre = subprocess.Popen(
+        [sys.executable, str(guion), str(progreso)], start_new_session=True
+    )
+
+    def iniciadas() -> list[float]:
+        texto = progreso.read_text(encoding="utf-8") if progreso.exists() else ""
+        return [
+            datetime.fromisoformat(e["t"]).timestamp()
+            for e in map(json.loads, texto.split("\n")[:-1])
+            if e["event"] == "unit_started"
+        ]
+
+    try:
+        limite = time.monotonic() + 60
+        while len(iniciadas()) < 3 and time.monotonic() < limite:
+            time.sleep(0.05)
+        hijos = psutil.Process(padre.pid).children()
+        interrupcion = time.time()
+        os.killpg(padre.pid, signal.SIGINT)
+        padre.wait(timeout=10)
+    finally:
+        if padre.poll() is None:
+            os.killpg(padre.pid, signal.SIGKILL)
+    assert padre.returncode != 0
+    assert len([t for t in iniciadas() if t > interrupcion]) <= 2
+    assert hijos and not any(_vivo(hijo.pid) for hijo in hijos)

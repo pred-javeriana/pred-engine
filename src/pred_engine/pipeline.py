@@ -786,14 +786,12 @@ class Pipeline:
         if self.workers == 1:
             yield
             return
+        # Un fallo o una interrupcion detiene el pool sin esperar sus unidades
+        # (pool_de_unidades): ninguna unidad enviada empieza despues.
         with pool_de_unidades(self.workers) as pool:
             self._pool = pool
             try:
                 yield
-            except BaseException:
-                # Un fallo o una interrupcion no espera las unidades no iniciadas.
-                pool.shutdown(wait=False, cancel_futures=True)
-                raise
             finally:
                 self._pool = None
                 self._early_l3.clear()

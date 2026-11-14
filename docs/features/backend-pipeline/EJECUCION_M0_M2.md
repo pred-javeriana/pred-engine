@@ -109,8 +109,10 @@ ocupan los procesos que dejan libres las últimas unidades L2. Por eso sus
 eventos en `progreso.jsonl` pueden llegar antes del `stage_started` y del
 `planned` de L3. El L3 de SARIMA reutiliza el walk-forward que su HPO ya
 calculó para la configuración ganadora, si el HPO usó los mismos ajustes que
-L3 y L3 usa la misma fábrica nativa de SARIMA; si no, lo calcula de nuevo. Un fallo o una interrupción cancela las
-unidades que no empezaron.
+L3 y L3 usa la misma fábrica nativa de SARIMA; si no, lo calcula de nuevo. Un fallo o una interrupción (SIGINT) cancela las
+unidades que no empezaron y termina los procesos del pool, con la unidad que
+estuvieran corriendo: ninguna unidad enviada empieza después. Una unidad
+cortada no deja checkpoint y la reanudación la corre de nuevo.
 
 En L4 (evaluación de M3), cada SKU es una unidad del mismo tipo de pool: un
 proceso ajusta sus candidatos, genera sus pronósticos y su línea base, y

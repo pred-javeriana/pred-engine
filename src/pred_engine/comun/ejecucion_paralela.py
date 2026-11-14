@@ -454,7 +454,12 @@ def _iterar[T, R](
 
 @contextmanager
 def pool_de_unidades(procesos: int) -> Iterator[ProcessPoolExecutor]:
-    """Pool de procesos para unidades aisladas: BLAS de una hebra y fin con el padre."""
+    """Pool de procesos para unidades aisladas: BLAS de una hebra y fin con el padre.
+
+    Si el bloque termina con una excepcion o una interrupcion, el pool se detiene
+    sin esperar: sus procesos terminan, con la unidad que estuvieran corriendo, y
+    ninguna unidad enviada empieza despues (ver ``detener_pool``).
+    """
     with (
         blas_de_una_hebra(),
         ProcessPoolExecutor(
@@ -463,7 +468,30 @@ def pool_de_unidades(procesos: int) -> Iterator[ProcessPoolExecutor]:
             initializer=iniciar_proceso_del_pool,
         ) as ejecutor,
     ):
-        yield ejecutor
+        try:
+            yield ejecutor
+        except BaseException:
+            detener_pool(ejecutor)
+            raise
+
+
+def detener_pool(ejecutor: ProcessPoolExecutor) -> None:
+    """Cancela las unidades enviadas y termina los procesos del pool.
+
+    ``shutdown(wait=False, cancel_futures=True)`` no basta: las unidades que ya
+    pasaron a la cola de llamadas del pool corren igual, y el ``shutdown(wait=True)``
+    de ``__exit__`` desactiva la cancelacion antes de que el hilo del pool la lea,
+    asi que todas las unidades enviadas seguian empezando hasta que el interprete
+    terminaba. Una unidad terminada a medias no deja resultado: su checkpoint se
+    escribe de forma atomica al completarse, y una nueva ejecucion la retoma.
+    """
+    # ``_processes`` es interno; se copia antes de shutdown, que lo suelta.
+    procesos = list((getattr(ejecutor, "_processes", None) or {}).values())
+    ejecutor.shutdown(wait=False, cancel_futures=True)
+    for proceso in procesos:
+        proceso.terminate()
+    for proceso in procesos:
+        proceso.join(timeout=5)
 
 
 def resultado_de[R](
