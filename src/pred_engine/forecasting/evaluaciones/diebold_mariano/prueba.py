@@ -57,6 +57,11 @@ class IntervaloRazon:
     [inferior, infinito), con ``superior`` en ``None``, o tiene dos tramos,
     [inferior, superior] y [inferior_cola, infinito), y la prueba rechaza los
     valores entre ambos.
+
+    Un SKU probado puede quedar sin intervalo (``intervalo_razon`` devuelve
+    ``None``): cuando la varianza de largo plazo con nucleo rectangular de
+    a - r^2 b no es positiva en r estimado, la region de Fieller no contiene a r
+    y no se publica, o cuando la perdida media de Seasonal Naive es cero.
     """
 
     nivel: float

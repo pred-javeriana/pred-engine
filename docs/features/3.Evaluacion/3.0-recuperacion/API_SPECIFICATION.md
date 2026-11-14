@@ -27,12 +27,15 @@ la pasa explícitamente. Es un colaborador obligatorio, no se infiere desde
 Parquet cuando la plataforma ya conoce esa ingesta.
 
 `procesos` fija cuántos procesos generan los pronósticos de los SKU (el CLI
-pasa `--workers`). Con 1 todo corre en el proceso actual. Con más de 1, cada
+pasa `--workers`). Con 1 todo corre en el proceso actual, con BLAS de una
+hebra mientras dura la etapa (`threadpoolctl`). Con más de 1, cada
 SKU es una unidad del pool de `comun.ejecucion_paralela`, con `spawn` y BLAS
 de una hebra, así que las fábricas deben poder serializarse con `pickle`. El
 proceso que llama sigue siendo el único que escribe en SQLite: confirma las
-unidades nuevas de cada SKU con sus marcadores en una sola transacción, en el
-orden de los SKU. Si un SKU no puede
+unidades nuevas de los candidatos de cada SKU con sus marcadores en una
+transacción y la línea base de ese SKU en otra, en el orden de los SKU. Tras
+una caída entre las dos, la reanudación reutiliza las unidades candidatas ya
+confirmadas y genera las ventanas de la línea base que faltan. Si un SKU no puede
 pronosticarse, la etapa se detiene con su causa y los SKU anteriores quedan
 durables para la reanudación. Los resultados no dependen de `procesos`.
 
@@ -54,14 +57,20 @@ resultado: ValidationArtifact = controlador(evaluation: EvaluationArtifact)
   datos, código, versiones y referencias M1/M2. Registra antes de abrir la
   reserva si la métrica HPO no es RMSE, las exclusiones de M2 y la selección
   de robustez.
-- El resultado contiene exactamente un veredicto para cada SKU del handoff.
-  Los fallos de adaptación cuentan, aunque el SKU no tenga candidato válido.
-  Un SKU que M2 excluyó no recibe veredicto. Sin ningún SKU que juzgar y sin
+- El resultado contiene exactamente un veredicto para cada SKU del handoff y
+  para cada SKU cuyas unidades L2 fallaron todas. Los fallos de adaptación
+  cuentan, aunque el SKU no tenga candidato válido. Un SKU sin ningún ajuste L2
+  exitoso no está en el manifiesto, pero sigue a M3 y queda `FALLO_TECNICO`
+  con las causas L2 en su justificación (ADR-023, decisión 8). Un SKU que M2
+  excluyó, también al cerrar L2, no recibe veredicto. Sin ningún SKU que juzgar y sin
   protocolo durable, `ValueError` («ningun SKU llega a M3») antes de registrar
   la corrida.
 
 `ValidationArtifact.audit_bundle` incluye `run_id_m3`, estado PUBLICADA,
-origen de datos, H, número de unidades, fallos técnicos, exclusiones de M2
+origen de datos, H, número de unidades, fallos técnicos (`n_fallos`: unidades
+L2 fallidas de la procedencia durable de los SKU que M3 juzga, fallos de
+adaptación de 3.2 y ventanas fallidas de M3; nunca resultados adversos ni el
+fallo L2 de un SKU que salió al cerrar L2), exclusiones de M2
 (`exclusiones_m2`, las de la procedencia durable), exclusiones de datos y
 rutas de exportación. Las ventanas sin contexto no se registran como fallos
 del modelo; las ventanas sin objetivos completos no se puntúan ni se rellenan

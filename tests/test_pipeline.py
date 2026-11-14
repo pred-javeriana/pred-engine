@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import psutil
 import pytest
 
 from pred_engine import pipeline as pipeline_module
@@ -183,6 +184,46 @@ def test_l1_error_has_no_downstream_evidence(tmp_path):
     assert code == 1
     assert diagnostic["failed_stage"] == "L1"
     assert diagnostic["stages"][0]["state"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("filas", "causa", "codigo"),
+    [
+        pytest.param("", "SchemaBarrierError", "ingest.schema_barrier", id="vacio"),
+        pytest.param(
+            "105,2024-10-01,5,3\n106,2024-10-01,2,3\n",
+            "HandoffPreconditionError",
+            "handoff.precondition",
+            id="un-dia",
+        ),
+    ],
+)
+def test_empty_or_single_day_input_fails_l1_with_its_typed_cause(
+    tmp_path, filas, causa, codigo
+):
+    request = request_at(tmp_path)
+    Path(request.csv_path).write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n" + filas
+    )
+    with pytest.raises(PipelineExecutionError) as raised:
+        verification_pipeline().run(request)
+    error = raised.value
+    assert error.stage == "L1"
+    assert type(error.__cause__).__name__ == causa
+    assert [s.state for s in error.result.stages] == [
+        "failed",
+        "pending",
+        "pending",
+        "pending",
+    ]
+    summary = summarize_run(error.result)
+    assert "reserve" not in summary
+    assert (summary["excluded_count"], summary["exclusions"]) == (0, [])
+    data = tmp_path / "data"
+    assert not list((data / "processed").glob("*.parquet"))
+    (informe,) = (data / "ingestas").glob("*.json")
+    report = json.loads(informe.read_text(encoding="utf-8"))
+    assert (report["status"], report["error"]["code"]) == ("failed", codigo)
 
 
 def test_l2_factory_error_preserves_real_ingestion(tmp_path):
@@ -1019,11 +1060,19 @@ def test_una_interrupcion_no_espera_las_unidades_que_no_empezaron(
     with pytest.raises(KeyboardInterrupt):
         pipeline.run(request)
 
+    # El pool termina sus procesos: ninguna unidad enviada sigue en segundo
+    # plano hasta que el interprete sale (#131).
+    assert not [
+        hijo
+        for hijo in psutil.Process().children(recursive=True)
+        if "spawn_main" in " ".join(hijo.cmdline())
+    ]
     eventos = _eventos(progreso)
     [plan] = [e for e in eventos if (e["event"], e.get("stage")) == ("planned", "L2")]
     iniciadas = [e for e in eventos if e["event"] == "unit_started"]
-    # Solo corren las unidades que ya estaban en manos del pool.
-    assert len(iniciadas) < len(plan["units"]) == 12
+    assert len(plan["units"]) == 12
+    # A lo sumo la unidad que cada proceso tenia y la que esperaba en su cola.
+    assert len(iniciadas) <= 3
 
 
 def _clasicos(candidatos):

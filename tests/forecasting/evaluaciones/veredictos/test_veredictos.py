@@ -125,6 +125,16 @@ def test_categoria_adversa_deja_al_sku_exploratorio_con_la_linea_base() -> None:
     assert veredicto.pierde_frente_a_linea_base is True
 
 
+def test_justificacion_exploratoria_adversa_usa_coma_decimal() -> None:
+    # La campeona de clase (ml) pierde en B: el texto publicado usa coma decimal.
+    veredicto = _unico(
+        evaluacion("A", [metricas_candidato("ml", 0.5)]),
+        evaluacion("B", [metricas_candidato("ml", 1.25)]),
+    )["B"]
+    assert veredicto.familia_campeona == "ml"
+    assert veredicto.justificacion == "EXPLORATORIO: r=1,250 ≥ 1 (resultado adverso)"
+
+
 def test_pocas_ventanas_de_prueba_es_evidencia_insuficiente() -> None:
     # La seleccion tiene 40 ventanas; el bloque de prueba, una sola.
     resultado = emitir_veredictos(
@@ -162,6 +172,25 @@ def test_todos_los_candidatos_fallaron_es_fallo_tecnico_aunque_haya_datos() -> N
     sin_pronostico = metricas_candidato("ml", None, n=0, pronosticos_validos=0)
     assert _unico(evaluacion("A", [sin_pronostico]))["A"].veredicto == "FALLO_TECNICO"
     assert _unico(evaluacion("B", [], fallidos=2))["B"].veredicto == "FALLO_TECNICO"
+
+
+def test_fallo_tecnico_no_es_perdida_frente_a_la_linea_base_ni_adverso() -> None:
+    # Categoria adversa: Seasonal Naive es la campeona de A y de B, con r = 1.
+    resultado = _emitir(
+        evaluacion("A", [metricas_candidato("ml", 1.3)]),
+        evaluacion("B", [], fallidos=2),
+    )
+    veredictos = {v.sku: v for v in resultado.skus}
+    assert veredictos["B"].veredicto == "FALLO_TECNICO"
+    assert veredictos["B"].familia_campeona == FAMILIA_LINEA_BASE
+    # Conserva la evidencia de la linea base, sin marcarla como perdida del modelo.
+    assert veredictos["B"].razon_sn == pytest.approx(1.0)
+    assert veredictos["B"].metricas_linea_base is not None
+    assert veredictos["B"].pierde_frente_a_linea_base is None
+    assert veredictos["A"].veredicto == "EXPLORATORIO"
+    assert veredictos["A"].pierde_frente_a_linea_base is True
+    (categoria,) = resultado.categorias
+    assert categoria.n_adversos == 1
 
 
 def test_fallo_tecnico_precede_a_no_evaluable() -> None:

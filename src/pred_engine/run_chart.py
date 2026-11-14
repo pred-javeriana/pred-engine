@@ -5,13 +5,15 @@ Lee los artefactos que deja ``pred-engine run`` en el directorio de la corrida
 autocontenido, sin dependencias de graficacion. De arriba abajo, sobre el mismo
 eje de tiempo:
 
-1. Etapas L1-L3.
+1. Etapas L1-L4.
 2. CPU en nucleos: procesos de la corrida, maquina entera y capacidad.
 3. Memoria: RSS de los procesos de la corrida, memoria en uso de la maquina y
    memoria total.
 4. Memoria residente de cada proceso (principal y procesos del pool).
-5. Una fila por proceso con cada unidad SKU x familia, coloreada por modelo;
-   pasar el puntero sobre una barra muestra SKU, etapa, duracion y CPU.
+5. Una fila por proceso con cada unidad SKU x familia de L2 y L3, coloreada
+   por modelo; pasar el puntero sobre una barra muestra SKU, etapa, duracion y
+   CPU. ``unidades.jsonl`` solo tiene unidades de L2 y L3: L4 no registra
+   unidades por proceso, y su banda lo dice.
 
 Sin ``recursos.jsonl`` (muestreo desactivado) solo se dibujan las etapas y las
 unidades.
@@ -394,10 +396,9 @@ def render_run_chart(run_dir: str | Path, output: str | Path | None = None) -> P
         )
 
     # Traza de modelos: una fila por proceso, una barra por unidad.
-    lienzo.texto(
-        _IZQ, y_gantt - 14, "Unidades SKU × familia por proceso", "titulo-panel"
-    )
-    x_leyenda = _IZQ + 260
+    titulo_gantt = "Unidades SKU × familia por proceso (L2 y L3)"
+    lienzo.texto(_IZQ, y_gantt - 14, titulo_gantt, "titulo-panel")
+    x_leyenda = _IZQ + 8 * len(titulo_gantt) + 24
     presentes = {u.get("model") for u in unidades}
     for indice, modelo in enumerate(_MODELOS):
         if modelo not in presentes:
@@ -443,6 +444,17 @@ def render_run_chart(run_dir: str | Path, output: str | Path | None = None) -> P
             f'height="{_CARRIL}" rx="1.5"><title>{escape(detalle)}</title></rect>'
         )
 
+    # L4 no deja unidades en unidades.jsonl: su banda lo dice en vez de quedar vacia.
+    for etapa, inicio, fin in etapas:
+        if etapa == "L4":
+            lienzo.texto(
+                (lienzo.x(inicio) + lienzo.x(fin)) / 2,
+                y_gantt + _CARRIL - 1,
+                "L4 no registra unidades por proceso",
+                "eje",
+                text_anchor="middle",
+            )
+
     # Eje de tiempo comun.
     paso = _paso_tiempo(lienzo.duracion)
     marca = 0.0
@@ -463,7 +475,7 @@ def render_run_chart(run_dir: str | Path, output: str | Path | None = None) -> P
 
     run_id = corrida.get("run_id", directorio.name)
     fallidas = sum(u["state"] != "completada" for u in unidades)
-    partes = [_duracion(lienzo.duracion), f"{len(unidades)} unidades"]
+    partes = [_duracion(lienzo.duracion), f"{len(unidades)} unidades de L2 y L3"]
     if fallidas:
         partes[-1] += f" ({fallidas} fallidas)"
     partes.append(f"{sum(1 for p in carriles if p)} procesos con unidades")

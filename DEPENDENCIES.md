@@ -15,6 +15,7 @@ Dependency manifest for `pred-engine` — updated on every dependency change
 | statsmodels | >=0.14 | SARIMAX (`comun.modelos.modelos_clasicos.sarima`) y descomposición STL (`aumentacion.mbb`) |
 | optuna | >=4.0 | Sampler TPE multivariado y `Study`/pruner del motor de HPO (`optimizacion.optimizadores.HPO`) — ver ADR-02-006 |
 | psutil | >=5.9 | CPU y memoria por proceso durante `pred-engine run` (`run_telemetry`, `recursos.jsonl`) |
+| threadpoolctl | >=3.1 | Limite real de una hebra de BLAS/OpenMP en la via serial de `comun.ejecucion_paralela` (`--workers 1`), donde NumPy y SciPy ya estan importados |
 
 ## Extra `foundation`
 

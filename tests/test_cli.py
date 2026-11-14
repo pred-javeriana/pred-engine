@@ -273,6 +273,85 @@ def test_cli_verify_parquet_rechaza_sku_class_binaria(
         assert "violacion Pydantic en fila 0" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("columna", "mensaje"),
+    [
+        ("sku_id", "sku_id debe ser String"),
+        ("sku_class", "sku_class admite solo"),
+    ],
+)
+def test_cli_verify_parquet_bytes_no_utf8_sale_6(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    columna: str,
+    mensaje: str,
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,108,17\n"
+        "105,2024-10-04,50,17\n",
+        encoding="utf-8",
+    )
+    raiz = tmp_path / "data"
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    publicado = raiz / "processed" / "mini.parquet"
+    corte = pq.read_schema(publicado).metadata[b"pred_engine"]
+    tabla = pq.read_table(publicado)
+    # Columna binaria sin metadatos pandas: pyarrow la entrega como bytes.
+    tabla = tabla.set_column(
+        tabla.schema.get_field_index(columna),
+        pa.field(columna, pa.binary()),
+        pa.array([b"\xff\xfe"] * tabla.num_rows, type=pa.binary()),
+    ).replace_schema_metadata({b"pred_engine": corte})
+    externo = tmp_path / "externo.parquet"
+    pq.write_table(tabla, externo)
+    capsys.readouterr()
+
+    codigo = cli.main(["verify", "--parquet", str(externo)])
+
+    assert codigo == 6
+    error = capsys.readouterr().err
+    assert mensaje in error
+    assert "Traceback" not in error
+
+
+@pytest.mark.parametrize(
+    ("filas", "codigo_esperado", "codigo_error"),
+    [
+        pytest.param("", 3, "ingest.schema_barrier", id="vacio"),
+        pytest.param(
+            "105,2024-10-01,5,3\n106,2024-10-01,2,3\n",
+            6,
+            "handoff.precondition",
+            id="un-dia",
+        ),
+    ],
+)
+def test_cli_classify_entrada_vacia_o_de_un_dia_sale_tipado_sin_publicar(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    filas: str,
+    codigo_esperado: int,
+    codigo_error: str,
+) -> None:
+    csv = tmp_path / "borde.csv"
+    csv.write_text("sku_id,timestamp,demand_qty,lead_time_days\n" + filas)
+    raiz = tmp_path / "data"
+
+    codigo = cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)])
+
+    assert codigo == codigo_esperado
+    assert "Traceback" not in capsys.readouterr().err
+    assert not list((raiz / "processed").glob("*.parquet"))
+    (informe,) = (raiz / "ingestas").glob("*.json")
+    datos = json.loads(informe.read_text(encoding="utf-8"))
+    assert datos["status"] == "failed"
+    assert datos["error"]["code"] == codigo_error
+    assert datos["published"] is None
+    assert datos["reserve"] is None
+
+
 _FIXTURE_SEMILLA = Path(__file__).parent / "fixtures" / "semilla_inventario.csv"
 
 

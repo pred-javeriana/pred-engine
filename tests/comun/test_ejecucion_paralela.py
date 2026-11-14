@@ -9,10 +9,13 @@ import sys
 import textwrap
 import time
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
+import numpy  # noqa: F401  (carga OpenBLAS antes de consultar sus hilos)
 import psutil
 import pytest
+from threadpoolctl import threadpool_info, threadpool_limits
 
 from pred_engine.comun.ejecucion_paralela import (
     RegistroUnidad,
@@ -39,6 +42,32 @@ def test_una_unidad_fallida_no_detiene_a_las_demas(procesos):
 def test_modo_secuencial_corre_en_el_proceso_actual():
     resultados = ejecutar_unidades(math.sqrt, [1.0, 16.0])
     assert {r.registro.pid for r in resultados} == {os.getpid()}
+
+
+def _hilos_nativos(_: object) -> list[int]:
+    return [biblioteca["num_threads"] for biblioteca in threadpool_info()]
+
+
+@pytest.mark.parametrize("procesos", [1, 2])
+def test_cada_unidad_corre_con_una_hebra_nativa_y_el_limite_se_restaura(procesos):
+    # Con NumPy ya importado, solo un limite nativo real baja sus hilos (#72).
+    with threadpool_limits(limits=2):
+        antes = _hilos_nativos(None)
+        resultados = ejecutar_unidades(_hilos_nativos, [None, None], procesos=procesos)
+        despues = _hilos_nativos(None)
+
+    assert antes and set(antes) == {2}
+    assert [r.registro.estado for r in resultados] == ["completada"] * 2
+    assert all(r.valor and set(r.valor) == {1} for r in resultados)
+    assert despues == antes
+
+
+def test_un_consumidor_que_deja_de_iterar_recupera_sus_hilos_nativos():
+    with threadpool_limits(limits=2):
+        resultados = iterar_unidades(_hilos_nativos, [None, None])
+        assert next(resultados).valor == [1] * len(threadpool_info())
+        resultados.close()
+        assert set(_hilos_nativos(None)) == {2}
 
 
 def test_modo_paralelo_solapa_unidades_en_procesos_distintos():
@@ -258,3 +287,60 @@ def test_los_procesos_del_pool_terminan_si_el_padre_muere_al_arrancar(tmp_path):
         time.sleep(0.2)
     assert not any(_vivo(pid) for pid in hijos)
     assert not any(carpeta.iterdir())  # ninguno tomo una tarea
+
+
+_PADRE_INTERRUMPIDO = textwrap.dedent(
+    """
+    import sys
+    import time
+
+    from pred_engine.comun.ejecucion_paralela import EtiquetaUnidad, ejecutar_unidades
+
+
+    def ocupar(segundos):
+        time.sleep(segundos)
+
+
+    if __name__ == "__main__":
+        etiquetas = [EtiquetaUnidad("L2", f"sku-{i}", "ml", "m") for i in range(20)]
+        ejecutar_unidades(
+            ocupar, [0.5] * 20, procesos=2, etiquetas=etiquetas, progreso=sys.argv[1]
+        )
+    """
+)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT a un grupo es de POSIX")
+def test_sigint_al_grupo_detiene_el_pool_sin_empezar_otras_unidades(tmp_path):
+    # #131: con 2 procesos, a lo sumo una unidad por proceso empieza tras SIGINT.
+    import json
+    import signal
+
+    guion, progreso = tmp_path / "padre.py", tmp_path / "progreso.jsonl"
+    guion.write_text(_PADRE_INTERRUMPIDO)
+    padre = subprocess.Popen(
+        [sys.executable, str(guion), str(progreso)], start_new_session=True
+    )
+
+    def iniciadas() -> list[float]:
+        texto = progreso.read_text(encoding="utf-8") if progreso.exists() else ""
+        return [
+            datetime.fromisoformat(e["t"]).timestamp()
+            for e in map(json.loads, texto.split("\n")[:-1])
+            if e["event"] == "unit_started"
+        ]
+
+    try:
+        limite = time.monotonic() + 60
+        while len(iniciadas()) < 3 and time.monotonic() < limite:
+            time.sleep(0.05)
+        hijos = psutil.Process(padre.pid).children()
+        interrupcion = time.time()
+        os.killpg(padre.pid, signal.SIGINT)
+        padre.wait(timeout=10)
+    finally:
+        if padre.poll() is None:
+            os.killpg(padre.pid, signal.SIGKILL)
+    assert padre.returncode != 0
+    assert len([t for t in iniciadas() if t > interrupcion]) <= 2
+    assert hijos and not any(_vivo(hijo.pid) for hijo in hijos)

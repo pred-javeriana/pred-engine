@@ -105,7 +105,11 @@ def validate_output_contract(frame: pd.DataFrame) -> None:
         pd.api.types.is_string_dtype(sku_col) or pd.api.types.is_object_dtype(sku_col)
     ):
         _fallar("sku_id debe ser String", column="sku_id")
-    sku_texto = sku_col.astype("string")
+    try:
+        sku_texto = sku_col.astype("string")
+    except (TypeError, ValueError):
+        # Bytes que no son UTF-8 no se pueden leer como texto.
+        _fallar("sku_id debe ser String", column="sku_id")
     if bool(sku_texto.str.strip().eq("").any()):
         _fallar("sku_id no puede ser vacio", column="sku_id")
 
@@ -124,7 +128,14 @@ def validate_output_contract(frame: pd.DataFrame) -> None:
     if bool((lead < 1).any()):
         _fallar("lead_time_days no respeta el dominio >= 1", column="lead_time_days")
 
-    clases = frame["sku_class"].astype("string")
+    try:
+        clases = frame["sku_class"].astype("string")
+    except (TypeError, ValueError):
+        # Bytes que no son UTF-8 no son ninguna etiqueta admitida.
+        _fallar(
+            "sku_class admite solo smooth, intermittent, erratic, lumpy",
+            column="sku_class",
+        )
     permitidas = set(SKU_CLASSES)
     invalidas = sorted(set(clases.dropna()) - permitidas)
     if invalidas:

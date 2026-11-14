@@ -204,7 +204,16 @@ en `excluidos` con `pocas_ventanas:<familia>`.
 `diebold_mariano: PruebaDM`, `justificacion`, `modelos_evaluados`,
 `intervalo_r: IntervaloRazon | None` (nivel `1 - alfa_dm`, solo con p-valor) e
 `intervalo_r_fcr: IntervaloRazon | None` (nivel FCR de la categoria, solo si
-BH selecciona al SKU). Todo se calcula en el bloque de prueba.
+BH selecciona al SKU). Todo se calcula en el bloque de prueba. Un
+`FALLO_TECNICO` conserva `razon_sn` y las métricas de la línea base, pero su
+`pierde_frente_a_linea_base` es `None`: un fallo no es una pérdida del modelo.
+
+`justificacion` es texto en español que se publica tal cual: empieza por el
+veredicto y escribe los decimales con coma, por ejemplo
+`EXPLORATORIO: r=1,250 ≥ 1 (resultado adverso)`. Cambiar este texto cambia la
+huella del código (`code_fingerprint`), así que en el CLI abre otra
+`codigo_version` y otra corrida; no cambia `version_politica` ni `version_metricas`, porque
+ninguna regla ni métrica cambia.
 
 `modelos_evaluados: tuple[ModeloEvaluado(candidato_id, familia, modelo,
 razon_sn), ...]` lista **todos** los modelos evaluados en el SKU con su r,
@@ -218,7 +227,8 @@ seleccion definitiva sigue siendo por categoria (ADR-03-003).
   el signo del estadistico), `n_mejores_by`, `n_peores_by` (Benjamini-Yekutieli)
   y `nivel_fcr = 1 - R q / m`, `None` sin selecciones.
 - `ResumenCategoria`: `sku_class`, `seleccion`, `conteos` y `porcentajes` por
-  veredicto, `mediana_r`, `n_adversos` (SKUs con `r >= 1`), `significancia`,
+  veredicto, `mediana_r`, `n_adversos` (SKUs con `r >= 1` que no son
+  `FALLO_TECNICO`), `significancia`,
   `confirmacion: ConfirmacionCategoria`, `contendiente` (la familia que la regla
   elige sin la fundacional, `None` si la fundacional no compite) y
   `seleccion_previa: SeleccionCategoria | None`.
@@ -254,7 +264,11 @@ corregir_multiplicidad(pruebas, alfa, *, metodo="fdr_bh") -> dict[str, PruebaDM]
   `[inferior_cola, infinito)`, y la prueba rechaza los valores entre ambos.
   Los dos ultimos casos ocurren cuando la perdida de SN no se distingue de
   cero a ese nivel. `contiene(rho)` dice si la prueba no rechaza `rho`. Devuelve
-  `None` si la prueba no se puede calcular. `ValueError` si `nivel` no esta en
+  `None` si la prueba no se puede calcular, si la perdida media de SN es cero
+  o si la varianza de largo plazo con nucleo rectangular de
+  `L_campeon - r^2 L_SN` no es positiva en `r` estimado; en ese caso un SKU
+  probado, incluso uno que la prueba rechaza, queda sin intervalo. `ValueError`
+  si `nivel` no esta en
   (0, 1).
 - `corregir_multiplicidad`: Benjamini-Hochberg (`fdr_bh`) o
   Benjamini-Yekutieli (`fdr_by`) de `statsmodels` sobre las pruebas con

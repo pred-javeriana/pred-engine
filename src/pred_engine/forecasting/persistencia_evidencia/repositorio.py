@@ -436,7 +436,8 @@ def guardar_evaluacion(
     incluida la linea base, debe tener sus pronosticos confirmados. Las
     metricas por ventana cubren toda la reserva; las agregadas, la cartera y la
     evidencia de significancia y confirmacion son del bloque de prueba (ADR-023).
-    ``observaciones`` es la reserva real de cada SKU del manifiesto, la misma
+    ``observaciones`` es la reserva real de cada SKU de ``m3_skus`` (los del
+    manifiesto y los que fallaron en todas sus unidades L2), la misma
     que puntuo las metricas; M4 la muestra frente a los pronosticos, asi que
     cada fecha pronosticada necesita su fila (``valor`` NULL sin observacion).
     """
@@ -576,7 +577,8 @@ def publicar(
 ) -> dict[str, Path]:
     """SELECCIONADA -> PUBLICADA, con el Parquet derivado de SQLite (ADR-03-009).
 
-    Exige veredicto para todo SKU del manifiesto. Las unidades sin marcador no
+    Exige veredicto para todo SKU de ``m3_skus``, incluidos los que fallaron en
+    todas sus unidades L2. Las unidades sin marcador no
     pueden existir: cada pronostico referencia la suya. El estado cambia antes
     de exportar, dentro de la transaccion, para que el Parquet de m3_corridas
     diga PUBLICADA; si la exportacion falla, se revierte. Repetir reexporta en
@@ -670,10 +672,22 @@ def veredictos_publicados(
 
 
 def contar_fallos(conn: sqlite3.Connection, run_id: str) -> int:
-    """Fallos locales de adaptacion y de ventanas, sin resultados adversos."""
+    """Fallos tecnicos de la corrida, sin resultados adversos.
+
+    Suma los fallos de adaptacion de 3.2, las ventanas fallidas de M3 y las
+    unidades L2 fallidas de la procedencia durable (``fallos_m2``) de los SKU que
+    M3 juzga. Esos fallos L2 cuentan aunque el reintento ya no falle: la receta
+    durable conserva su efecto. El fallo L2 de un SKU que salio al cerrar L2 no
+    cuenta: ese SKU no tiene veredicto y su exclusion queda en
+    ``m3_exclusiones``.
+    """
     return conn.execute(
         "SELECT (SELECT COUNT(*) FROM m3_fallos WHERE run_id = ?1) + "
-        "(SELECT COUNT(*) FROM m3_unidades WHERE run_id = ?1 AND estado = 'fallida')",
+        "(SELECT COUNT(*) FROM m3_unidades WHERE run_id = ?1 AND estado = 'fallida')"
+        " + (SELECT COUNT(*) FROM m3_protocolos AS p, "
+        "json_each(p.procedencia, '$.fallos_m2') AS f WHERE p.run_id = ?1 "
+        "AND json_extract(f.value, '$.sku') IN "
+        "(SELECT sku FROM m3_skus WHERE run_id = ?1))",
         (run_id,),
     ).fetchone()[0]
 

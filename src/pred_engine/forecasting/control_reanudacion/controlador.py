@@ -743,7 +743,8 @@ class ControladorEvaluacion:
                         sku,
                         generado.linea_base,
                         codigo_version=self.codigo_version,
-                        semilla=0,
+                        # Seasonal Naive es determinista: ninguna semilla intervino.
+                        semilla=None,
                         emitido_en=datetime.now(UTC),
                         fallos={
                             p.origen: FalloPronostico(

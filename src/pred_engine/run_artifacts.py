@@ -285,7 +285,13 @@ def write_run(
         _escribir_json(
             {
                 "schema": TOPOLOGY_SCHEMA,
-                "source_sha256": ingestion.source_sha256,
+                # El mismo valor que corrida.json en inputs.source.sha256: el
+                # del CSV, o el del Parquet en una corrida desde --parquet.
+                "source_sha256": (
+                    ingestion.source_sha256
+                    if ingestion.source_sha256 is not None
+                    else ingestion.parquet_sha256
+                ),
                 "t_star": (None if corte is None else corte.t_star.date().isoformat()),
                 "reserved_days": None if corte is None else corte.reserved_days,
                 "excluded_count": summary["excluded_count"],

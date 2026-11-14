@@ -99,7 +99,9 @@ Cada unidad registra su pid y su intervalo. `corrida.json` resume, por etapa,
 los procesos distintos, la concurrencia máxima observada y la aceleración
 (tiempo de cómputo sumado dividido por el tiempo de pared del tramo). Los
 procesos se crean con `spawn` y BLAS de una hebra, así que cada unidad usa un
-núcleo.
+núcleo. Con `--workers 1` las unidades corren en el proceso principal con el
+mismo límite: `threadpoolctl` baja a una hebra las bibliotecas de BLAS/OpenMP
+ya cargadas y lo restaura al terminar la etapa.
 
 L2 y L3 comparten un solo pool. Las unidades L3 de un SKU salen apenas
 terminan todas sus unidades L2 y la regla de dos familias lo conserva, así que
@@ -107,14 +109,17 @@ ocupan los procesos que dejan libres las últimas unidades L2. Por eso sus
 eventos en `progreso.jsonl` pueden llegar antes del `stage_started` y del
 `planned` de L3. El L3 de SARIMA reutiliza el walk-forward que su HPO ya
 calculó para la configuración ganadora, si el HPO usó los mismos ajustes que
-L3 y L3 usa la misma fábrica nativa de SARIMA; si no, lo calcula de nuevo. Un fallo o una interrupción cancela las
-unidades que no empezaron.
+L3 y L3 usa la misma fábrica nativa de SARIMA; si no, lo calcula de nuevo. Un fallo o una interrupción (SIGINT) cancela las
+unidades que no empezaron y termina los procesos del pool, con la unidad que
+estuvieran corriendo: ninguna unidad enviada empieza después. Una unidad
+cortada no deja checkpoint y la reanudación la corre de nuevo.
 
 En L4 (evaluación de M3), cada SKU es una unidad del mismo tipo de pool: un
 proceso ajusta sus candidatos, genera sus pronósticos y su línea base, y
 devuelve las unidades sin tocar SQLite. El proceso principal es el único
-escritor: confirma las unidades de cada SKU con sus marcadores en una sola
-transacción, en el orden de los SKU, y después lee de SQLite un SKU a la vez
+escritor: confirma las unidades de los candidatos de cada SKU con sus
+marcadores en una transacción y la línea base del SKU en otra, en el orden de
+los SKU, y después lee de SQLite un SKU a la vez
 para calcular sus métricas. Los resultados no cambian con `--workers`. La
 selección por categoría, la corrección BH y la publicación siguen en el
 proceso principal sobre toda la corrida.
@@ -153,8 +158,10 @@ uv run pred-engine telemetry data/runs/{run_id}
 El comando escribe `data/runs/{run_id}/telemetria.svg` (o la ruta de
 `--output`): las etapas, la CPU y la memoria de la corrida frente a la máquina,
 la memoria de cada proceso y una fila por proceso con cada unidad SKU × familia
-coloreada por modelo. Pasar el puntero sobre una barra muestra SKU, etapa,
-duración, CPU y estado. Sin `recursos.jsonl` el gráfico muestra solo etapas y
+de L2 y L3 coloreada por modelo. Pasar el puntero sobre una barra muestra SKU,
+etapa, duración, CPU y estado. L4 no registra unidades por proceso
+(`unidades.jsonl` solo tiene L2 y L3; sus `unit_finished` en `progreso.jsonl`
+no traen proceso ni inicio), así que su banda lo dice en vez de quedar vacía. Sin `recursos.jsonl` el gráfico muestra solo etapas y
 unidades.
 
 ## Fallas y reanudación
@@ -180,8 +187,9 @@ unidades.
   con `CorridaFallidaError`, que indica ese estado, pero no repite el motivo
   original. Los motivos originales quedan en `hpo/<estudio>/backend.jsonl`.
 - Una evaluación M3 PUBLICADA es inmutable. Repetir el mismo comando después
-  de reparar una falla reutiliza esa publicación con sus FALLO_TECNICO y sale
-  con código 8 aunque ningún ajuste falle ahora. Para obtener resultados
+  de reparar una falla reutiliza esa publicación con sus FALLO_TECNICO y los
+  fallos L2 durables de los SKU que juzgó (`m3.n_fallos`) y sale con código 8 aunque ningún ajuste
+  falle ahora. Para obtener resultados
   nuevos, use un `--run-id` nuevo.
 - Si cambia el código, cambia el `run_id`. La reanudación exige entrada,
   configuración y código compatibles. `--run-id` permite nombrar una corrida,
@@ -192,7 +200,7 @@ unidades.
 | Código | Significado |
 | --- | --- |
 | 0 | L1-L4 completas y evaluación M3 PUBLICADA. |
-| 8 | Publicación completa con fallos técnicos aislados, actuales o conservados como FALLO_TECNICO en una publicación reutilizada. |
+| 8 | Publicación completa con al menos un fallo técnico aislado: una unidad fallida de L1-L3 en `summary.failures` (aunque su SKU haya salido al cerrar L2), un fallo técnico contado en `m3.n_fallos` (L2 de la procedencia durable de un SKU que M3 juzga, 3.2 o ventanas de M3) o un veredicto FALLO_TECNICO, también el conservado en una publicación reutilizada. |
 | 1 | Error de entrada, base, identidad, Chronos-2 que no carga o etapa sin resultados. |
 | 7 | Solo para un pipeline de biblioteca sin validador configurado; el CLI requiere base central. |
 

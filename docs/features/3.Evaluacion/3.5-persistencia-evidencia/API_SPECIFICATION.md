@@ -31,10 +31,14 @@ registrar_corrida(
     conn, identidad: IdentidadCorrida,
     handoff: HandoffValidado | LoteRechazadoError,
     *, ingesta_sha256: str, datos_sinteticos: bool | None, run_id_m2: str | None = None,
+    skus_fallidos: tuple[str, ...] = (),
 ) -> str
 ```
 
-Un handoff válido crea EN_CURSO, sus SKU y sus fallos de candidato. Un rechazo
+Un handoff válido crea EN_CURSO, sus SKU y sus fallos de candidato.
+`skus_fallidos` agrega a `m3_skus` los SKU que fallaron en L2 sin llegar al
+manifiesto; el controlador pasa los que no salieron al cerrar L2, y M3 los
+juzga `FALLO_TECNICO`. Con un lote rechazado se ignora. Un rechazo
 crea RECHAZADA con causa o marca así la corrida incompleta existente. Una
 PUBLICADA conserva su estado y evidencia. Repetir un handoff compatible no
 cambia los datos.
@@ -119,7 +123,7 @@ consultar(conn, run_id, *, sku: str | None = None) -> dict[str, pd.DataFrame]
 antes de escribir. Publica MAE, RMSE, MASE, ME y razón por candidato, ventana
 y agregadas. `m3_cartera` contiene media, mediana, percentiles 25 y 75 y
 conteos de SKU, instancias y valores no calculables por clase/familia/métrica.
-`observaciones` es la reserva real de cada SKU del manifiesto, indexada por
+`observaciones` es la reserva real de cada SKU de `m3_skus`, indexada por
 fecha; un valor no finito se guarda como NULL. Se rechaza sin escribir si falta
 un SKU, si no hay corte fijado, si una fecha no es posterior a t* o si una
 fecha pronosticada no tiene su fila.

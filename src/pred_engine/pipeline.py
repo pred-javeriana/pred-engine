@@ -786,14 +786,12 @@ class Pipeline:
         if self.workers == 1:
             yield
             return
+        # Un fallo o una interrupcion detiene el pool sin esperar sus unidades
+        # (pool_de_unidades): ninguna unidad enviada empieza despues.
         with pool_de_unidades(self.workers) as pool:
             self._pool = pool
             try:
                 yield
-            except BaseException:
-                # Un fallo o una interrupcion no espera las unidades no iniciadas.
-                pool.shutdown(wait=False, cancel_futures=True)
-                raise
             finally:
                 self._pool = None
                 self._early_l3.clear()
@@ -1181,6 +1179,9 @@ class Pipeline:
 
     def validate(self, evaluation: EvaluationArtifact) -> ValidationArtifact:
         """L4: native covers handoff SKUs; legacy covers evaluated SKUs.
+
+        Native coverage also includes SKUs whose L2 units all failed: they never
+        reach the manifest but M3 judges them FALLO_TECNICO (ADR-023).
 
         A reused native publication covers its frozen handoff, not the SKUs a
         later M2 retry happened to fit. A resumed one leaves out the SKUs that

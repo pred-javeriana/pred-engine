@@ -197,7 +197,10 @@ familia de un SKU en el bloque de seleccion para entrar en el conjunto comun.
   distingue de cero, el conjunto es `[inferior, superior]`. Si no se distingue,
   no tiene cota superior: es `[inferior, infinito)`, con `superior` en `None`,
   o tiene dos tramos, `[inferior, superior]` y `[inferior_cola, infinito)`, y
-  la prueba rechaza los valores entre ambos. Un SKU que BH selecciona lleva
+  la prueba rechaza los valores entre ambos. Un SKU probado puede quedar sin
+  intervalo cuando la varianza de largo plazo con nucleo rectangular no es
+  positiva en `r` estimado (la region de Fieller no contendria a `r`) o cuando
+  la perdida media de SN es cero. Un SKU que BH selecciona lleva
   ademas el intervalo al nivel FCR `1 - R q / m` de su categoria, con `R`
   rechazos entre `m` pruebas (Benjamini y Yekutieli, 2005).
 - **Cuando no se prueba** queda la causa: `datos_sinteticos`,
@@ -343,7 +346,9 @@ La familia campeona se elige por categoria, pero cada SKU usa su propia
 instancia (o la de la siguiente familia del ranking si no tiene instancia de la
 campeona) y su resultado en el bloque de prueba queda visible: campeon, r,
 metricas del campeon y de SN, veredicto, prueba Diebold-Mariano con su
-intervalo de r y si pierde frente a SN. Ademas,
+intervalo de r y si pierde frente a SN. En un `FALLO_TECNICO` esa perdida queda
+sin informar y el SKU no cuenta en `n_adversos`: el fallo no es un resultado
+adverso del modelo. Ademas,
 `modelos_evaluados` lista como dato descriptivo **todos** los modelos evaluados
 en el SKU con su r, incluida Seasonal Naive (r = 1). Asi se ve, por ejemplo,
 que un SKU habria tenido mejor r con SARIMA aunque la categoria la gane

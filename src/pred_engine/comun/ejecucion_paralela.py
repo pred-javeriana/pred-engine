@@ -5,7 +5,8 @@ error queda como resultado de esa unidad y el resto sigue. Cada resultado guarda
 el proceso, el inicio y el fin de la unidad, que son la evidencia observable de
 que el trabajo corrio en paralelo.
 
-Con ``procesos=1`` todo corre en el proceso actual, con el mismo aislamiento.
+Con ``procesos=1`` todo corre en el proceso actual, con el mismo aislamiento y
+el mismo limite de una hebra de BLAS/OpenMP que los hijos del pool.
 Con ``procesos > 1`` los hijos se crean con ``spawn`` (ver ``CONTEXTO_MP``), asi
 que la funcion y las tareas deben poder serializarse con ``pickle``.
 """
@@ -27,6 +28,8 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+
+from threadpoolctl import threadpool_limits
 
 from pred_engine.comun.errores_codigo import codigo_de
 from pred_engine.comun.hechos_error import hechos_de
@@ -109,6 +112,20 @@ def blas_de_una_hebra() -> Iterator[None]:
                 os.environ.pop(variable, None)
             else:
                 os.environ[variable] = valor
+
+
+@contextmanager
+def hilos_nativos_de_una_hebra() -> Iterator[None]:
+    """Una hebra de BLAS/OpenMP en el proceso actual mientras dura el bloque.
+
+    En la via serial las unidades corren en este proceso, que ya importo NumPy y
+    SciPy: cambiar las variables de entorno no limita a las bibliotecas ya
+    cargadas, porque estas las leen al importarse. ``threadpoolctl`` fija el
+    limite real de las cargadas, y las variables de entorno el de las que se
+    carguen dentro del bloque. Ambos se restauran al salir.
+    """
+    with blas_de_una_hebra(), threadpool_limits(limits=1):
+        yield
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,15 +405,17 @@ def _iterar[T, R](
         return None if etiquetas is None else etiquetas[indice].etapa
 
     if procesos == 1:
-        for indice, tarea in enumerate(tareas):
-            yield _ejecutar_aislada(
-                funcion,
-                tarea,
-                etiqueta_de(indice),
-                ruta,
-                etapa_de(indice),
-                al_completar,
-            )
+        # El mismo contrato de una hebra que cumplen los hijos del pool.
+        with hilos_nativos_de_una_hebra():
+            for indice, tarea in enumerate(tareas):
+                yield _ejecutar_aislada(
+                    funcion,
+                    tarea,
+                    etiqueta_de(indice),
+                    ruta,
+                    etapa_de(indice),
+                    al_completar,
+                )
         return
 
     with pool_de_unidades(procesos) as ejecutor:
@@ -435,7 +454,12 @@ def _iterar[T, R](
 
 @contextmanager
 def pool_de_unidades(procesos: int) -> Iterator[ProcessPoolExecutor]:
-    """Pool de procesos para unidades aisladas: BLAS de una hebra y fin con el padre."""
+    """Pool de procesos para unidades aisladas: BLAS de una hebra y fin con el padre.
+
+    Si el bloque termina con una excepcion o una interrupcion, el pool se detiene
+    sin esperar: sus procesos terminan, con la unidad que estuvieran corriendo, y
+    ninguna unidad enviada empieza despues (ver ``detener_pool``).
+    """
     with (
         blas_de_una_hebra(),
         ProcessPoolExecutor(
@@ -444,7 +468,30 @@ def pool_de_unidades(procesos: int) -> Iterator[ProcessPoolExecutor]:
             initializer=iniciar_proceso_del_pool,
         ) as ejecutor,
     ):
-        yield ejecutor
+        try:
+            yield ejecutor
+        except BaseException:
+            detener_pool(ejecutor)
+            raise
+
+
+def detener_pool(ejecutor: ProcessPoolExecutor) -> None:
+    """Cancela las unidades enviadas y termina los procesos del pool.
+
+    ``shutdown(wait=False, cancel_futures=True)`` no basta: las unidades que ya
+    pasaron a la cola de llamadas del pool corren igual, y el ``shutdown(wait=True)``
+    de ``__exit__`` desactiva la cancelacion antes de que el hilo del pool la lea,
+    asi que todas las unidades enviadas seguian empezando hasta que el interprete
+    terminaba. Una unidad terminada a medias no deja resultado: su checkpoint se
+    escribe de forma atomica al completarse, y una nueva ejecucion la retoma.
+    """
+    # ``_processes`` es interno; se copia antes de shutdown, que lo suelta.
+    procesos = list((getattr(ejecutor, "_processes", None) or {}).values())
+    ejecutor.shutdown(wait=False, cancel_futures=True)
+    for proceso in procesos:
+        proceso.terminate()
+    for proceso in procesos:
+        proceso.join(timeout=5)
 
 
 def resultado_de[R](

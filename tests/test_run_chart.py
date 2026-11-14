@@ -108,7 +108,8 @@ def test_dibuja_etapas_recursos_y_una_barra_por_unidad(tmp_path):
     raiz = ET.parse(ruta).getroot()
     textos = _textos(raiz)
     assert "Corrida r-prueba" in textos
-    assert any("4 unidades (1 fallidas)" in t for t in textos)
+    assert any("4 unidades de L2 y L3 (1 fallidas)" in t for t in textos)
+    assert "Unidades SKU × familia por proceso (L2 y L3)" in textos
     assert any("pico CPU 2.1 núcleos" in t for t in textos)
     for rotulo in ("CPU", "Memoria", "Memoria por proceso", "4 núcleos", "8 GB total"):
         assert rotulo in textos
@@ -159,7 +160,56 @@ def test_restored_units_do_not_appear_as_work_of_the_current_attempt(tmp_path):
     root = ET.parse(render_run_chart(folder)).getroot()
     bars = [r for r in root.iter(f"{_SVG}rect") if r.find(f"{_SVG}title") is not None]
     assert len(bars) == 3
-    assert any("26.0 s · 3 unidades" in t for t in _textos(root))
+    assert any("26.0 s · 3 unidades de L2 y L3" in t for t in _textos(root))
+
+
+def test_la_banda_de_l4_dice_que_l4_no_registra_unidades_por_proceso(tmp_path):
+    # #130: L4 deja solo eventos en progreso.jsonl, sin pid; no hay barras de L4.
+    folder = _corrida(tmp_path / "r")
+    corrida = json.loads((folder / "corrida.json").read_text())
+    corrida["stage_times"]["L4"] = {
+        "started_at": _iso(26),
+        "finished_at": _iso(60),
+        "seconds": 34,
+    }
+    (folder / "corrida.json").write_text(json.dumps(corrida))
+    (folder / "progreso.jsonl").write_text(
+        json.dumps(
+            {
+                "event": "unit_finished",
+                "t": _iso(40),
+                "stage": "L4",
+                "sku_id": "A",
+                "family": "classical",
+                "model": "sarima",
+                "state": "completada",
+            }
+        )
+        + "\n"
+    )
+
+    root = ET.parse(render_run_chart(folder)).getroot()
+
+    [nota] = [
+        t
+        for t in root.iter(f"{_SVG}text")
+        if t.text == "L4 no registra unidades por proceso"
+    ]
+    # Las divisiones marcan el inicio de cada etapa; la de L4 es la ultima.
+    divisiones = [
+        float(d.get("x1"))
+        for d in root.iter(f"{_SVG}line")
+        if d.get("class") == "division"
+    ]
+    assert len(divisiones) == 4
+    assert float(nota.get("x")) > max(divisiones)
+    bars = [r for r in root.iter(f"{_SVG}rect") if r.find(f"{_SVG}title") is not None]
+    assert not any(b.find(f"{_SVG}title").text.startswith("L4") for b in bars)
+
+
+def test_sin_l4_no_hay_nota_de_l4(tmp_path):
+    root = ET.parse(render_run_chart(_corrida(tmp_path / "r"))).getroot()
+    assert "L4 no registra unidades por proceso" not in _textos(root)
 
 
 def test_una_corrida_sin_unidades_es_un_error(tmp_path):
