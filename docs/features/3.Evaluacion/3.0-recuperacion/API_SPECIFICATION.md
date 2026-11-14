@@ -27,7 +27,8 @@ la pasa explícitamente. Es un colaborador obligatorio, no se infiere desde
 Parquet cuando la plataforma ya conoce esa ingesta.
 
 `procesos` fija cuántos procesos generan los pronósticos de los SKU (el CLI
-pasa `--workers`). Con 1 todo corre en el proceso actual. Con más de 1, cada
+pasa `--workers`). Con 1 todo corre en el proceso actual, con BLAS de una
+hebra mientras dura la etapa (`threadpoolctl`). Con más de 1, cada
 SKU es una unidad del pool de `comun.ejecucion_paralela`, con `spawn` y BLAS
 de una hebra, así que las fábricas deben poder serializarse con `pickle`. El
 proceso que llama sigue siendo el único que escribe en SQLite: confirma las

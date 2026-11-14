@@ -99,7 +99,9 @@ Cada unidad registra su pid y su intervalo. `corrida.json` resume, por etapa,
 los procesos distintos, la concurrencia máxima observada y la aceleración
 (tiempo de cómputo sumado dividido por el tiempo de pared del tramo). Los
 procesos se crean con `spawn` y BLAS de una hebra, así que cada unidad usa un
-núcleo.
+núcleo. Con `--workers 1` las unidades corren en el proceso principal con el
+mismo límite: `threadpoolctl` baja a una hebra las bibliotecas de BLAS/OpenMP
+ya cargadas y lo restaura al terminar la etapa.
 
 L2 y L3 comparten un solo pool. Las unidades L3 de un SKU salen apenas
 terminan todas sus unidades L2 y la regla de dos familias lo conserva, así que

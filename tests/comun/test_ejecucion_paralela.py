@@ -11,8 +11,10 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import numpy  # noqa: F401  (carga OpenBLAS antes de consultar sus hilos)
 import psutil
 import pytest
+from threadpoolctl import threadpool_info, threadpool_limits
 
 from pred_engine.comun.ejecucion_paralela import (
     RegistroUnidad,
@@ -39,6 +41,32 @@ def test_una_unidad_fallida_no_detiene_a_las_demas(procesos):
 def test_modo_secuencial_corre_en_el_proceso_actual():
     resultados = ejecutar_unidades(math.sqrt, [1.0, 16.0])
     assert {r.registro.pid for r in resultados} == {os.getpid()}
+
+
+def _hilos_nativos(_: object) -> list[int]:
+    return [biblioteca["num_threads"] for biblioteca in threadpool_info()]
+
+
+@pytest.mark.parametrize("procesos", [1, 2])
+def test_cada_unidad_corre_con_una_hebra_nativa_y_el_limite_se_restaura(procesos):
+    # Con NumPy ya importado, solo un limite nativo real baja sus hilos (#72).
+    with threadpool_limits(limits=2):
+        antes = _hilos_nativos(None)
+        resultados = ejecutar_unidades(_hilos_nativos, [None, None], procesos=procesos)
+        despues = _hilos_nativos(None)
+
+    assert antes and set(antes) == {2}
+    assert [r.registro.estado for r in resultados] == ["completada"] * 2
+    assert all(r.valor and set(r.valor) == {1} for r in resultados)
+    assert despues == antes
+
+
+def test_un_consumidor_que_deja_de_iterar_recupera_sus_hilos_nativos():
+    with threadpool_limits(limits=2):
+        resultados = iterar_unidades(_hilos_nativos, [None, None])
+        assert next(resultados).valor == [1] * len(threadpool_info())
+        resultados.close()
+        assert set(_hilos_nativos(None)) == {2}
 
 
 def test_modo_paralelo_solapa_unidades_en_procesos_distintos():
