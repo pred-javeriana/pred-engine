@@ -545,6 +545,20 @@ def test_cli_run_workers_invalido_no_persiste_identidad(tmp_path: Path) -> None:
     assert not (raiz / "runs" / run_id / "identidad.json").exists()
 
 
+def test_cli_run_trials_invalido_no_envenena_run_id(tmp_path: Path) -> None:
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "data"
+    run_id = "test-trials-invalid"
+    args = _args_run_base(raiz, db, run_id)
+    args_invalido = list(args)
+    args_invalido[args_invalido.index("--trials") + 1] = "0"
+    assert cli.main(args_invalido) == 1
+    assert not (raiz / "runs" / run_id / "identidad.json").exists()
+
+    assert cli.main(args) in (0, 8)
+    assert (raiz / "runs" / run_id / "corrida.json").exists()
+
+
 def _publicar_parquet_minimo(tmp_path: Path) -> Path:
     csv = tmp_path / "mini.csv"
     csv.write_text(
