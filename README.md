@@ -219,7 +219,8 @@ class). A `failed` or `rejected` retry of bytes that already have an `accepted`
 report does not replace it: the accepted report and its Parquet stay as they
 were, the command still exits with the error code of the retry, and no other
 file is added to `ingestas/`. `pred-engine run` also saves the metrics as `topologia.json` in the run
-folder. The platform imports these files; see section 17 of the frontend-engine
+folder; its `source_sha256` is the run's `inputs.source.sha256` in
+`corrida.json` (the CSV hash, or the Parquet hash for a `--parquet` run). The platform imports these files; see section 17 of the frontend-engine
 contract in `pred-docs`.
 
 ### Progress stream of a run

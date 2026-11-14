@@ -64,6 +64,29 @@ def test_la_corrida_guarda_la_topologia_de_la_ingesta(
     assert {m["sku_id"] for m in topologia["metrics"]}
 
 
+def test_una_corrida_desde_parquet_guarda_en_la_topologia_el_hash_de_su_entrada(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #129: topologia.json declaraba source_sha256 nulo desde --parquet.
+    raiz = tmp_path / "data"
+    _, desde_csv = _correr(representative_csv(tmp_path / "source.csv"), raiz, capsys)
+    corrida_csv = json.loads(
+        (Path(desde_csv["run_dir"]) / "corrida.json").read_text(encoding="utf-8")
+    )
+    parquet = corrida_csv["inputs"]["m1"]["parquet"]
+
+    # La muestra no completa la corrida, pero topologia.json es de L1 y
+    # corrida.json se escribe igual.
+    main(["run", "--parquet", parquet, "--data-root", str(raiz), *_ARGS])
+    resumen = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    carpeta = Path(resumen["run_dir"])
+    topologia = json.loads((carpeta / "topologia.json").read_text(encoding="utf-8"))
+    corrida = json.loads((carpeta / "corrida.json").read_text(encoding="utf-8"))
+    assert topologia["source_sha256"] == corrida["inputs"]["source"]["sha256"]
+    assert topologia["source_sha256"] == corrida["inputs"]["m1"]["sha256"]
+
+
 def test_la_corrida_no_pisa_un_archivo_distinto_con_el_mismo_nombre(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
