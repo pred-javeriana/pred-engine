@@ -158,8 +158,10 @@ uv run pred-engine telemetry data/runs/{run_id}
 El comando escribe `data/runs/{run_id}/telemetria.svg` (o la ruta de
 `--output`): las etapas, la CPU y la memoria de la corrida frente a la máquina,
 la memoria de cada proceso y una fila por proceso con cada unidad SKU × familia
-coloreada por modelo. Pasar el puntero sobre una barra muestra SKU, etapa,
-duración, CPU y estado. Sin `recursos.jsonl` el gráfico muestra solo etapas y
+de L2 y L3 coloreada por modelo. Pasar el puntero sobre una barra muestra SKU,
+etapa, duración, CPU y estado. L4 no registra unidades por proceso
+(`unidades.jsonl` solo tiene L2 y L3; sus `unit_finished` en `progreso.jsonl`
+no traen proceso ni inicio), así que su banda lo dice en vez de quedar vacía. Sin `recursos.jsonl` el gráfico muestra solo etapas y
 unidades.
 
 ## Fallas y reanudación
