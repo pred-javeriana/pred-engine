@@ -545,6 +545,46 @@ def test_cli_run_workers_invalido_no_persiste_identidad(tmp_path: Path) -> None:
     assert not (raiz / "runs" / run_id / "identidad.json").exists()
 
 
+def _publicar_parquet_minimo(tmp_path: Path) -> Path:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        + "".join(f"105,2024-10-{dia:02d},10,3\n" for dia in range(1, 11)),
+        encoding="utf-8",
+    )
+    raiz = tmp_path / "data"
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    return raiz / "processed" / "mini.parquet"
+
+
+def test_cli_verify_parquet_sku_anidado_sale_6_sin_traza(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    publicado = _publicar_parquet_minimo(tmp_path)
+    tabla = pq.read_table(publicado)
+    anidado = tabla.set_column(
+        tabla.schema.get_field_index("sku_id"),
+        "sku_id",
+        pa.array([["sku"]] * len(tabla)),
+    )
+    externo = tmp_path / "anidado.parquet"
+    pq.write_table(
+        anidado.replace_schema_metadata(
+            {b"pred_engine": tabla.schema.metadata[b"pred_engine"]}
+        ),
+        externo,
+    )
+    capsys.readouterr()
+
+    codigo = cli.main(["verify", "--parquet", str(externo)])
+
+    assert codigo == 6
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "sku_id debe ser String" in captured.err
+    assert "contrato_1_4: accepted" not in captured.out
+
+
 def test_cli_verify_no_parquet_retorna_6_sin_traza(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
