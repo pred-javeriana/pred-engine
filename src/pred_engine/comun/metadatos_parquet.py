@@ -88,6 +88,24 @@ def deserializar_metadatos(datos_bytes: bytes) -> ParquetMetadata:
             raise ValueError(
                 f"fraction debe ser {RESERVE_FRACTION}; recibido {fraction}"
             )
+        reserved_days = payload["reserved_days"]
+        if (
+            type(reserved_days) is not int
+            or reserved_days < 1
+            or pd.isna(t_star)
+            or pd.isna(first_reserved)
+            or pd.isna(last_observed)
+        ):
+            raise ValueError("reserved_days debe ser un entero >= 1 y fechas finitas")
+        t_star, first_reserved, last_observed = (
+            t_star.normalize(),
+            first_reserved.normalize(),
+            last_observed.normalize(),
+        )
+        if first_reserved != t_star + pd.Timedelta(days=1) or (
+            last_observed != first_reserved + pd.Timedelta(days=reserved_days - 1)
+        ):
+            raise ValueError("el corte y la reserva no son coherentes")
         exclusions = payload["exclusions"]
         if not isinstance(exclusions, list):
             raise ValueError("exclusions debe ser una lista")
@@ -99,10 +117,10 @@ def deserializar_metadatos(datos_bytes: bytes) -> ParquetMetadata:
             ):
                 raise ValueError("exclusion invalida")
         return ParquetMetadata(
-            t_star=t_star.normalize(),
-            first_reserved=first_reserved.normalize(),
-            last_observed=last_observed.normalize(),
-            reserved_days=int(payload["reserved_days"]),
+            t_star=t_star,
+            first_reserved=first_reserved,
+            last_observed=last_observed,
+            reserved_days=reserved_days,
             fraction=validar_fraccion(float(fraction)),
             exclusions=tuple(
                 SkuExclusion(sku_id=item["sku_id"], cause=item["cause"])

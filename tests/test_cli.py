@@ -585,6 +585,68 @@ def test_cli_verify_parquet_sku_anidado_sale_6_sin_traza(
     assert "contrato_1_4: accepted" not in captured.out
 
 
+@pytest.mark.parametrize(
+    ("campo", "valor"),
+    [
+        ("reserved_days", -2),
+        ("reserved_days", 0),
+        ("reserved_days", 2.5),
+        ("reserved_days", True),
+        ("t_star", "2024-01-01"),
+        ("first_reserved", "2013-01-01"),
+        ("last_observed", "2013-01-01"),
+    ],
+    ids=lambda v: str(v),
+)
+def test_cli_verify_parquet_metadatos_de_reserva_incoherentes_sale_6(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    campo: str,
+    valor: object,
+) -> None:
+    publicado = _publicar_parquet_minimo(tmp_path)
+    tabla = pq.read_table(publicado)
+    metadatos = dict(tabla.schema.metadata)
+    corte = json.loads(metadatos[b"pred_engine"])
+    corte[campo] = valor
+    metadatos[b"pred_engine"] = json.dumps(corte).encode("utf-8")
+    externo = tmp_path / "incoherente.parquet"
+    pq.write_table(tabla.replace_schema_metadata(metadatos), externo)
+    capsys.readouterr()
+
+    codigo = cli.main(["verify", "--parquet", str(externo)])
+
+    assert codigo == 6
+    captured = capsys.readouterr()
+    assert "vuelva a importar desde el CSV" in captured.err
+    assert "contrato_1_4: accepted" not in captured.out
+
+
+def test_cli_run_parquet_con_reserva_negativa_falla_antes_de_crear_la_corrida(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    publicado = _publicar_parquet_minimo(tmp_path)
+    tabla = pq.read_table(publicado)
+    metadatos = dict(tabla.schema.metadata)
+    corte = json.loads(metadatos[b"pred_engine"])
+    corte["reserved_days"] = -2
+    metadatos[b"pred_engine"] = json.dumps(corte).encode("utf-8")
+    externo = tmp_path / "negativa.parquet"
+    pq.write_table(tabla.replace_schema_metadata(metadatos), externo)
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "corridas"
+    args = _args_run_base(raiz, db, "reserva-negativa")
+    posicion = args.index("--seed-csv")
+    args[posicion : posicion + 2] = ["--parquet", str(externo)]
+    capsys.readouterr()
+
+    codigo = cli.main(args)
+
+    assert codigo != 0
+    assert "Traceback" not in capsys.readouterr().err
+    assert not (raiz / "runs" / "reserva-negativa").exists()
+
+
 def test_cli_verify_no_parquet_retorna_6_sin_traza(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
