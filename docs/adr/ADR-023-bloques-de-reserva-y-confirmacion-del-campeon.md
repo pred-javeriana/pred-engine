@@ -7,6 +7,8 @@ ADR-020, ADR-021 y ADR-022; tareas 3.0, 3.4 y 3.5.
 **Reemplaza en parte:** ADR-021, decisión 3 (Benjamini-Hochberg entre todos
 los SKU de la corrida) y sección «Límites» (la familia campeona se elegía sobre
 la misma reserva que producía su puntaje).
+**Enmendada (2026-11-14):** la tercera oración de la decisión 4 (no todo SKU
+probado lleva el intervalo de r); véase «Enmienda de 2026-11-14».
 
 ## Contexto
 
@@ -115,6 +117,23 @@ Naive, con un ganador obvio.
     promedian ni se combinan con Fisher o Stouffer, y un producto sin p en una
     corrida nunca entra con el mayor de sus p disponibles. La guía 3.4 tiene un
     ejemplo trabajado que la verificación del agrupador debe reproducir.
+
+## Enmienda de 2026-11-14: SKU probados sin intervalo de r
+
+**Cambia:** la tercera oración de la decisión 4, «Cada SKU probado lleva el
+intervalo de r que invierte la prueba (Fieller) al nivel 1 − `alfa_dm`». Un SKU
+probado puede quedar sin intervalo cuando la varianza de largo plazo con núcleo
+rectangular de L_campeón − r̂² · L_SN no es positiva en r̂, o cuando la pérdida
+media de Seasonal Naive es cero. En el primer caso la región de Fieller no
+contiene a r̂, así que no es un intervalo de r, aunque la prueba sí rechace con
+la varianza de L_campeón − L_SN. `m3_intervalos_r` no lleva fila para ese SKU.
+
+**Motivo:** en una corrida real un producto con 197 ventanas de prueba rechaza
+(HLN −2,97, p 0,0033), pero esa varianza es negativa en r̂. La prueba de
+regresión reproduce ese caso.
+
+**Sin cambio en el método:** el núcleo rectangular se conserva. Un núcleo
+definido positivo cambiaría todos los p-valores publicados.
 
 ## Consecuencias
 

@@ -197,7 +197,10 @@ familia de un SKU en el bloque de seleccion para entrar en el conjunto comun.
   distingue de cero, el conjunto es `[inferior, superior]`. Si no se distingue,
   no tiene cota superior: es `[inferior, infinito)`, con `superior` en `None`,
   o tiene dos tramos, `[inferior, superior]` y `[inferior_cola, infinito)`, y
-  la prueba rechaza los valores entre ambos. Un SKU que BH selecciona lleva
+  la prueba rechaza los valores entre ambos. Un SKU probado puede quedar sin
+  intervalo cuando la varianza de largo plazo con nucleo rectangular no es
+  positiva en `r` estimado (la region de Fieller no contendria a `r`) o cuando
+  la perdida media de SN es cero. Un SKU que BH selecciona lleva
   ademas el intervalo al nivel FCR `1 - R q / m` de su categoria, con `R`
   rechazos entre `m` pruebas (Benjamini y Yekutieli, 2005).
 - **Cuando no se prueba** queda la causa: `datos_sinteticos`,

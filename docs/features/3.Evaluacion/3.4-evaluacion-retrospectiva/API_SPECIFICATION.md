@@ -261,7 +261,11 @@ corregir_multiplicidad(pruebas, alfa, *, metodo="fdr_bh") -> dict[str, PruebaDM]
   `[inferior_cola, infinito)`, y la prueba rechaza los valores entre ambos.
   Los dos ultimos casos ocurren cuando la perdida de SN no se distingue de
   cero a ese nivel. `contiene(rho)` dice si la prueba no rechaza `rho`. Devuelve
-  `None` si la prueba no se puede calcular. `ValueError` si `nivel` no esta en
+  `None` si la prueba no se puede calcular, si la perdida media de SN es cero
+  o si la varianza de largo plazo con nucleo rectangular de
+  `L_campeon - r^2 L_SN` no es positiva en `r` estimado; en ese caso un SKU
+  probado, incluso uno que la prueba rechaza, queda sin intervalo. `ValueError`
+  si `nivel` no esta en
   (0, 1).
 - `corregir_multiplicidad`: Benjamini-Hochberg (`fdr_bh`) o
   Benjamini-Yekutieli (`fdr_by`) de `statsmodels` sobre las pruebas con
