@@ -494,6 +494,9 @@ def ingest_csv_with_report(
 
 
 def _ya_aceptada(ruta: Path) -> bool:
-    if not ruta.is_file():
+    # Un informe previo ilegible no es evidencia aceptada que conservar.
+    try:
+        previo = IngestReportFile.model_validate_json(ruta.read_bytes())
+    except (OSError, ValueError):
         return False
-    return IngestReportFile.model_validate_json(ruta.read_text()).status == "accepted"
+    return previo.status == "accepted"
