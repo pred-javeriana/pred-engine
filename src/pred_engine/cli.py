@@ -601,7 +601,7 @@ def _cmd_classify(args: argparse.Namespace) -> int:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
         return 5
-    except (ValueError, FileNotFoundError) as exc:
+    except (ValueError, OSError) as exc:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
         return 1

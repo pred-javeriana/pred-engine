@@ -193,6 +193,38 @@ def test_cli_classify_exige_una_fuente(capsys: pytest.CaptureFixture[str]) -> No
     assert "exactamente uno" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("entrada", ["csv", "parquet"])
+def test_cli_classify_data_root_archivo_sale_1_sin_traza(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], entrada: str
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,108,17\n"
+        "105,2024-10-04,50,17\n",
+        encoding="utf-8",
+    )
+    if entrada == "csv":
+        fuente = ["--csv", str(csv)]
+    else:
+        origen = tmp_path / "origen"
+        assert (
+            cli.main(["classify", "--csv", str(csv), "--data-root", str(origen)]) == 0
+        )
+        fuente = ["--parquet", str(origen / "processed" / "mini.parquet")]
+    bloqueado = tmp_path / "bloqueado"
+    bloqueado.write_text("archivo existente\n", encoding="utf-8")
+    capsys.readouterr()
+
+    codigo = cli.main(["classify", *fuente, "--data-root", str(bloqueado)])
+
+    assert codigo == 1
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "bloqueado" in err
+    assert bloqueado.read_text(encoding="utf-8") == "archivo existente\n"
+
+
 def test_cli_verify_parquet_publicado(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
