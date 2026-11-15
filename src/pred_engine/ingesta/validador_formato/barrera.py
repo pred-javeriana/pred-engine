@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import NoReturn
 
 import numpy as np
@@ -287,8 +287,28 @@ def _validar_vectorizado(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def validate_aligned_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Valida el marco post-sonda. Devuelve copia tipada; no muta el original."""
+def _rechazar_fechas_futuras(tipado: pd.DataFrame, ingesta: date) -> None:
+    """Una fecha posterior al dia de la ingesta estira el panel y mueve t*."""
+    futuras = tipado["timestamp"] > pd.Timestamp(ingesta)
+    if not bool(futuras.any()):
+        return
+    ultima = tipado.loc[futuras, "timestamp"].max().date()
+    _fallar(
+        f"{int(futuras.sum())} filas con fecha posterior a la ingesta "
+        f"({ingesta.isoformat()}); la ultima es {ultima.isoformat()}",
+        row_index=int(futuras.idxmax()),
+        column="timestamp",
+        raw_value=tipado.loc[futuras.idxmax(), "timestamp"].date().isoformat(),
+    )
+
+
+def validate_aligned_frame(
+    frame: pd.DataFrame, *, ingest_date: date | None = None
+) -> pd.DataFrame:
+    """Valida el marco post-sonda. Devuelve copia tipada; no muta el original.
+
+    Rechaza fechas posteriores a ``ingest_date`` (hoy en UTC si no se indica).
+    """
     if list(frame.columns) != list(CANONICAL_FIELDS):
         _fallar(
             "el marco alineado debe tener exactamente " + ", ".join(CANONICAL_FIELDS)
@@ -304,6 +324,7 @@ def validate_aligned_frame(frame: pd.DataFrame) -> pd.DataFrame:
     )
     tipado = _validar_vectorizado(frame) if solo_texto else _validar_por_filas(frame)
 
+    _rechazar_fechas_futuras(tipado, ingest_date or datetime.now(UTC).date())
     duplicados = tipado.duplicated(subset=["sku_id", "timestamp"], keep=False)
     if bool(duplicados.any()):
         indice = int(duplicados.idxmax())

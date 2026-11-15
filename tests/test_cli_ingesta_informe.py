@@ -132,3 +132,99 @@ def test_classify_con_una_fila_invalida_sale_con_3_y_deja_el_informe_fallido(
     )
     assert informe["status"] == "failed"
     assert informe["error"]["code"] == "ingest.schema_barrier"
+
+
+def _informe(raiz: Path, csv: Path) -> dict[str, object]:
+    return json.loads(
+        (raiz / "ingestas" / f"{_sha(csv)}.json").read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.parametrize(
+    "cabecera",
+    [
+        pytest.param("producto,fecha,cantidad,tiempo_reposicion", id="renombradas"),
+        pytest.param("sku_id,timestamp,demand_qty", id="sin-lead-time"),
+        pytest.param("sku_id;timestamp;demand_qty;lead_time_days", id="separador"),
+    ],
+)
+def test_classify_con_columnas_faltantes_publica_header_rejected(
+    tmp_path: Path, cabecera: str
+) -> None:
+    csv = tmp_path / "e" / "ventas.csv"
+    csv.parent.mkdir()
+    csv.write_text(f"{cabecera}\nFIL-0001,2026-01-01,5,7\n", encoding="utf-8")
+    raiz = tmp_path / "data"
+
+    codigo = cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)])
+
+    informe = _informe(raiz, csv)
+    assert codigo == 2
+    assert informe["status"] == "rejected"
+    error = informe["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "ingest.header_rejected"
+    assert error["retryable"] is False
+    assert "faltan columnas canonicas" in error["detail"]
+    assert not (raiz / "processed" / "ventas.parquet").exists()
+
+
+@pytest.mark.parametrize(
+    ("contenido", "texto"),
+    [
+        pytest.param(
+            "sku_id,timestamp,demand_qty,lead_time_days\nCAFÉ-1,2026-01-01,3,7\n".encode(
+                "cp1252"
+            ),
+            "UTF-8",
+            id="windows-1252",
+        ),
+        pytest.param(
+            b"sku_id,timestamp,demand_qty,lead_time_days\nA,2026-01-01,3,7,9\n"
+            b"B,2026-01-01\nC,2026-01-02,1,1,1,1\n",
+            "CSV",
+            id="no-es-csv",
+        ),
+    ],
+)
+def test_classify_de_un_archivo_ilegible_sale_con_3_y_no_es_reintentable(
+    tmp_path: Path, contenido: bytes, texto: str
+) -> None:
+    csv = tmp_path / "e" / "ventas.csv"
+    csv.parent.mkdir()
+    csv.write_bytes(contenido)
+    raiz = tmp_path / "data"
+
+    codigo = cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)])
+
+    informe = _informe(raiz, csv)
+    assert codigo == 3
+    assert informe["status"] == "failed"
+    error = informe["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "ingest.schema_barrier"
+    assert error["retryable"] is False
+    assert texto in error["detail"]
+    assert not (raiz / "processed" / "ventas.parquet").exists()
+
+
+def test_classify_rechaza_filas_con_fecha_posterior_a_la_ingesta(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    csv = _csv(tmp_path / "e" / "ventas.csv")
+    with csv.open("a", encoding="utf-8") as archivo:
+        archivo.write("FIL-0002,2099-01-01,5,7\nFIL-0003,2098-06-30,5,7\n")
+    raiz = tmp_path / "data"
+
+    codigo = cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)])
+
+    informe = _informe(raiz, csv)
+    assert codigo == 3
+    assert informe["status"] == "failed"
+    error = informe["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "ingest.schema_barrier"
+    assert "2 filas" in error["detail"]
+    assert "2099-01-01" in error["detail"]
+    assert error["column"] == "timestamp"
+    assert not (raiz / "processed" / "ventas.parquet").exists()

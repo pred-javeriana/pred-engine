@@ -211,6 +211,12 @@ the same content is reused (`already_present_identical`). The same name with
 `<name>-<first 8 chars of its SHA-256><ext>` and both are kept. `pred-engine
 classify`/`ingest` exit with code 7 on an unconfirmed conflict.
 
+`classify --csv` rejects, before validation, a CSV that is not UTF-8 or cannot be
+parsed (`ingest.schema_barrier`, exit 3) and a CSV with a canonical column missing
+(`ingest.header_rejected`, status `rejected`, exit 2). Neither is retryable.
+`validate_aligned_frame` also rejects rows dated after the ingest date
+(`ingest.schema_barrier`, exit 3).
+
 `ingest_csv_with_report` (used by `classify --csv`, `ingest` and `run`) always
 leaves `ingestas/<sha256>.json`, also when the ingestion is `rejected`, `failed`
 or `needs_confirmation`: source hash, deposit, header diagnostic, quality log,

@@ -94,10 +94,13 @@ para stdout/logs.
 
 ## `pred_engine.ingesta.validador_formato`
 
-### `validate_aligned_frame(frame) -> DataFrame`
+### `validate_aligned_frame(frame, *, ingest_date=None) -> DataFrame`
 
 Fail-fast. Requiere columnas canonicas exactas. Salida con `timestamp`
 `datetime64[ns]`, `demand_qty` float64, `lead_time_days` int64, `sku_id` string.
+Rechaza con `SchemaBarrierError` toda fila con `timestamp` posterior a
+`ingest_date` (hoy en UTC si no se indica): el mensaje trae la cantidad de filas
+y la ultima fecha, porque una sola fecha futura estira el panel y mueve t\*.
 
 ### `SchemaBarrierError`
 
