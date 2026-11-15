@@ -10,6 +10,7 @@ import pandas as pd
 from pred_engine.comun.exclusiones import SkuExclusion
 from pred_engine.comun.llm import LlmProvider
 from pred_engine.comun.logger import get_logger, log_ingestion_event
+from pred_engine.comun.modelos import CANONICAL_FIELDS
 from pred_engine.comun.reserva import ReserveCut
 from pred_engine.ingesta.categorizacion import (
     TopologyArtifact,
@@ -34,8 +35,15 @@ from pred_engine.ingesta.salida import (
     read_classified_parquet_with_sha256,
     read_classified_publication,
 )
-from pred_engine.ingesta.sonda import DiagnosticArtifact, probe_headers
-from pred_engine.ingesta.validador_formato import validate_aligned_frame
+from pred_engine.ingesta.sonda import (
+    DiagnosticArtifact,
+    SemanticAlignmentError,
+    probe_headers,
+)
+from pred_engine.ingesta.validador_formato import (
+    SchemaBarrierError,
+    validate_aligned_frame,
+)
 
 _logger = get_logger(__name__)
 
@@ -138,6 +146,33 @@ def run_semantic_pipeline(
     return diagnostico, validado, admitido, topologia
 
 
+def _leer_csv_canonico(ruta: Path) -> pd.DataFrame:
+    """Lee el CSV como texto y rechaza lo que no es UTF-8, CSV o canonico."""
+    try:
+        marco = pd.read_csv(
+            ruta,
+            dtype=str,
+            parse_dates=False,
+            keep_default_na=False,
+            encoding="utf-8",
+        )
+    except UnicodeDecodeError as exc:
+        raise SchemaBarrierError(
+            "el archivo no esta codificado en UTF-8; guardelo como CSV UTF-8"
+        ) from exc
+    except pd.errors.ParserError as exc:
+        raise SchemaBarrierError(
+            f"el archivo no se puede leer como CSV: {exc}"
+        ) from exc
+    faltan = [c for c in CANONICAL_FIELDS if c not in marco.columns]
+    if faltan:
+        raise SemanticAlignmentError(
+            f"faltan columnas canonicas {faltan}; "
+            f"cabecera encontrada {[str(c) for c in marco.columns]}"
+        )
+    return marco
+
+
 def ingest_canonical_csv(
     csv_path: str | Path,
     *,
@@ -150,13 +185,7 @@ def ingest_canonical_csv(
     """
     layout = ensure_data_layout(data_root)
     deposito = deposit_raw(csv_path, data_root=layout.root, on_conflict=on_conflict)
-    marco = pd.read_csv(
-        deposito.path,
-        dtype=str,
-        parse_dates=False,
-        keep_default_na=False,
-        encoding="utf-8",
-    )
+    marco = _leer_csv_canonico(deposito.path)
     canonico = select_canonical_columns(marco)
     validado = validate_aligned_frame(canonico)
     panel = resample_daily(validado)

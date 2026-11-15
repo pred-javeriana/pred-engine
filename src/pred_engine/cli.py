@@ -589,6 +589,10 @@ def _cmd_classify(args: argparse.Namespace) -> int:
         print(exc, file=sys.stderr)
         print("informe:", informe, file=sys.stderr)
         return 7
+    except SemanticAlignmentError as exc:
+        _logger.error("%s", exc)
+        print(exc, file=sys.stderr)
+        return 2
     except SchemaBarrierError as exc:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
