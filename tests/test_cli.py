@@ -193,6 +193,38 @@ def test_cli_classify_exige_una_fuente(capsys: pytest.CaptureFixture[str]) -> No
     assert "exactamente uno" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("entrada", ["csv", "parquet"])
+def test_cli_classify_data_root_archivo_sale_1_sin_traza(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], entrada: str
+) -> None:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        "105,2024-10-01,108,17\n"
+        "105,2024-10-04,50,17\n",
+        encoding="utf-8",
+    )
+    if entrada == "csv":
+        fuente = ["--csv", str(csv)]
+    else:
+        origen = tmp_path / "origen"
+        assert (
+            cli.main(["classify", "--csv", str(csv), "--data-root", str(origen)]) == 0
+        )
+        fuente = ["--parquet", str(origen / "processed" / "mini.parquet")]
+    bloqueado = tmp_path / "bloqueado"
+    bloqueado.write_text("archivo existente\n", encoding="utf-8")
+    capsys.readouterr()
+
+    codigo = cli.main(["classify", *fuente, "--data-root", str(bloqueado)])
+
+    assert codigo == 1
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "bloqueado" in err
+    assert bloqueado.read_text(encoding="utf-8") == "archivo existente\n"
+
+
 def test_cli_verify_parquet_publicado(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -511,6 +543,122 @@ def test_cli_run_workers_invalido_no_persiste_identidad(tmp_path: Path) -> None:
     args[args.index("--workers") + 1] = "0"
     assert cli.main(args) == 1
     assert not (raiz / "runs" / run_id / "identidad.json").exists()
+
+
+def test_cli_run_trials_invalido_no_envenena_run_id(tmp_path: Path) -> None:
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "data"
+    run_id = "test-trials-invalid"
+    args = _args_run_base(raiz, db, run_id)
+    args_invalido = list(args)
+    args_invalido[args_invalido.index("--trials") + 1] = "0"
+    assert cli.main(args_invalido) == 1
+    assert not (raiz / "runs" / run_id / "identidad.json").exists()
+
+    assert cli.main(args) in (0, 8)
+    assert (raiz / "runs" / run_id / "corrida.json").exists()
+
+
+def _publicar_parquet_minimo(tmp_path: Path) -> Path:
+    csv = tmp_path / "mini.csv"
+    csv.write_text(
+        "sku_id,timestamp,demand_qty,lead_time_days\n"
+        + "".join(f"105,2024-10-{dia:02d},10,3\n" for dia in range(1, 11)),
+        encoding="utf-8",
+    )
+    raiz = tmp_path / "data"
+    assert cli.main(["classify", "--csv", str(csv), "--data-root", str(raiz)]) == 0
+    return raiz / "processed" / "mini.parquet"
+
+
+def test_cli_verify_parquet_sku_anidado_sale_6_sin_traza(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    publicado = _publicar_parquet_minimo(tmp_path)
+    tabla = pq.read_table(publicado)
+    anidado = tabla.set_column(
+        tabla.schema.get_field_index("sku_id"),
+        "sku_id",
+        pa.array([["sku"]] * len(tabla)),
+    )
+    externo = tmp_path / "anidado.parquet"
+    pq.write_table(
+        anidado.replace_schema_metadata(
+            {b"pred_engine": tabla.schema.metadata[b"pred_engine"]}
+        ),
+        externo,
+    )
+    capsys.readouterr()
+
+    codigo = cli.main(["verify", "--parquet", str(externo)])
+
+    assert codigo == 6
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "sku_id debe ser String" in captured.err
+    assert "contrato_1_4: accepted" not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("campo", "valor"),
+    [
+        ("reserved_days", -2),
+        ("reserved_days", 0),
+        ("reserved_days", 2.5),
+        ("reserved_days", True),
+        ("t_star", "2024-01-01"),
+        ("first_reserved", "2013-01-01"),
+        ("last_observed", "2013-01-01"),
+    ],
+    ids=lambda v: str(v),
+)
+def test_cli_verify_parquet_metadatos_de_reserva_incoherentes_sale_6(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    campo: str,
+    valor: object,
+) -> None:
+    publicado = _publicar_parquet_minimo(tmp_path)
+    tabla = pq.read_table(publicado)
+    metadatos = dict(tabla.schema.metadata)
+    corte = json.loads(metadatos[b"pred_engine"])
+    corte[campo] = valor
+    metadatos[b"pred_engine"] = json.dumps(corte).encode("utf-8")
+    externo = tmp_path / "incoherente.parquet"
+    pq.write_table(tabla.replace_schema_metadata(metadatos), externo)
+    capsys.readouterr()
+
+    codigo = cli.main(["verify", "--parquet", str(externo)])
+
+    assert codigo == 6
+    captured = capsys.readouterr()
+    assert "vuelva a importar desde el CSV" in captured.err
+    assert "contrato_1_4: accepted" not in captured.out
+
+
+def test_cli_run_parquet_con_reserva_negativa_falla_antes_de_crear_la_corrida(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    publicado = _publicar_parquet_minimo(tmp_path)
+    tabla = pq.read_table(publicado)
+    metadatos = dict(tabla.schema.metadata)
+    corte = json.loads(metadatos[b"pred_engine"])
+    corte["reserved_days"] = -2
+    metadatos[b"pred_engine"] = json.dumps(corte).encode("utf-8")
+    externo = tmp_path / "negativa.parquet"
+    pq.write_table(tabla.replace_schema_metadata(metadatos), externo)
+    db = crear_base_plataforma(tmp_path / "pred.db")
+    raiz = tmp_path / "corridas"
+    args = _args_run_base(raiz, db, "reserva-negativa")
+    posicion = args.index("--seed-csv")
+    args[posicion : posicion + 2] = ["--parquet", str(externo)]
+    capsys.readouterr()
+
+    codigo = cli.main(args)
+
+    assert codigo != 0
+    assert "Traceback" not in capsys.readouterr().err
+    assert not (raiz / "runs" / "reserva-negativa").exists()
 
 
 def test_cli_verify_no_parquet_retorna_6_sin_traza(

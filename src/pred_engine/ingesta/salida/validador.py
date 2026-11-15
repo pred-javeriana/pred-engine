@@ -96,15 +96,21 @@ def validate_output_contract(frame: pd.DataFrame) -> None:
                 column=columna,
             )
 
-    duplicados = frame.duplicated(subset=["sku_id", "timestamp"], keep=False)
-    if bool(duplicados.any()):
-        _fallar("filas duplicadas para (sku_id, timestamp)")
-
     sku_col = cast(pd.Series, frame["sku_id"])
     if not (
         pd.api.types.is_string_dtype(sku_col) or pd.api.types.is_object_dtype(sku_col)
     ):
         _fallar("sku_id debe ser String", column="sku_id")
+    if pd.api.types.is_object_dtype(sku_col) and any(
+        isinstance(sku, list | tuple | set | dict | np.ndarray) for sku in sku_col
+    ):
+        # Un valor anidado no se puede comparar para detectar duplicados.
+        _fallar("sku_id debe ser String", column="sku_id")
+
+    duplicados = frame.duplicated(subset=["sku_id", "timestamp"], keep=False)
+    if bool(duplicados.any()):
+        _fallar("filas duplicadas para (sku_id, timestamp)")
+
     try:
         sku_texto = sku_col.astype("string")
     except (TypeError, ValueError):

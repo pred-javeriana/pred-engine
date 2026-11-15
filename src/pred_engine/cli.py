@@ -601,7 +601,7 @@ def _cmd_classify(args: argparse.Namespace) -> int:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
         return 5
-    except (ValueError, FileNotFoundError) as exc:
+    except (ValueError, OSError) as exc:
         _logger.error("%s", exc)
         print(exc, file=sys.stderr)
         return 1
@@ -885,7 +885,6 @@ def _cmd_run_con_base(
         run_id = args.run_id or run_identifier(inputs["source"]["sha256"], settings)
         runs_dir = args.runs_dir or Path(args.data_root) / "runs"
         run_dir = Path(runs_dir) / run_id
-        fijar_identidad(run_dir, inputs["source"]["sha256"], settings)
         progress_path = run_dir / "progreso.jsonl"
         pipeline = build_pipeline(
             evaluacion,
@@ -916,6 +915,7 @@ def _cmd_run_con_base(
                 progreso=progress_path,
             ),
         )
+        fijar_identidad(run_dir, inputs["source"]["sha256"], settings)
         request = PipelineInput(
             csv_path=csv_path,
             parquet_path=args.parquet,
