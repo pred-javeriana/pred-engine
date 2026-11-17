@@ -42,7 +42,53 @@ instale con `make setup FUNDACIONAL=no` y pase `--no-foundation` a
 uv run pytest                  # runs the suite with an 80% coverage gate
 uv run pytest -m "not slow"    # fast suite with coverage gate (CI mode)
 uv run pytest -m slow --no-cov # slow tests (benchmarks / model fitting)
+make test-cov-business        # full suite, all business logic, coverage >= 80%
 ```
+
+`make test-cov-business` mide las líneas ejecutables de todo `src/pred_engine`,
+sin exclusiones, con `.github/coverage-business.ini`. Incluye optimizadores,
+HPO, configuración y validación del tipo de archivo. Ejecuta también las pruebas
+`slow` y exige al menos 80% de cobertura. CI ejecuta el mismo comando en un
+trabajo separado. La medición habitual de `uv run pytest` conserva su umbral
+y sus exclusiones en `pyproject.toml`; no representa la cobertura completa.
+
+Medición del 2026-11-17 con Python 3.12.13, `uv.lock` y el extra `dev`, en un
+entorno limpio: **95,61% (9.358 de 9.788 líneas ejecutables)**. El informe
+incluye los 195 archivos Python de `src/pred_engine`, sin omitir archivos ni
+aplicar exclusiones de líneas, ni siquiera las marcas `pragma: no cover`.
+Pasaron 1.645 pruebas. Las dos omisiones existentes corresponden al extra
+opcional `foundation` y al dataset oficial ausente. La cobertura mide líneas,
+no ramas, y cuenta esas rutas no ejecutadas en el denominador.
+
+| Paquete o grupo de módulos | Líneas ejecutadas / ejecutables | Cobertura |
+| --- | ---: | ---: |
+| `aumentacion` | 722 / 747 | 96,65% |
+| `comun` | 1.627 / 1.755 | 92,71% |
+| `config` | 0 / 0 | Sin código ejecutable |
+| `forecasting` | 2.331 / 2.387 | 97,65% |
+| `ingesta` | 1.210 / 1.264 | 95,73% |
+| `optimizacion` | 1.688 / 1.742 | 96,90% |
+| Módulos de la raíz de `pred_engine` | 1.780 / 1.893 | 94,03% |
+| **Total** | **9.358 / 9.788** | **95,61%** |
+
+Detalle de `optimizacion/optimizadores`, ya incluido en la fila
+`optimizacion` anterior:
+
+| Paquete o módulo | Líneas ejecutadas / ejecutables | Cobertura |
+| --- | ---: | ---: |
+| `HPO` | 681 / 706 | 96,46% |
+| `modelos_clasicos` | 137 / 137 | 100,00% |
+| `modelos_deep_learning` | 126 / 126 | 100,00% |
+| `modelos_fundacionales` | 13 / 13 | 100,00% |
+| `modelos_machine_learning` | 185 / 186 | 99,46% |
+| `seleccion_hpo.py` | 59 / 60 | 98,33% |
+| **Optimizadores en conjunto** | **1.201 / 1.228** | **97,80%** |
+
+`config/` e `ingesta/validador_tipo_archivo/` solo contienen docstrings:
+no tienen líneas ejecutables y no aportan al denominador. La validación de
+formato vigente está en `ingesta/validador_formato/`, incluida en `ingesta`,
+con 137 de 141 líneas ejecutadas (97,16%). Instalar `foundation` y sus pesos
+permite ejecutar sus pruebas opcionales y puede cambiar el porcentaje.
 
 Las pruebas nunca descargan pesos: `tests/conftest.py` fija `HF_HUB_OFFLINE=1`.
 Con el extra `foundation`, las pruebas lentas de Chronos-2 leen los pesos de la
