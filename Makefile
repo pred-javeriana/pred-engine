@@ -1,4 +1,4 @@
-.PHONY: setup test test-cov lint format pyright motor-local
+.PHONY: setup test test-cov test-cov-business lint format pyright motor-local
 
 # Instala las dependencias fijadas y deja en la cache los pesos de Chronos-2 (familia foundation),
 # asi la primera corrida no los descarga. Sin espacio o memoria para Chronos-2:
@@ -17,6 +17,9 @@ test:
 
 test-cov:
 	uv run pytest
+
+test-cov-business:
+	uv run --frozen --extra dev pytest --cov-config=.github/coverage-business.ini
 
 lint:
 	uv run ruff check .

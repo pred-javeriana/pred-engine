@@ -172,6 +172,12 @@ def test_paralelo_entre_skus_da_el_mismo_resultado_que_secuencial():
 
 
 @pytest.mark.slow
+def test_error_de_historia_en_un_proceso_se_propaga_al_caller():
+    with pytest.raises(ValueError, match="insuficiente para SKU="):
+        seleccionar_por_panel_ml(_panel(n=3), n_procesos=2, **_KW)
+
+
+@pytest.mark.slow
 def test_raiz_corrida_persiste_y_la_segunda_llamada_no_reejecuta(tmp_path):
     kw = dict(_KW, sku_id="S1", raiz_corrida=tmp_path, run_id="ml-S1-test")
     primera = seleccionar_configuracion_ml(_serie(), **kw)

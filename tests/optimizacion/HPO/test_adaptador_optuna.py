@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import optuna
+import pytest
 
 from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
     AdaptadorPersistenciaOptuna,
@@ -27,7 +28,13 @@ from pred_engine.optimizacion.optimizadores.HPO.adaptador_optuna import (
 )
 from pred_engine.optimizacion.optimizadores.HPO.asha import DecisorASHA
 from pred_engine.optimizacion.optimizadores.HPO.contratos import InfoTrial
-from pred_engine.optimizacion.optimizadores.HPO.espacio import Entero, EspacioBusqueda
+from pred_engine.optimizacion.optimizadores.HPO.espacio import (
+    Categorico,
+    Entero,
+    EspacioBusqueda,
+    Flotante,
+    Ordinal,
+)
 from pred_engine.optimizacion.optimizadores.HPO.poda import ReglasPoda
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -114,6 +121,69 @@ def test_tell_completado_con_valor():
     (info,) = study.trials_finalizados()
     assert info.estado == "completado"
     assert info.valor == 1.25
+
+
+def test_completar_sin_valor_rechaza_el_cierre_y_permite_corregirlo():
+    study, _ = crear_estudio_optuna(
+        muestreador=optuna.samplers.RandomSampler(seed=0), decisor_asha=_decisor()
+    )
+    trial = study.ask()
+    with pytest.raises(ValueError, match="requiere un valor"):
+        study.tell(trial, None, estado="completado")
+    assert study.trials_finalizados() == []
+
+    study.tell(trial, 2.5, estado="completado")
+    (info,) = study.trials_finalizados()
+    assert (info.numero, info.estado, info.valor) == (0, "completado", 2.5)
+
+
+def test_reanudar_espacio_mixto_preserva_trials_y_las_proximas_propuestas(tmp_path):
+    espacio = EspacioBusqueda(
+        parametros=(
+            Entero("lags", 3, 9, paso=2),
+            Flotante("learning_rate", 0.001, 0.1, log=True),
+            Categorico("activation", ("relu", "tanh")),
+            Ordinal("width", (8, 16, 32)),
+        )
+    )
+    original = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=17))
+
+    def evaluar(study, estado):
+        trial = study.ask()
+        trial.suggest_int("lags", 3, 9, step=2)
+        trial.suggest_float("learning_rate", 0.001, 0.1, log=True)
+        trial.suggest_categorical("activation", ("relu", "tanh"))
+        trial.suggest_int("width", 0, 2)
+        trial.set_user_attr("sku_id", "S1")
+        trial.report(1.0 / (trial.number + 1), step=4)
+        valor = 1.0 / (trial.number + 1) if estado.name == "COMPLETE" else None
+        study.tell(trial, valor, state=estado)
+
+    for estado in (
+        optuna.trial.TrialState.COMPLETE,
+        optuna.trial.TrialState.PRUNED,
+        optuna.trial.TrialState.FAIL,
+    ):
+        evaluar(original, estado)
+    ruta = tmp_path / "mixto.jsonl"
+    volcar_jsonl(original, ruta)
+    ruta.write_text("\n" + ruta.read_text() + "\n", encoding="utf-8")
+
+    restaurado = reanudar_estudio(
+        ruta,
+        espacio=espacio,
+        sampler=optuna.samplers.RandomSampler(seed=17),
+        pruner=PodadorASHAOptuna(_decisor()),
+    )
+    for study in (original, restaurado):
+        for _ in range(3):
+            evaluar(study, optuna.trial.TrialState.COMPLETE)
+
+    assert trials_desde_study(restaurado) == trials_desde_study(original)
+    assert len(restaurado.trials) == 6
+    assert [t.intermediate_values for t in restaurado.trials] == [
+        t.intermediate_values for t in original.trials
+    ]
 
 
 def test_podador_asha_optuna_poda_de_verdad_con_should_prune():
