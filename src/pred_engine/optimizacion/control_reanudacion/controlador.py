@@ -47,14 +47,18 @@ class ControladorReanudacion:
         verificar_compatibilidad(solicitud, previo)
 
         if previo.estado is EstadoCorrida.FALLIDA:
-            _logger.error("Rechazo: corrida %s esta fallida", solicitud.run_id)
+            _logger.error(
+                "Rechazo: análisis de pronóstico %s fallido", solicitud.run_id
+            )
             raise CorridaFallidaError(
-                f"la corrida {solicitud.run_id} finalizo en estado fallida"
+                f"el análisis de pronóstico {solicitud.run_id} finalizo en estado "
+                f"fallida"
             )
 
         if previo.estado is EstadoCorrida.COMPLETADA:
             _logger.info(
-                "Corrida %s completada; no se reabre el estudio", solicitud.run_id
+                "Análisis de pronóstico %s completado; no se reabre el estudio",
+                solicitud.run_id,
             )
             handle = self._restaurar(previo)
             return SesionCorrida(manifiesto=previo, handle=handle)
@@ -127,7 +131,7 @@ class ControladorReanudacion:
         )
         self._almacen.guardar(actualizado)
         sesion.manifiesto = actualizado
-        _logger.info("Corrida completada run_id=%s", actualizado.run_id)
+        _logger.info("Análisis de pronóstico completado run_id=%s", actualizado.run_id)
 
     def fallar(self, sesion: SesionCorrida, *, n_trials_finalizados: int) -> None:
         referencia = self._puerto.persistir(sesion.handle)
@@ -141,7 +145,7 @@ class ControladorReanudacion:
         )
         self._almacen.guardar(actualizado)
         sesion.manifiesto = actualizado
-        _logger.error("Corrida fallida run_id=%s", actualizado.run_id)
+        _logger.error("Análisis de pronóstico fallido run_id=%s", actualizado.run_id)
 
     def _crear(self, solicitud: SolicitudCorrida) -> SesionCorrida:
         huella = calcular_huella(solicitud)
@@ -170,7 +174,7 @@ class ControladorReanudacion:
             }
         )
         self._almacen.guardar(en_progreso)
-        _logger.info("Corrida creada run_id=%s", solicitud.run_id)
+        _logger.info("Análisis de pronóstico creado run_id=%s", solicitud.run_id)
         return SesionCorrida(manifiesto=en_progreso, handle=handle)
 
     def _restaurar(self, manifiesto: ManifiestoCorrida) -> Any:

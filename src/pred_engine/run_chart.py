@@ -357,7 +357,10 @@ def render_run_chart(run_dir: str | Path, output: str | Path | None = None) -> P
                 ("area", series["cpu"]),
             ],
             capacidad=(nucleos, f"{nucleos:g} núcleos") if nucleos else None,
-            leyenda=[("area", "procesos de la corrida"), ("sistema", "máquina")],
+            leyenda=[
+                ("area", "procesos del análisis de pronóstico"),
+                ("sistema", "máquina"),
+            ],
         )
         maximo_mem = max(
             [total_gb] + [v for _, v in series["mem"] + series["sistema_mem"]]
@@ -374,7 +377,7 @@ def render_run_chart(run_dir: str | Path, output: str | Path | None = None) -> P
             ],
             capacidad=(total_gb, f"{total_gb:.0f} GB total") if total_gb else None,
             leyenda=[
-                ("area", "RSS de la corrida"),
+                ("area", "RSS del análisis de pronóstico"),
                 ("sistema", "en uso en la máquina"),
             ],
         )
@@ -484,14 +487,15 @@ def render_run_chart(run_dir: str | Path, output: str | Path | None = None) -> P
         partes.append(f"pico CPU {telemetria['peak_cpu_cores']:g} núcleos")
         partes.append(f"pico RSS {telemetria['peak_rss_mb'] / 1024:.1f} GB")
     encabezado = (
-        f'<text x="{_IZQ}" y="34" class="titulo">Corrida {escape(run_id)}</text>'
+        f'<text x="{_IZQ}" y="34" class="titulo">'
+        f"Análisis de pronóstico {escape(run_id)}</text>"
         f'<text x="{_IZQ}" y="56" class="subtitulo">{escape(" · ".join(partes))}'
         "</text>"
     )
     return _escribir_svg(
         Path(output) if output is not None else directorio / CHART_NAME,
         alto,
-        f"Corrida {run_id}",
+        f"Análisis de pronóstico {run_id}",
         encabezado + "".join(lienzo.partes),
     )
 

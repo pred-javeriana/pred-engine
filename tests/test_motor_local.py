@@ -44,7 +44,7 @@ def test_rama_solo_docs_no_corre_nada(repo, capsys):
     assert motor_local.main(["--base", "main"]) == 0
     salida = capsys.readouterr().out
     assert "niveles ninguno" in salida
-    assert "sin corrida: solo docs" in salida
+    assert "sin análisis de pronóstico: solo docs" in salida
     assert not (repo / "local_data").exists()
 
 
@@ -193,7 +193,7 @@ finally:
         assert resultado_subproceso.returncode != 0
         assert resultado_subproceso.returncode != 99
         assert (
-            "error: ya hay una corrida de motor-local en curso"
+            "error: ya hay un análisis de pronóstico de motor-local en curso"
             in resultado_subproceso.stderr
         )
         assert str(cerrojo_fijo) in resultado_subproceso.stderr

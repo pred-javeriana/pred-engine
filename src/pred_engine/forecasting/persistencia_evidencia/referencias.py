@@ -237,7 +237,10 @@ def asegurar_referencias(
         configuracion_id = conn.execute(
             "INSERT INTO configuraciones (version, descripcion, parametros) "
             "VALUES (1, ?, ?)",
-            ("Corrida M2 del motor", json.dumps(dict(configuracion), sort_keys=True)),
+            (
+                "Análisis de pronóstico M2 del motor",
+                json.dumps(dict(configuracion), sort_keys=True),
+            ),
         ).lastrowid
         ejecucion_id = conn.execute(
             "INSERT INTO ejecuciones "

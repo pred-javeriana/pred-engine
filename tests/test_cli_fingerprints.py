@@ -84,7 +84,9 @@ def test_run_rechaza_fuente_sustituida_antes_de_l1(
     codigo = cli.main(args)
     salida = capsys.readouterr()
     assert codigo == 1
-    assert "el archivo cambio durante la corrida" in salida.out + salida.err
+    assert (
+        "el archivo cambio durante el análisis de pronóstico" in salida.out + salida.err
+    )
     corrida = json.loads(
         next((tmp_path / "run" / "runs").glob("*/corrida.json")).read_text()
     )

@@ -972,7 +972,7 @@ class Pipeline:
             request.expected_source_sha256 is not None
             and actual != request.expected_source_sha256
         ):
-            raise ValueError("el archivo cambio durante la corrida")
+            raise ValueError("el archivo cambio durante el análisis de pronóstico")
 
     def _exclusion_cause(
         self, admissible: pd.DataFrame, reserve: ReserveCut

@@ -684,7 +684,7 @@ class ControladorEvaluacion:
                         confirmadas = cargar_unidades(self.conn, run_id, candidato)
                         if not en_curso and len(confirmadas) != len(plan):
                             raise EvidenciaInconsistenteError(
-                                "faltan unidades en una corrida EVALUADA"
+                                "faltan unidades en un análisis de pronóstico EVALUADO"
                             )
                     candidatos.append((candidato, confirmadas))
                 base = None

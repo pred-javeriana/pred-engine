@@ -315,12 +315,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--runs-dir",
         type=Path,
         default=None,
-        help="Directorio de corridas (por defecto {data-root}/runs)",
+        help="Directorio de análisis de pronóstico (por defecto {data-root}/runs)",
     )
     run.add_argument(
         "--run-id",
         default=None,
-        help="Identidad de la corrida; por defecto se deriva de entrada y opciones",
+        help=(
+            "Identidad del análisis de pronóstico; por defecto se deriva de "
+            "entrada y opciones"
+        ),
     )
     run.add_argument(
         "--telemetry-interval",
@@ -368,14 +371,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     telemetry = sub.add_parser(
         "telemetry",
-        help="Graficar CPU, memoria y la traza de modelos de una corrida terminada",
+        help=(
+            "Graficar CPU, memoria y la traza de modelos de un análisis de "
+            "pronóstico terminado"
+        ),
         description=(
-            "Lee unidades.jsonl, recursos.jsonl y corrida.json de una corrida y "
+            "Lee unidades.jsonl, recursos.jsonl y corrida.json de un análisis de "
+            "pronóstico y "
             "escribe un SVG con etapas, CPU, memoria (total y por proceso) y una "
             "fila por proceso con cada unidad SKU x familia coloreada por modelo."
         ),
     )
-    telemetry.add_argument("run_dir", type=Path, help="Directorio de la corrida")
+    telemetry.add_argument(
+        "run_dir", type=Path, help="Directorio del análisis de pronóstico"
+    )
     telemetry.add_argument(
         "--output",
         type=Path,
@@ -987,7 +996,8 @@ def _cmd_run_con_base(
             progress_path, "run_finished", state="failed", exit_code=1, error=str(exc)
         )
         print(
-            f"error: no se pudo persistir la corrida {run_id}: {exc}", file=sys.stderr
+            f"error: no se pudo persistir el análisis de pronóstico {run_id}: {exc}",
+            file=sys.stderr,
         )
         return 1
     # Despues de write_run: quien lee el progreso puede fiarse de corrida.json.

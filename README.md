@@ -29,8 +29,8 @@ make setup   # uv sync --frozen --extra dev --extra foundation y los pesos de Ch
 (Chronos-2), así que la instalación incluye el extra `foundation` (torch y
 chronos-forecasting). `make setup` también descarga una vez los pesos de
 Chronos-2 en la revisión fijada a la caché de Hugging Face
-(`~/.cache/huggingface`, o `HF_HOME`); sin ese paso los descarga la primera
-corrida. Las corridas siguientes leen los pesos de esa caché, también sin
+(`~/.cache/huggingface`, o `HF_HOME`); sin ese paso los descarga el primer
+análisis de pronóstico. Los análisis siguientes leen los pesos de esa caché, también sin
 red con `HF_HUB_OFFLINE=1`. En un equipo sin espacio o memoria para Chronos-2,
 instale con `make setup FUNDACIONAL=no` y pase `--no-foundation` a
 `pred-engine run`. Para instalar el motor junto con la plataforma, corra
@@ -124,13 +124,13 @@ unos 2 núcleos y `pytest -m slow` unos 2. Para no saturar el equipo:
    ```
 
    Ver [verificación local del motor](docs/features/motor-local/README.md).
-   Si corre `pred-engine run` a mano, use un `--run-id` nuevo en cada corrida:
+   Si corre `pred-engine run` a mano, use un `--run-id` nuevo en cada análisis de pronóstico:
    el motor rechaza un `run_id` ya usado si el código o la configuración
    cambiaron, y termina con código 1 sin ajustar modelos. Pase siempre
    `--workers 2` en un equipo pequeño: el valor por defecto (núcleos - 1)
    ocupa todos los núcleos.
 
-CI corre las suites completas y la corrida de humo en cada PR, así que no
+CI corre las suites completas y el análisis de pronóstico de humo en cada PR, así que no
 hace falta repetirlas localmente.
 
 ## Linting, formatting and type checking
@@ -204,7 +204,7 @@ See [backend pipeline API and boundaries](docs/features/backend-pipeline/README.
 for independent stages and errors. See [M3](docs/features/3.Evaluacion/README.md)
 for the reserve protocol, migrations, recovery, statistical limits and delivery to M4.
 
-### Corrida M0 -> M1 -> M2 -> M3 desde la semilla
+### Análisis de pronóstico M0 -> M1 -> M2 -> M3 desde la semilla
 
 Un solo comando genera el panel sintético de la Fase 0, lo ingiere y clasifica
 (L1), ejecuta M2 en paralelo y publica la evaluación reservada M3 en la base
@@ -220,7 +220,7 @@ uv run pred-engine run --seed-csv inventory_data.csv --data-root data --db-path 
 
 M1 clasifica y L2/L3 optimizan solo con la historia anterior a la reserva
 cronológica del 20 % (ADR-03-003, ADR-019). Cada SKU × familia es una unidad
-aislada y `--workers` (por defecto, núcleos - 1) fija los procesos. La corrida
+aislada y `--workers` (por defecto, núcleos - 1) fija los procesos. El análisis de pronóstico
 queda en `data/runs/{run_id}/` con el manifiesto tipado de candidatos para M3
 (`candidatos.json`), los pronósticos desde t*, la evidencia walk-forward, la
 traza de cada unidad con su modelo y el uso de CPU y memoria de cada proceso;
@@ -417,5 +417,5 @@ uv run pred-engine-fase0 inventory_data.csv --data-root data \
 ```
 
 La misma semilla y configuración producen un artefacto idéntico byte a byte;
-la bitácora JSON de cada corrida queda en `{data_root}/logs/`. Ver
+la bitácora JSON de cada análisis de pronóstico queda en `{data_root}/logs/`. Ver
 `docs/features/0.3-0.4-simulacion-fase0/`.

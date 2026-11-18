@@ -196,7 +196,7 @@ def _familia(
             plural = len(configuradas) != 1
             razon, detalle = (
                 "not_configured",
-                "La corrida se configuro solo con "
+                "El análisis de pronóstico se configuro solo con "
                 f"{'las familias' if plural else 'la familia'} "
                 f"{', '.join(configuradas)}.",
             )
