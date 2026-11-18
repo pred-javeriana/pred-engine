@@ -267,6 +267,7 @@ def finalizar_referencia(
 
     ``conservar_completada`` deja intacta una ejecucion ya completada: reutilizar
     una publicacion congelada no reescribe el estado que describe esa corrida.
+    Una parada del operador prevalece aunque el motor termine despues.
     """
     from pred_engine.ingesta.informe import ErrorDetail, error_code
 
@@ -288,6 +289,9 @@ def finalizar_referencia(
     with _transaccion(conn):
         conn.execute(
             "UPDATE ejecuciones SET estado = ?, error_json = ? WHERE id = ? AND NOT "
-            "(? AND estado IN ('completada', 'completada_con_fallos'))",
+            "(? AND estado IN ('completada', 'completada_con_fallos')) AND NOT "
+            "(estado = 'detenida' AND "
+            "COALESCE(json_extract(error_json, '$.code'), '') "
+            "= 'platform.run_stopped')",
             (estado, detalle, ejecucion_id, conservar_completada),
         )

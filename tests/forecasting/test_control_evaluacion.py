@@ -52,6 +52,99 @@ def _conexion(tmp_path, *, factory=sqlite3.Connection):
     return conn
 
 
+@pytest.mark.parametrize("con_fallos", [False, True])
+def test_motor_que_termina_tras_parada_del_operador_conserva_estado_y_error(
+    tmp_path, con_fallos
+):
+    conn = _conexion(tmp_path)
+    error_operador = json.dumps(
+        {"code": "platform.run_stopped", "detail": "Parada solicitada por el operador"}
+    )
+
+    def ajustar_tras_parada(configuracion, *, seed):
+        # Otra conexion representa la parada mientras el motor sigue ajustando M3.
+        with sqlite3.connect(tmp_path / "central.db") as operador:
+            operador.execute(
+                "UPDATE ejecuciones SET estado = 'detenida', error_json = ? "
+                "WHERE run_id = 'm2-integral'",
+                (error_operador,),
+            )
+        if con_fallos:
+            raise ValueError("fallo de ajuste del motor huerfano")
+        return FABRICAS["classical"](configuracion, seed=seed)
+
+    pipeline, request = _caso(
+        tmp_path, conn, fabricas={**FABRICAS, "classical": ajustar_tras_parada}
+    )
+    resultado = pipeline.run(request)
+
+    assert resultado.complete is True
+    assert resultado.validation.audit_bundle["estado"] == "PUBLICADA"
+    assert bool(resultado.validation.audit_bundle["n_fallos"]) is con_fallos
+    assert conn.execute("SELECT estado, error_json FROM ejecuciones").fetchall() == [
+        ("detenida", error_operador)
+    ]
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    ("estado", "codigo", "esperado"),
+    [
+        ("detenida", "platform.run_stopped", "detenida"),
+        ("detenida", "engine.failure", "completada"),
+        ("en_cola", "platform.run_stopped", "completada"),
+    ],
+)
+def test_relectura_publicada_respeta_parada_y_permite_reanudacion(
+    tmp_path, estado, codigo, esperado
+):
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    pipeline.validate(evaluation)
+    detalle = json.dumps({"code": codigo, "detail": "causa anterior"})
+    conn.execute("UPDATE ejecuciones SET estado = ?, error_json = ?", (estado, detalle))
+    conn.commit()
+
+    resultado = pipeline.validate(evaluation)
+
+    assert resultado.audit_bundle["publicada_previamente"] is True
+    assert conn.execute("SELECT estado, error_json FROM ejecuciones").fetchall() == [
+        (esperado, detalle if esperado == "detenida" else None)
+    ]
+    conn.close()
+
+
+def test_error_l4_tras_parada_del_operador_conserva_su_causa(tmp_path):
+    detalle = json.dumps({"code": "platform.run_stopped", "detail": "parada"})
+
+    class ConexionConParada(sqlite3.Connection):
+        def commit(self):
+            super().commit()
+            # El operador actua despues de registrar la ejecucion, antes de L4.
+            with sqlite3.connect(tmp_path / "central.db") as operador:
+                operador.execute(
+                    "UPDATE ejecuciones SET estado = 'detenida', error_json = ? "
+                    "WHERE estado = 'ejecutando'",
+                    (detalle,),
+                )
+
+    conn = _conexion(tmp_path, factory=ConexionConParada)
+    pipeline, request = _caso(tmp_path, conn)
+    evaluation = pipeline.evaluate(pipeline.fit(pipeline.ingest(request)))
+    carpeta = tmp_path / "corrida"
+    carpeta.mkdir()
+    (carpeta / "candidatos.json").write_text('{"schema_version": 99}')
+
+    with pytest.raises(LoteRechazadoError):
+        pipeline.validate(evaluation)
+
+    assert conn.execute("SELECT estado, error_json FROM ejecuciones").fetchall() == [
+        ("detenida", detalle)
+    ]
+    conn.close()
+
+
 def test_m2_a_m3_publica_todas_las_ventanas_y_los_dos_skus(tmp_path):
     conn = _conexion(tmp_path)
     pipeline, request = _caso(tmp_path, conn)
