@@ -284,9 +284,9 @@ def main() -> int:
     run_dir = args.run_dir
     errores = verificar(run_dir, args.db_path, args.datos_reales)
     for error in errores:
-        print(f"::error title=Corrida {run_dir.name}::{error}")
+        print(f"::error title=Análisis de pronóstico {run_dir.name}::{error}")
     if not errores:
-        print(f"Corrida {run_dir.name}: artefactos verificados")
+        print(f"Análisis de pronóstico {run_dir.name}: artefactos verificados")
     return 1 if errores else 0
 
 

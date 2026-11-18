@@ -87,5 +87,5 @@ def persistir_bitacora(
         json.dumps(asdict(bitacora), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    _logger.info("Bitacora de la corrida persistida en %s", destino)
+    _logger.info("Bitacora del análisis de pronóstico persistida en %s", destino)
     return destino

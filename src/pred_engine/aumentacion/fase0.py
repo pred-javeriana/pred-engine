@@ -515,7 +515,10 @@ def _construir_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reutilizar",
         action="store_true",
-        help="Si el artefacto ya existe y lo produjo esta misma corrida, reutilizarlo",
+        help=(
+            "Si el artefacto ya existe y lo produjo este mismo análisis de "
+            "pronóstico, reutilizarlo"
+        ),
     )
     return parser
 
@@ -575,7 +578,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"Bitacora: {resultado.bitacora_path}")
     if resultado.reutilizada:
-        print("Reutilizada: el artefacto ya existia para esta misma corrida")
+        print(
+            "Reutilizada: el artefacto ya existia para este mismo análisis de "
+            "pronóstico"
+        )
     return 0
 
 

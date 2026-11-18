@@ -520,7 +520,7 @@ def test_la_matriz_y_la_configuracion_excluyen_familias_con_su_motivo(documentos
         "estado": "excluida",
         "exclusion": {
             "reason_code": "not_configured",
-            "detail": "La corrida se configuro solo con las familias "
+            "detail": "El análisis de pronóstico se configuro solo con las familias "
             "classical, ml, foundation.",
         },
     }
@@ -551,7 +551,7 @@ def test_con_una_sola_familia_configurada_el_motivo_va_en_singular(tmp_path):
     assert ml["exclusion"]["reason_code"] == "not_configured"
     assert (
         ml["exclusion"]["detail"]
-        == "La corrida se configuro solo con la familia classical."
+        == "El análisis de pronóstico se configuro solo con la familia classical."
     )
 
 

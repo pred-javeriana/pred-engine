@@ -145,7 +145,10 @@ def _declaradas_en_base(
     conn: sqlite3.Connection, sha: str, columnas: dict[str, set[str]]
 ) -> list[tuple[bool, str]]:
     declaradas = []
-    for tabla, fuente in (("m3_ingestas", "M1"), ("m3_corridas", "una corrida M3")):
+    for tabla, fuente in (
+        ("m3_ingestas", "M1"),
+        ("m3_corridas", "un análisis de pronóstico M3"),
+    ):
         if tabla not in columnas:
             continue
         filtro = (

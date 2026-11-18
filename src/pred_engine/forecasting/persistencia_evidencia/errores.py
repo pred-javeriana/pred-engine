@@ -19,7 +19,9 @@ class EstadoCorridaError(PersistenciaEvidenciaError):
         self.estado = estado
         self.operacion = operacion
         situacion = "no esta registrada" if estado is None else f"esta en {estado}"
-        super().__init__(f"corrida {run_id} {situacion}: no admite {operacion}")
+        super().__init__(
+            f"análisis de pronóstico {run_id} {situacion}: no admite {operacion}"
+        )
 
 
 class EvidenciaInconsistenteError(PersistenciaEvidenciaError):

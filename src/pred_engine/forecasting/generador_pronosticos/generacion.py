@@ -197,7 +197,8 @@ def _restaurar(
                 origen,
             )
             raise ValueError(
-                "unidad confirmada incompatible con el protocolo de corrida"
+                "unidad confirmada incompatible con el protocolo del análisis de "
+                "pronóstico"
             )
         restauradas[origen] = unidad
     return restauradas

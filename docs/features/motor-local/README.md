@@ -86,7 +86,7 @@ ordenadas; quien revisa puede correr el mismo nivel y comparar `huella` y
 crear o editar un comentario. Usa el script y el mapa de la rama base, lee el
 PR por el API y fija el estado `motor-local` del commit cabeza:
 
-- `success` si las rutas del PR no exigen ningún nivel (`sin corrida: solo docs`).
+- `success` si las rutas del PR no exigen ningún nivel (`sin análisis de pronóstico: solo docs`).
 - `success` si el recibo más reciente de un autor con permiso de escritura
   nombra la cabeza, tiene `resultado: ok` y cubre los niveles exigidos.
 - `success` con un recibo de un commit anterior si todos los cambios desde ese

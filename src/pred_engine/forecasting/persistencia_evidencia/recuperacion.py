@@ -81,7 +81,8 @@ def fijar_protocolo(
         if previa is not None:
             if previa != (canonico, sobre, n_unidades_previstas):
                 raise _inconsistente(
-                    "protocolo o manifiesto incompatible con la corrida previa"
+                    "protocolo o manifiesto incompatible con el análisis de pronóstico "
+                    "previo"
                 )
         else:
             conn.execute(

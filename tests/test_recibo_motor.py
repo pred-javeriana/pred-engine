@@ -97,7 +97,7 @@ def test_niveles_por_ruta_primera_regla_y_union(rutas, niveles):
 def test_pr_solo_docs_pasa_sin_recibo():
     assert estado(FakeGitHub(["docs/a.md"], [])) == (
         "success",
-        "sin corrida: solo docs",
+        "sin análisis de pronóstico: solo docs",
     )
 
 

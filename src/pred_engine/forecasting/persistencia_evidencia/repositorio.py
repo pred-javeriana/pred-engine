@@ -208,7 +208,8 @@ def registrar_corrida(
                 datos_sinteticos is not None,
             ):
                 raise _inconsistente(
-                    "referencias u origen de datos incompatibles con la corrida previa"
+                    "referencias u origen de datos incompatibles con el análisis de "
+                    "pronóstico previo"
                 )
         if not nueva and isinstance(handoff, LoteRechazadoError):
             conn.execute(
@@ -239,14 +240,16 @@ def registrar_corrida(
             )
     if nueva:
         _logger.info(
-            "Corrida registrada run_id=%s estado=%s skus=%d fallos=%d",
+            "Análisis de pronóstico registrado run_id=%s estado=%s skus=%d fallos=%d",
             run_id,
             estado,
             len(skus),
             len(fallos),
         )
     else:
-        _logger.info("Corrida ya registrada run_id=%s; sin cambios", run_id)
+        _logger.info(
+            "Análisis de pronóstico ya registrado run_id=%s; sin cambios", run_id
+        )
     return run_id
 
 
@@ -414,7 +417,7 @@ def marcar_evaluada(conn: sqlite3.Connection, run_id: str) -> None:
                 ).fetchone()[0]
                 if confirmadas != protocolo[0]:
                     raise _inconsistente(
-                        f"corrida {run_id}: {confirmadas} unidades "
+                        f"análisis de pronóstico {run_id}: {confirmadas} unidades "
                         f"de {protocolo[0]} previstas"
                     )
             _cambiar_estado(conn, run_id, "EVALUADA")
@@ -458,7 +461,8 @@ def guardar_evaluacion(
         recibidas = (resultado.version_politica, resultado.version_metricas)
         if recibidas != declaradas:
             raise _inconsistente(
-                f"corrida {run_id}: versiones {recibidas} distintas de las de su "
+                f"análisis de pronóstico {run_id}: versiones {recibidas} distintas de "
+                f"las de su "
                 f"identidad {declaradas}"
             )
         # ADR-03-008: con datos sinteticos no hay VALIDADO ni Diebold-Mariano.
@@ -466,8 +470,9 @@ def guardar_evaluacion(
             bool(datos_sinteticos) if origen_declarado else None
         ):
             raise _inconsistente(
-                f"corrida {run_id}: veredictos emitidos con datos_sinteticos="
-                f"{resultado.datos_sinteticos}, distinto del de la corrida"
+                f"análisis de pronóstico {run_id}: veredictos emitidos con "
+                f"datos_sinteticos="
+                f"{resultado.datos_sinteticos}, distinto del del análisis de pronóstico"
             )
         confirmados = set(
             conn.execute(
@@ -483,7 +488,8 @@ def guardar_evaluacion(
         )
         if sin_pronosticos:
             raise _inconsistente(
-                f"corrida {run_id}: {len(sin_pronosticos)} modelos evaluados sin "
+                f"análisis de pronóstico {run_id}: {len(sin_pronosticos)} modelos "
+                f"evaluados sin "
                 f"pronosticos confirmados, por ejemplo {sin_pronosticos[0]}"
             )
         for e in evaluaciones:
@@ -500,7 +506,7 @@ def guardar_evaluacion(
                     v.origen not in origenes for v in c.por_ventana
                 ):
                     raise _inconsistente(
-                        f"corrida {run_id}: ventanas sin confirmar "
+                        f"análisis de pronóstico {run_id}: ventanas sin confirmar "
                         f"para {e.sku}/{c.candidato_id}"
                     )
         conn.executemany(
@@ -602,7 +608,8 @@ def publicar(
         ]
         if sin_veredicto:
             raise _inconsistente(
-                f"corrida {run_id}: {len(sin_veredicto)} SKU sin veredicto, "
+                f"análisis de pronóstico {run_id}: {len(sin_veredicto)} SKU sin "
+                f"veredicto, "
                 f"por ejemplo {sin_veredicto[0]}"
             )
         _cambiar_estado(conn, run_id, "PUBLICADA")
@@ -750,7 +757,7 @@ def _cambiar_estado(conn: sqlite3.Connection, run_id: str, destino: str) -> None
     conn.execute(
         "UPDATE m3_corridas SET estado = ? WHERE run_id = ?", (destino, run_id)
     )
-    _logger.info("Corrida run_id=%s pasa a %s", run_id, destino)
+    _logger.info("Análisis de pronóstico run_id=%s pasa a %s", run_id, destino)
 
 
 def _fijar_corte(
@@ -774,7 +781,8 @@ def _fijar_corte(
     otras = sorted({e.cause for e in lanzamientos_tardios} - {CAUSA_LANZAMIENTO_TARDIO})
     if otras or len(tardias) != len(lanzamientos_tardios):
         raise _inconsistente(
-            f"corrida {run_id}: lanzamientos tardios duplicados o con otra causa"
+            f"análisis de pronóstico {run_id}: lanzamientos tardios duplicados o con "
+            f"otra causa"
         )
     excluidas = sorted(
         (e.sku_id, clases[e.sku_id], e.code, e.cause) for e in exclusiones
@@ -813,7 +821,8 @@ def _fijar_corte(
     ).fetchall()
     if (previo[0], guardadas, fijadas) != (_fecha(t_star), tardias, excluidas):
         raise _inconsistente(
-            f"corrida {run_id}: corte, lanzamientos tardios o exclusiones distintos "
+            f"análisis de pronóstico {run_id}: corte, lanzamientos tardios o "
+            f"exclusiones distintos "
             "de los fijados"
         )
 
@@ -960,19 +969,24 @@ def _insertar_observaciones(
     }
     if set(observaciones) != skus:
         raise _inconsistente(
-            f"corrida {run_id}: la demanda observada no cubre exactamente los SKU "
+            f"análisis de pronóstico {run_id}: la demanda observada no cubre "
+            f"exactamente los SKU "
             "del manifiesto"
         )
     if (
         conn.execute("SELECT 1 FROM m3_cortes WHERE run_id = ?", (run_id,)).fetchone()
         is None
     ):
-        raise _inconsistente(f"corrida {run_id}: sin corte fijado para la reserva")
+        raise _inconsistente(
+            f"análisis de pronóstico {run_id}: sin corte fijado para la reserva"
+        )
     filas = []
     for sku in sorted(observaciones):
         serie = observaciones[sku]
         if not isinstance(serie.index, pd.DatetimeIndex) or serie.index.has_duplicates:
-            raise _inconsistente(f"corrida {run_id}: fechas invalidas en {sku}")
+            raise _inconsistente(
+                f"análisis de pronóstico {run_id}: fechas invalidas en {sku}"
+            )
         valores = serie.to_numpy(dtype=float, na_value=np.nan)
         filas.extend(
             (run_id, sku, _fecha(fecha), float(v) if np.isfinite(v) else None)
@@ -986,7 +1000,8 @@ def _insertar_observaciones(
         )
     except sqlite3.IntegrityError as exc:
         raise _inconsistente(
-            f"corrida {run_id}: demanda observada fuera de la reserva: {exc}"
+            f"análisis de pronóstico {run_id}: demanda observada fuera de la reserva: "
+            f"{exc}"
         ) from exc
     sin_observacion = conn.execute(
         "SELECT sku, fecha FROM m3_pronosticos WHERE run_id = ?1 EXCEPT "
@@ -996,7 +1011,8 @@ def _insertar_observaciones(
     ).fetchone()
     if sin_observacion is not None:
         raise _inconsistente(
-            f"corrida {run_id}: fecha pronosticada sin fila de demanda observada, "
+            f"análisis de pronóstico {run_id}: fecha pronosticada sin fila de demanda "
+            f"observada, "
             f"por ejemplo {sin_observacion}"
         )
 

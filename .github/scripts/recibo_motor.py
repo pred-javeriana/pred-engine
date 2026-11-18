@@ -164,7 +164,7 @@ def evaluar(api: Api, numero: int, mapa: Mapa) -> Estado:
     corto = cabeza[:7]
     requeridos = mapa.requeridos(_rutas(api.paginar(f"pulls/{numero}/files")))
     if not requeridos:
-        return Estado(cabeza, "success", "sin corrida: solo docs")
+        return Estado(cabeza, "success", "sin análisis de pronóstico: solo docs")
 
     permisos: dict[str, bool] = {}
 

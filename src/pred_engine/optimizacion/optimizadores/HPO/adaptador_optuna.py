@@ -345,7 +345,7 @@ def _sincronizar_sampler_aleatorio(
                 "Reanudando con TPESampler: %d trials restaurados desde "
                 "checkpoint, pero el RNG de arranque en frio del sampler no "
                 "se resincroniza (limitacion conocida, ver ADR-012). Las "
-                "primeras propuestas de esta corrida pueden repetir "
+                "primeras propuestas de este análisis de pronóstico pueden repetir "
                 "configuraciones ya evaluadas antes de la interrupcion.",
                 n_trials_cargados,
             )

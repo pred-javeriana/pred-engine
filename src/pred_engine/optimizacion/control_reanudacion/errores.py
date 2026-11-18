@@ -17,7 +17,7 @@ class IncompatibilidadCorridaError(ReanudacionError):
     def __init__(self, motivos: tuple[str, ...]) -> None:
         self.motivos = motivos
         detalle = "; ".join(motivos) if motivos else "huella distinta"
-        super().__init__(f"corrida incompatible: {detalle}")
+        super().__init__(f"análisis de pronóstico incompatible: {detalle}")
 
 
 class CorridaFallidaError(ReanudacionError):

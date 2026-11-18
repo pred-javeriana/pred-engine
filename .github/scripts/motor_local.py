@@ -344,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.plan:
         return 0
     if not requeridos:
-        print("sin corrida: solo docs; CI marca motor-local sin recibo")
+        print("sin análisis de pronóstico: solo docs; CI marca motor-local sin recibo")
         return 0
 
     contexto = Contexto(
@@ -377,7 +377,8 @@ def main(argv: list[str] | None = None) -> int:
         os.mkdir(CERROJO)
     except FileExistsError:
         print(
-            f"error: ya hay una corrida de motor-local en curso ({CERROJO}); "
+            f"error: ya hay un análisis de pronóstico de motor-local en curso "
+            f"({CERROJO}); "
             f"espere a que termine o elimine el cerrojo si el proceso anterior murió",
             file=sys.stderr,
         )

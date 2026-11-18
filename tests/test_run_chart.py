@@ -107,7 +107,7 @@ def test_dibuja_etapas_recursos_y_una_barra_por_unidad(tmp_path):
     assert ruta == tmp_path / "r-prueba" / "telemetria.svg"
     raiz = ET.parse(ruta).getroot()
     textos = _textos(raiz)
-    assert "Corrida r-prueba" in textos
+    assert "Análisis de pronóstico r-prueba" in textos
     assert any("4 unidades de L2 y L3 (1 fallidas)" in t for t in textos)
     assert "Unidades SKU × familia por proceso (L2 y L3)" in textos
     assert any("pico CPU 2.1 núcleos" in t for t in textos)
