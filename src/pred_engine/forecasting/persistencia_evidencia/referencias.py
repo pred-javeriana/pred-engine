@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -271,6 +272,9 @@ def finalizar_referencia(
     ``conservar_completada`` deja intacta una ejecucion ya completada: reutilizar
     una publicacion congelada no reescribe el estado que describe esa corrida.
     Una parada del operador prevalece aunque el motor termine despues.
+    El mismo UPDATE fija ``finalizada_en`` si falta, para que la fila nunca quede
+    en un estado final sin hora de fin; el ``pid`` no se toca porque la plataforma
+    lo usa para reconocer un motor que aun debe cerrar e importar sus archivos.
     """
     from pred_engine.ingesta.informe import ErrorDetail, error_code
 
@@ -291,10 +295,17 @@ def finalizar_referencia(
     )
     with _transaccion(conn):
         conn.execute(
-            "UPDATE ejecuciones SET estado = ?, error_json = ? WHERE id = ? AND NOT "
+            "UPDATE ejecuciones SET estado = ?, error_json = ?, "
+            "finalizada_en = COALESCE(finalizada_en, ?) WHERE id = ? AND NOT "
             "(? AND estado IN ('completada', 'completada_con_fallos')) AND NOT "
             "(estado = 'detenida' AND "
             "COALESCE(json_extract(error_json, '$.code'), '') "
             "= 'platform.run_stopped')",
-            (estado, detalle, ejecucion_id, conservar_completada),
+            (
+                estado,
+                detalle,
+                datetime.now(UTC).isoformat(),
+                ejecucion_id,
+                conservar_completada,
+            ),
         )

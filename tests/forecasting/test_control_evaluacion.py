@@ -17,6 +17,9 @@ from pred_engine.forecasting.adaptador_candidatos import FABRICAS, LoteRechazado
 from pred_engine.forecasting.base import SeasonalNaiveStub
 from pred_engine.forecasting.control_reanudacion import ControladorEvaluacion
 from pred_engine.forecasting.persistencia_evidencia import aplicar_migraciones_m3
+from pred_engine.forecasting.persistencia_evidencia.referencias import (
+    finalizar_referencia,
+)
 from pred_engine.optimizacion.optimizadores.modelos_clasicos import fabrica_sarima
 from pred_engine.optimizacion.router import (
     SelectionResult,
@@ -142,6 +145,35 @@ def test_error_l4_tras_parada_del_operador_conserva_su_causa(tmp_path):
     assert conn.execute("SELECT estado, error_json FROM ejecuciones").fetchall() == [
         ("detenida", detalle)
     ]
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "estado"),
+    [
+        ({}, "completada"),
+        ({"hay_fallos": True}, "completada_con_fallos"),
+        ({"error": ValueError("fallo")}, "detenida"),
+    ],
+)
+def test_finalizar_referencia_fija_la_hora_de_fin_sin_tocar_el_pid(
+    tmp_path, kwargs, estado
+):
+    conn = _conexion(tmp_path)
+    pipeline, request = _caso(tmp_path, conn)
+    pipeline.run(request)
+    conn.execute("UPDATE ejecuciones SET pid = 4242, finalizada_en = NULL")
+    conn.commit()
+    (ejecucion_id,) = conn.execute("SELECT id FROM ejecuciones").fetchone()
+
+    finalizar_referencia(conn, ejecucion_id, **kwargs)
+
+    assert conn.execute(
+        "SELECT estado, finalizada_en IS NOT NULL, pid FROM ejecuciones"
+    ).fetchall() == [(estado, 1, 4242)]
+    previa = conn.execute("SELECT finalizada_en FROM ejecuciones").fetchone()[0]
+    finalizar_referencia(conn, ejecucion_id, **kwargs)
+    assert conn.execute("SELECT finalizada_en FROM ejecuciones").fetchone()[0] == previa
     conn.close()
 
 
