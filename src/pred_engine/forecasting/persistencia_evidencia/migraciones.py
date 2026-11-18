@@ -26,9 +26,9 @@ MIGRACIONES_M3 = (
 VERSION_ESQUEMA_M3 = MIGRACIONES_M3[-1][0]
 # Ultima version de la base unica que el motor conoce. La 10 (publicacion para M4) y
 # la 11 (bloques de seleccion y prueba de M3) las aplican el motor y la plataforma con
-# el mismo texto; la 12 es solo de la plataforma (estado finalizo_m2 de las tareas): el
-# motor la acepta, pero no la aplica.
-VERSION_PLATAFORMA = 12
+# el mismo texto; la 12 (estado finalizo_m2 de las tareas) y la 13 (exclusiones de la
+# ingesta) son solo de la plataforma: el motor las acepta, pero no las aplica.
+VERSION_PLATAFORMA = 13
 
 
 class BasePlataformaError(ValueError):

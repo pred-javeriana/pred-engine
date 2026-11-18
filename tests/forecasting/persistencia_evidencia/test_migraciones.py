@@ -85,7 +85,18 @@ def test_m3_acepta_una_base_de_plataforma_en_version_12(tmp_path: Path):
     conn.close()
 
 
-@pytest.mark.parametrize("version", [0, 3, 13])
+def test_m3_acepta_una_base_de_plataforma_en_version_13(tmp_path: Path):
+    # La plataforma suma su migracion 0013 (exclusiones de la ingesta) tras la 0012.
+    ruta = crear_base_plataforma(tmp_path / "central.db")
+    conn = sqlite3.connect(ruta)
+    aplicar_migraciones_m3(conn)
+    conn.execute("PRAGMA user_version = 13")
+    assert aplicar_migraciones_m3(conn) == ()
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    conn.close()
+
+
+@pytest.mark.parametrize("version", [0, 3, 14])
 def test_version_incompatible_no_modifica_el_esquema(tmp_path: Path, version: int):
     ruta = crear_base_plataforma(tmp_path / "central.db")
     conn = sqlite3.connect(ruta)
