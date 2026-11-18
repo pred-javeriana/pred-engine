@@ -92,7 +92,7 @@ def test_motor_que_termina_tras_parada_del_operador_conserva_estado_y_error(
     [
         ("detenida", "platform.run_stopped", "detenida"),
         ("detenida", "engine.failure", "completada"),
-        ("en_cola", "platform.run_stopped", "completada"),
+        ("pendiente", "platform.run_stopped", "completada"),
     ],
 )
 def test_relectura_publicada_respeta_parada_y_permite_reanudacion(
