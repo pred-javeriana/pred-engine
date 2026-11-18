@@ -125,11 +125,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/preparar
-      - name: Obtener plataforma con esquema base publicado
+      - name: Obtener plataforma desde main actual
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: pred-javeriana/pred-platform
-          ref: 7e3b327ef5ebf10e9bacf7e2a98ef95cf210cbdd
+          ref: main
           path: .ci-platform
           persist-credentials: false
 
