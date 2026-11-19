@@ -42,8 +42,9 @@ ARCHIVOS = (
 
 
 # La base central queda en la ultima migracion del motor (11) o, si la plataforma
-# aplico una propia que el motor solo acepta, en la de la plataforma (12).
-VERSIONES_BASE_CENTRAL = (VERSION_ESQUEMA_M3, VERSION_PLATAFORMA)
+# aplico migraciones propias que el motor solo acepta, en alguna hasta la ultima que
+# conoce (VERSION_PLATAFORMA).
+VERSIONES_BASE_CENTRAL = range(VERSION_ESQUEMA_M3, VERSION_PLATAFORMA + 1)
 
 
 def version_base_valida(conn: sqlite3.Connection) -> bool:
