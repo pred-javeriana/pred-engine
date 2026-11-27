@@ -47,6 +47,11 @@ _ESTADO_A_OPTUNA: dict[EstadoTrialBackend, TrialState] = {
 _OPTUNA_A_ESTADO: dict[TrialState, EstadoTrialBackend] = {
     v: k for k, v in _ESTADO_A_OPTUNA.items()
 }
+_ESTADOS_COMPETIDORES = (
+    TrialState.RUNNING,
+    TrialState.COMPLETE,
+    TrialState.PRUNED,
+)
 
 _logger = get_logger(__name__)
 
@@ -90,12 +95,14 @@ class PodadorASHAOptuna(optuna.pruners.BasePruner):
             return False
         escalon = max(escalon_candidatos)
 
-        # Un trial descartado por poda semantica no es competidor: su valor
-        # parcial viene de un pronostico degenerado (p. ej. todo cero en demanda
-        # intermitente) y, si contara, podaria a las configuraciones validas.
+        # Un trial fallido o descartado por poda semantica no es competidor:
+        # una configuracion que falla en una ventana posterior (p. ej. raiz
+        # explosiva en SARIMA) o emite un pronostico degenerado (p. ej. todo
+        # cero en demanda intermitente) no es elegible y, si contara, podaria
+        # a las configuraciones validas.
         competidores = {
             t.number: t.intermediate_values[escalon]
-            for t in study.get_trials(deepcopy=False)
+            for t in study.get_trials(deepcopy=False, states=_ESTADOS_COMPETIDORES)
             if escalon in t.intermediate_values
             and PREFIJO_PODA_SEMANTICA not in str(t.user_attrs.get("motivo", ""))
         }
