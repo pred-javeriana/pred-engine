@@ -540,3 +540,65 @@ def test_poda_semantica_cierra_un_trial_antes_de_min_ventanas():
         assert t.n_ventanas == 1
         assert t.motivo is not None
         assert t.motivo.endswith("poda_semantica:prediccion_nula")
+
+
+def test_trial_fallido_tras_escalon_no_impide_seleccionar_configuracion_admisible():
+    # Si el primer trial alcanza el escalon 4 con error nulo y falla en la
+    # ventana 5, el segundo trial (admisible pero con mayor error) no debe
+    # podarse contra el fallido ni dejar el estudio sin seleccion.
+    llamadas = {"inestable": 0}
+
+    class _Modelo:
+        def __init__(self, modo: str) -> None:
+            self._modo = modo
+
+        def fit(self, y: np.ndarray) -> _Modelo:
+            if self._modo == "inestable":
+                llamadas["inestable"] += 1
+                if llamadas["inestable"] >= 5:
+                    raise RuntimeError("raiz explosiva en ventana posterior")
+            return self
+
+        def predict(self, horizon: int) -> np.ndarray:
+            valores = {"inestable": 50.0, "estable": 40.0, "peor": 10.0}
+            return np.full(horizon, valores[self._modo])
+
+    modos = iter(("inestable", "estable", "peor"))
+    espacio = EspacioBusqueda(
+        parametros=(Categorico("modo", ("inestable", "estable", "peor")),)
+    )
+
+    class _MuestreadorFijo(optuna.samplers.BaseSampler):
+        def infer_relative_search_space(self, study, trial):
+            return {}
+
+        def sample_relative(self, study, trial, search_space):
+            return {}
+
+        def sample_independent(self, study, trial, param_name, param_distribution):
+            return next(modos)
+
+    resultado = ejecutar_estudio(
+        np.full(28, 50.0),
+        espacio,
+        lambda cfg, *, seed: _Modelo(cfg["modo"]),
+        n_trials=3,
+        min_train=20,
+        metrica_objetivo="mae",
+        estacionalidad=1,
+        muestreador=_MuestreadorFijo(),
+        reglas=ReglasPoda(min_ventanas=4, factor_reduccion=3),
+    )
+
+    fallido, estable, peor = resultado.trials
+    assert fallido.estado == "fallido"
+    assert fallido.n_ventanas == 5
+    assert estable.estado == "completado"
+    assert estable.n_ventanas == 8
+    assert peor.estado == "podado"
+    assert peor.n_ventanas == 4
+    assert resultado.n_fallidos == 1
+    assert resultado.n_completados == 1
+    assert resultado.n_podados == 1
+    assert resultado.mejor is not None
+    assert resultado.mejor.configuracion == {"modo": "estable"}

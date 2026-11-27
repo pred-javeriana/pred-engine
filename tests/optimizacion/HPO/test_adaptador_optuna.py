@@ -416,3 +416,53 @@ def test_un_trial_con_poda_semantica_no_fija_el_umbral_de_asha():
     peor = study.ask()
     peor.report(5.0, escalon)
     assert peor.should_prune() is True
+
+
+def test_un_trial_fallido_no_fija_el_umbral_de_asha():
+    # Un trial puede alcanzar un escalon con un valor parcial bajo y fallar en
+    # una ventana posterior (p. ej. raiz explosiva en SARIMA). Una configuracion
+    # fallida no es elegible y no debe podar a las configuraciones validas.
+    decisor = _decisor(min_ventanas=4, n_ventanas_totales=12, factor_reduccion=3)
+    study, _ = crear_estudio_optuna(
+        muestreador=optuna.samplers.RandomSampler(seed=0), decisor_asha=decisor
+    )
+    escalon = decisor.escalones()[0]
+    fallido = study.ask()
+    fallido.report(0.1, escalon)
+    study.tell(fallido, None, estado="fallido")
+
+    valido = study.ask()
+    valido.report(1.0, escalon)
+    assert valido.should_prune() is False
+
+    peor = study.ask()
+    peor.report(5.0, escalon)
+    assert peor.should_prune() is True
+
+
+def test_un_trial_fallido_restaurado_no_fija_el_umbral_de_asha(tmp_path: Path):
+    decisor = _decisor(min_ventanas=4, n_ventanas_totales=12, factor_reduccion=3)
+    escalon = decisor.escalones()[0]
+    original = optuna.create_study(
+        direction="minimize",
+        sampler=optuna.samplers.RandomSampler(seed=0),
+        pruner=PodadorASHAOptuna(decisor),
+    )
+    fallido = original.ask()
+    fallido.suggest_int("p", 0, 5)
+    fallido.report(0.1, escalon)
+    original.tell(fallido, state=optuna.trial.TrialState.FAIL)
+
+    ruta = tmp_path / "estudio.jsonl"
+    volcar_jsonl(original, ruta)
+
+    reanudado = reanudar_estudio(
+        ruta,
+        espacio=_espacio(),
+        sampler=optuna.samplers.RandomSampler(seed=0),
+        pruner=PodadorASHAOptuna(decisor),
+    )
+    valido = reanudado.ask()
+    valido.suggest_int("p", 0, 5)
+    valido.report(1.0, escalon)
+    assert valido.should_prune() is False
